@@ -8,6 +8,7 @@ import type {
   BuildingBlock, BuildingBlockCategory, DocumentType, Locale, Plan, Project,
   ProjectDocumentConfiguration,
 } from "../domain/types";
+import { overviewSectionTemplateData } from "../domain/overviewTemplates";
 
 const COMMAND_DELIMITER: [string, string] = ["{{", "}}"];
 const SAFE_PATH = /^(qs(?:\.[A-Za-z_][A-Za-z0-9_]*)+|\$[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*|\$idx)$/;
@@ -103,11 +104,14 @@ export function buildTemplateData(
     construction_type_label: constructionTypeLabels[project.documentLocale][project.constructionType], language: project.documentLocale,
   };
   project.customFields.forEach((field, index) => { projectFields[field.placeholderKey || normalizePlaceholderKey(field.key, `field_${index + 1}`)] = field.value; });
-  const customSections: Record<string, Record<string, string>> = {};
+  const customSections: Record<string, unknown> = {};
   project.customSections.forEach((section, sectionIndex) => {
     const values: Record<string, string> = {};
     section.fields.forEach((field, fieldIndex) => { values[field.placeholderKey || normalizePlaceholderKey(field.key, `field_${fieldIndex + 1}`)] = field.value; });
     customSections[section.placeholderKey || normalizePlaceholderKey(section.title, `section_${sectionIndex + 1}`)] = values;
+  });
+  project.overviewSections.forEach((section) => {
+    customSections[section.placeholderKey] = overviewSectionTemplateData(section, project.documentLocale);
   });
   const blockMap = new Map(blocks.map((block) => [block.id, block]));
   const categoryMap = new Map(categories.map((category) => [category.id, category]));

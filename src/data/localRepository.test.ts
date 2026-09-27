@@ -65,6 +65,35 @@ describe("local database migration", () => {
     expect(second?.schemaVersion).toBe(first?.schemaVersion);
   });
 
+  it("migrates legacy typed overview templates into the hierarchical builder", () => {
+    const source = structuredClone(createSeedDatabase()) as unknown as Record<string, unknown>;
+    source.schemaVersion = 11;
+    source.overviewTemplates = [{
+      id: "legacy-overview",
+      organizationId: "organization-demo",
+      name: "Legacy details",
+      kind: "project_details",
+      lifecycle: "active",
+      fields: [{ id: "legacy-field", key: "Bauherr", value: "Example GmbH", placeholderKey: "client" }],
+      emergencyContacts: [],
+      participants: [],
+      createdAt: "2026-09-01T00:00:00.000Z",
+      updatedAt: "2026-09-01T00:00:00.000Z",
+    }];
+    const firstProject = (source.projects as Array<Record<string, unknown>>)[0];
+    delete firstProject.overviewSections;
+
+    const migrated = migrateDatabase(source);
+    expect(migrated?.projects[0].overviewSections).toEqual([]);
+    expect(migrated?.overviewTemplates[0]).toMatchObject({
+      id: "legacy-overview",
+      name: "Legacy details",
+      entries: [{ id: "legacy-field", label: "Bauherr", type: "text", defaultValue: "Example GmbH", children: [] }],
+    });
+    expect(migrated?.overviewTemplates[0]).not.toHaveProperty("kind");
+    expect(migrated?.overviewTemplates[0]).not.toHaveProperty("lifecycle");
+  });
+
   it("rejects malformed payloads instead of erasing them into partial state", () => {
     expect(migrateDatabase({ projects: "invalid", blocks: [] })).toBeNull();
   });

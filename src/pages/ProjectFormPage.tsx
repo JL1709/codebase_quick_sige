@@ -2,6 +2,7 @@ import { ArrowLeft, ArrowRight } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Button, PageHeader } from "../components/Ui";
+import { countOverviewEntries } from "../domain/overviewTemplates";
 import { validateProjectForm } from "../domain/projectValidation";
 import type { ConstructionType, Locale, ProjectFormValues } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
@@ -81,7 +82,7 @@ export function ProjectFormPage() {
           <label className="field"><span>{t("project.documentLanguage")}</span><select value={values.documentLocale} onChange={(event) => update("documentLocale", event.target.value as Locale)}><option value="de">{t("common.language.de")}</option><option value="en">{t("common.language.en")}</option></select></label>
           <label className="field"><span>{t("project.start")}</span><input required type="date" value={values.startDate} onChange={(event) => update("startDate", event.target.value)} /></label>
           <label className="field"><span>{t("project.end")}</span><input required type="date" min={values.startDate} value={values.endDate} onChange={(event) => update("endDate", event.target.value)} /></label>
-          {!existingProject && <fieldset className="field span-two project-template-picker"><legend>{t("templates.applyOnCreate")}</legend><p className="field-help">{t("templates.applyOnCreateText")}</p><div className="project-template-list">{database.overviewTemplates.filter((template) => template.lifecycle !== "archived").map((template) => <label key={template.id}><input type="checkbox" checked={values.templateIds?.includes(template.id) ?? false} onChange={(event) => update("templateIds", event.target.checked ? [...(values.templateIds ?? []), template.id] : (values.templateIds ?? []).filter((id) => id !== template.id))} /><span><strong>{template.name}</strong><small>{t(`templates.kind.${template.kind}`)}</small></span></label>)}</div></fieldset>}
+          {!existingProject && <fieldset className="field span-two project-template-picker"><legend>{t("templates.applyOnCreate")}</legend><p className="field-help">{t("templates.applyOnCreateText")}</p><div className="project-template-list">{database.overviewTemplates.map((template) => <label key={template.id}><input type="checkbox" checked={values.templateIds?.includes(template.id) ?? false} onChange={(event) => update("templateIds", event.target.checked ? [...(values.templateIds ?? []), template.id] : (values.templateIds ?? []).filter((id) => id !== template.id))} /><span><strong>{template.name}</strong><small>{countOverviewEntries(template.entries)} {t("overview.entries")}</small></span></label>)}</div></fieldset>}
         </div>
         <div className="form-footer"><Link to={existingProject ? `/projects/${existingProject.id}` : "/"}><Button type="button" variant="secondary">{t("common.cancel")}</Button></Link><Button type="submit">{existingProject ? t("common.save") : t("common.continue")}<ArrowRight size={16} /></Button></div>
       </form>

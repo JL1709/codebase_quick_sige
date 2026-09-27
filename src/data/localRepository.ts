@@ -2,14 +2,24 @@ import { createSeedDatabase } from "./seed";
 import { ensurePlanLayout } from "../domain/planLayout";
 import { defaultBlockImageSource } from "../domain/blockImages";
 import { blockHierarchyColor, categoryPlacementIds } from "../domain/categoryTree";
-import type { AppDatabase, BuildingBlock, BuildingBlockCategory, Project } from "../domain/types";
+import type {
+  AppDatabase,
+  BuildingBlock,
+  BuildingBlockCategory,
+  CustomField,
+  EmergencyContact,
+  OverviewTemplate,
+  OverviewTemplateEntry,
+  Participant,
+  Project,
+} from "../domain/types";
 import { z } from "zod";
 
 export const STORAGE_KEY = "quicksige.database.v3";
 const LEGACY_STORAGE_KEYS = ["quicksige.prototype.database.v2"];
 export const BACKUP_KEY = "quicksige.database.migration-backup.v2";
 export const MIGRATION_ERROR_KEY = "quicksige.database.migration-error";
-export const CURRENT_SCHEMA_VERSION = 11;
+export const CURRENT_SCHEMA_VERSION = 12;
 
 const persistedDatabaseSchema = z.object({
   schemaVersion: z.number().int().nonnegative(),
@@ -50,6 +60,15 @@ type PersistedBuildingBlock = BuildingBlock & {
   source?: "system" | "organization";
 };
 
+type PersistedOverviewTemplate = Partial<OverviewTemplate> & Pick<OverviewTemplate, "id" | "organizationId" | "name" | "createdAt" | "updatedAt"> & {
+  kind?: "project_details" | "emergency_contacts" | "participants" | "custom_section";
+  title?: string;
+  fields?: CustomField[];
+  emergencyContacts?: EmergencyContact[];
+  participants?: Participant[];
+  lifecycle?: "active" | "archived";
+};
+
 const LEGACY_BLOCK_METADATA_FIELDS = ["code", "tags", "provenance", "contentRevision", "reviewedAt", "source"] as const;
 
 export interface AppRepository {
@@ -75,7 +94,65 @@ function migrateProject(project: Project): Project {
     emergencyContacts: project.emergencyContacts ?? [],
     customFields: project.customFields ?? [],
     customSections: project.customSections ?? [],
+    overviewSections: project.overviewSections ?? [],
     assets: project.assets ?? [],
+  };
+}
+
+function migrateTemplateEntry(entry: OverviewTemplateEntry): OverviewTemplateEntry {
+  return {
+    id: entry.id,
+    label: entry.label ?? "",
+    type: entry.type ?? "text",
+    defaultValue: entry.defaultValue ?? "",
+    children: (entry.children ?? []).map(migrateTemplateEntry),
+  };
+}
+
+function migrateOverviewTemplate(template: PersistedOverviewTemplate): OverviewTemplate {
+  if (template.entries?.length) return {
+    id: template.id,
+    organizationId: template.organizationId,
+    name: template.name,
+    entries: template.entries.map(migrateTemplateEntry),
+    createdAt: template.createdAt,
+    updatedAt: template.updatedAt,
+  };
+  const fieldEntries = (template.fields ?? []).map((field) => ({
+    id: field.id,
+    label: field.key,
+    type: "text" as const,
+    defaultValue: field.value,
+    children: [],
+  }));
+  const contactEntries = (template.emergencyContacts ?? []).map((contact, index) => ({
+    id: contact.id,
+    label: contact.label || `Contact ${index + 1}`,
+    type: "group" as const,
+    defaultValue: "",
+    children: [
+      { id: `${contact.id}-name`, label: `${contact.label || `Contact ${index + 1}`} name`, type: "text" as const, defaultValue: contact.name, children: [] },
+      { id: `${contact.id}-phone`, label: `${contact.label || `Contact ${index + 1}`} phone`, type: "text" as const, defaultValue: contact.phone, children: [] },
+    ],
+  }));
+  const participantEntries = (template.participants ?? []).map((participant, index) => ({
+    id: participant.id,
+    label: participant.name || `Participant ${index + 1}`,
+    type: "group" as const,
+    defaultValue: "",
+    children: [
+      { id: `${participant.id}-company`, label: `${participant.name || `Participant ${index + 1}`} company`, type: "text" as const, defaultValue: participant.company, children: [] },
+      { id: `${participant.id}-email`, label: `${participant.name || `Participant ${index + 1}`} email`, type: "text" as const, defaultValue: participant.email, children: [] },
+      { id: `${participant.id}-phone`, label: `${participant.name || `Participant ${index + 1}`} phone`, type: "text" as const, defaultValue: participant.phone, children: [] },
+    ],
+  }));
+  return {
+    id: template.id,
+    organizationId: template.organizationId,
+    name: template.title || template.name,
+    entries: [...fieldEntries, ...contactEntries, ...participantEntries],
+    createdAt: template.createdAt,
+    updatedAt: template.updatedAt,
   };
 }
 
@@ -147,13 +224,14 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
       ...revision,
       snapshot: {
         ...revision.snapshot,
+        project: migrateProject(revision.snapshot.project),
         plan: ensurePlanLayout(revision.snapshot.plan),
         documentTemplates: revision.snapshot.documentTemplates ?? source.documentTemplates ?? defaults.documentTemplates,
         documentConfigurations: revision.snapshot.documentConfigurations ?? (source.documentConfigurations ?? []).filter((configuration) => configuration.projectId === revision.projectId),
         generatedDocuments: revision.snapshot.generatedDocuments ?? (source.generatedDocuments ?? []).filter((document) => document.projectId === revision.projectId),
       },
     })),
-    overviewTemplates: (source.overviewTemplates ?? defaults.overviewTemplates).map((template) => ({ ...template, lifecycle: template.lifecycle ?? "active" })),
+    overviewTemplates: ((source.overviewTemplates ?? defaults.overviewTemplates) as PersistedOverviewTemplate[]).map(migrateOverviewTemplate),
     documentTemplates: (source.documentTemplates ?? defaults.documentTemplates).map((template) => ({ ...template, lifecycle: template.lifecycle ?? "active", revision: template.revision ?? 1 })),
     documentConfigurations: source.documentConfigurations ?? [],
     generatedDocuments: (source.generatedDocuments ?? []).map((document) => {
@@ -162,7 +240,7 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
       return {
         ...document,
         templateRevision: document.templateRevision ?? 1,
-        projectSnapshot: document.projectSnapshot ?? structuredClone(project),
+        projectSnapshot: migrateProject(document.projectSnapshot ?? structuredClone(project)),
         planSnapshot: document.planSnapshot ?? (plan ? structuredClone(plan) : undefined),
         language: document.language ?? project?.documentLocale ?? "de",
         dependencyFingerprint: document.dependencyFingerprint ?? "legacy",

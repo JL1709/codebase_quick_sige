@@ -24,12 +24,12 @@ export function EmptyState({ icon, title, text, action }: { icon: ReactNode; tit
   return <div className="empty-state"><span className="empty-icon">{icon}</span><h3>{title}</h3><p>{text}</p>{action}</div>;
 }
 
-export function Modal({ open, title, children, onClose }: { open: boolean; title: string; children: ReactNode; onClose: () => void }) {
+export function Modal({ open, title, children, onClose, className = "" }: { open: boolean; title: string; children: ReactNode; onClose: () => void; className?: string }) {
   const { t } = useI18n();
   if (!open) return null;
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div className={`modal ${className}`} role="dialog" aria-modal="true" aria-labelledby="modal-title">
         <header><h2 id="modal-title">{title}</h2><button className="icon-button" onClick={onClose} aria-label={t("common.close")}><X size={20} /></button></header>
         {children}
       </div>

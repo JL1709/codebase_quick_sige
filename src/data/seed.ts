@@ -499,6 +499,7 @@ const demoProject: Project = {
       { id: "field-waiting-area", key: "Wartebereich", value: "", placeholderKey: "waiting_area" },
     ],
   }],
+  overviewSections: [],
   assets: [
     { id: "asset-site-image", filename: "baustellenlage.png", mimeType: "image/png", byteSize: 70, dataUrl: demoImageDataUrl, width: 800, height: 450, createdAt },
     { id: "asset-multipage-plan", filename: "lageplan-zweiseitig.pdf", mimeType: "application/pdf", byteSize: 3_600, dataUrl: demoPdfDataUrl, pageCount: 2, createdAt },
@@ -539,7 +540,7 @@ const englishProject: Project = {
   ],
   emergencyContacts: [{ id: "emergency-en", label: "Emergency services", name: "Emergency call", phone: "999" }],
   customFields: [{ id: "field-en-client", key: "Client reference", value: "RE-24", placeholderKey: "client_reference" }],
-  customSections: [], assets: [], createdAt, updatedAt: createdAt,
+  customSections: [], overviewSections: [], assets: [], createdAt, updatedAt: createdAt,
 };
 
 const englishAssessment: AssessmentAnswers = {
@@ -610,28 +611,35 @@ export function createSeedDatabase(): AppDatabase {
       {
         id: "overview-template-standard",
         organizationId: "organization-demo",
-        name: "Standard project information",
-        kind: "project_details",
-        fields: [
-          { id: "template-field-client", key: "Bauherr", value: "", placeholderKey: "client" },
-          { id: "template-field-site-access", key: "Baustellenzufahrt", value: "", placeholderKey: "site_access" },
+        name: "Allgemein",
+        entries: [
+          { id: "template-field-client", label: "Bauherr", type: "text", defaultValue: "", children: [] },
+          { id: "template-field-site-access", label: "Baustellenzufahrt", type: "text", defaultValue: "", children: [] },
+          { id: "template-field-start", label: "Geplanter Beginn", type: "date", defaultValue: "", children: [] },
+          {
+            id: "template-group-address", label: "Projektadresse", type: "group", defaultValue: "", children: [
+              { id: "template-field-street", label: "Straße", type: "text", defaultValue: "", children: [] },
+              { id: "template-field-postcode", label: "Postleitzahl", type: "text", defaultValue: "", children: [] },
+              { id: "template-field-city", label: "Ort", type: "text", defaultValue: "", children: [] },
+            ],
+          },
         ],
-        emergencyContacts: [],
-        participants: [],
         createdAt,
         updatedAt: createdAt,
       },
       {
         id: "overview-template-emergency",
         organizationId: "organization-demo",
-        name: "German emergency services",
-        kind: "emergency_contacts",
-        fields: [],
-        emergencyContacts: [
-          { id: "template-emergency-fire", label: "Feuerwehr / Rettungsdienst", name: "Notruf", phone: "112" },
-          { id: "template-emergency-police", label: "Polizei", name: "Notruf", phone: "110" },
+        name: "Notfallkontakte",
+        entries: [
+          {
+            id: "template-emergency-contacts", label: "Kontakte", type: "repeating_group", defaultValue: "", children: [
+              { id: "template-emergency-label", label: "Bezeichnung", type: "text", defaultValue: "Feuerwehr / Rettungsdienst", children: [] },
+              { id: "template-emergency-name", label: "Ansprechpartner", type: "text", defaultValue: "Notruf", children: [] },
+              { id: "template-emergency-phone", label: "Telefon", type: "text", defaultValue: "112", children: [] },
+            ],
+          },
         ],
-        participants: [],
         createdAt,
         updatedAt: createdAt,
       },
@@ -639,13 +647,15 @@ export function createSeedDatabase(): AppDatabase {
         id: "overview-template-logistics",
         organizationId: "organization-demo",
         name: "Baustellenlogistik",
-        kind: "custom_section",
-        title: "Baustellenlogistik",
-        fields: [
-          { id: "template-field-delivery", key: "Anlieferzeitfenster", value: "", placeholderKey: "delivery_window" },
-          { id: "template-field-waiting", key: "Wartebereich", value: "", placeholderKey: "waiting_area" },
+        entries: [
+          {
+            id: "template-group-delivery", label: "Anlieferung", type: "group", defaultValue: "", children: [
+              { id: "template-field-delivery", label: "Anlieferzeitfenster", type: "text", defaultValue: "", children: [] },
+              { id: "template-field-waiting", label: "Wartebereich", type: "text", defaultValue: "", children: [] },
+            ],
+          },
         ],
-        emergencyContacts: [], participants: [], lifecycle: "active", createdAt, updatedAt: createdAt,
+        createdAt, updatedAt: createdAt,
       },
     ],
     documentTemplates,

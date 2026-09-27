@@ -22,6 +22,33 @@ export interface EmergencyContact { id: string; label: string; name: string; pho
 export interface CustomField { id: string; key: string; value: string; placeholderKey: string }
 export interface CustomSection { id: string; title: string; placeholderKey: string; fields: CustomField[] }
 
+export type OverviewEntryType = "text" | "date" | "group" | "repeating_group";
+export interface OverviewTemplateEntry {
+  id: string;
+  label: string;
+  type: OverviewEntryType;
+  defaultValue: string;
+  children: OverviewTemplateEntry[];
+}
+
+export interface ProjectOverviewEntry {
+  id: string;
+  label: string;
+  placeholderKey: string;
+  type: OverviewEntryType;
+  value: string;
+  children: ProjectOverviewEntry[];
+  items: ProjectOverviewEntry[][];
+}
+
+export interface ProjectOverviewSection {
+  id: string;
+  templateId?: string;
+  name: string;
+  placeholderKey: string;
+  entries: ProjectOverviewEntry[];
+}
+
 export interface ProjectAsset {
   id: string;
   filename: string;
@@ -55,6 +82,7 @@ export interface Project {
   emergencyContacts: EmergencyContact[];
   customFields: CustomField[];
   customSections: CustomSection[];
+  overviewSections: ProjectOverviewSection[];
   assets: ProjectAsset[];
   createdAt: string;
   updatedAt: string;
@@ -180,11 +208,13 @@ export interface Plan {
   supportingDocuments: PlanSupportingDocument[]; includedAssetIds: string[]; createdAt: string; updatedAt: string;
 }
 
-export type OverviewTemplateKind = "project_details" | "emergency_contacts" | "participants" | "custom_section";
 export interface OverviewTemplate {
-  id: string; organizationId: string; name: string; kind: OverviewTemplateKind; title?: string;
-  fields: CustomField[]; emergencyContacts: EmergencyContact[]; participants: Participant[];
-  lifecycle?: RecordLifecycle; createdAt: string; updatedAt: string;
+  id: string;
+  organizationId: string;
+  name: string;
+  entries: OverviewTemplateEntry[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 export type DocumentType = SupportingDocumentType | "a4_plan";

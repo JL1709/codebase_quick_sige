@@ -4,6 +4,7 @@ import { defaultAssessmentAnswers } from "../data/seed";
 import { createPlanFromAssessment } from "../domain/recommendationEngine";
 import { buildRevisionSnapshot } from "../domain/revisionSnapshot";
 import { blockHierarchyColor, categoryPlacementIds } from "../domain/categoryTree";
+import { instantiateOverviewSection, normalizeOverviewKey, validateOverviewTemplate } from "../domain/overviewTemplates";
 import type {
   AppDatabase, AssessmentAnswers, BuildingBlock, BuildingBlockCategory, DocumentTemplate, GeneratedDocument,
   Locale, OverviewTemplate, Plan, PlanRevision, Project, ProjectDocumentConfiguration, ProjectFormValues, Recommendation,
@@ -29,7 +30,6 @@ interface AppContextValue {
   restoreCategory: (categoryId: string) => void;
   applyOverviewTemplates: (projectId: string, templateIds: string[]) => void;
   saveOverviewTemplate: (template: OverviewTemplate) => void;
-  duplicateOverviewTemplate: (templateId: string) => OverviewTemplate;
   deleteOverviewTemplate: (templateId: string) => void;
   saveDocumentTemplate: (template: DocumentTemplate) => void;
   deleteDocumentTemplate: (templateId: string) => void;
@@ -51,51 +51,11 @@ export function newId(prefix: string): string {
   return `${prefix}-${randomId}`;
 }
 
-function cloneTemplateEntryId(prefix: string): string { return newId(prefix); }
-
-function normalizedTemplateKey(value: string, fallback: string): string {
-  const normalized = value.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
-  return normalized || fallback;
-}
-
-function cloneUniqueFields(existing: Project["customFields"], incoming: OverviewTemplate["fields"]): Project["customFields"] {
-  const used = new Set(existing.map((field) => field.placeholderKey));
-  return incoming.map((field, index) => {
-    const baseKey = normalizedTemplateKey(field.placeholderKey || field.key, `field_${index + 1}`);
-    let placeholderKey = baseKey;
-    let suffix = 2;
-    while (used.has(placeholderKey)) { placeholderKey = `${baseKey}_${suffix}`; suffix += 1; }
-    used.add(placeholderKey);
-    return { ...field, id: cloneTemplateEntryId("field"), placeholderKey };
-  });
-}
-
 function applyProjectTemplates(project: Project, templateIds: string[], templates: OverviewTemplate[]): Project {
   return templateIds.reduce((current, templateId) => {
     const template = templates.find((candidate) => candidate.id === templateId);
-    if (!template) return current;
-    if (template.kind === "project_details") {
-      return { ...current, customFields: [...current.customFields, ...cloneUniqueFields(current.customFields, template.fields)] };
-    }
-    if (template.kind === "emergency_contacts") {
-      return { ...current, emergencyContacts: [...current.emergencyContacts, ...template.emergencyContacts.map((contact) => ({ ...contact, id: cloneTemplateEntryId("emergency") }))] };
-    }
-    if (template.kind === "participants") {
-      return { ...current, participants: [...current.participants, ...template.participants.map((participant) => ({ ...participant, id: cloneTemplateEntryId("participant") }))] };
-    }
-    const usedSectionKeys = new Set(current.customSections.map((section) => section.placeholderKey));
-    const baseSectionKey = normalizedTemplateKey(template.title ?? template.name, `section_${current.customSections.length + 1}`);
-    let sectionKey = baseSectionKey;
-    let sectionSuffix = 2;
-    while (usedSectionKeys.has(sectionKey)) { sectionKey = `${baseSectionKey}_${sectionSuffix}`; sectionSuffix += 1; }
-    return {
-      ...current,
-      customSections: [...current.customSections, {
-        id: cloneTemplateEntryId("section"), title: template.title ?? template.name,
-        placeholderKey: sectionKey,
-        fields: cloneUniqueFields([], template.fields),
-      }],
-    };
+    if (!template || current.overviewSections.some((section) => section.templateId === template.id || section.placeholderKey === normalizeOverviewKey(template.name, "template"))) return current;
+    return { ...current, overviewSections: [...current.overviewSections, instantiateOverviewSection(template, newId)] };
   }, project);
 }
 
@@ -112,7 +72,7 @@ export function AppProvider({ children, repository: providedRepository }: { chil
     const { templateIds = [], ...projectValues } = values;
     const initialProject: Project = {
       ...projectValues, id: newId("project"), organizationId: database.organization.id, status: "draft",
-      participants: [], emergencyContacts: [], customFields: [], customSections: [], assets: [], createdAt: now, updatedAt: now,
+      participants: [], emergencyContacts: [], customFields: [], customSections: [], overviewSections: [], assets: [], createdAt: now, updatedAt: now,
     };
     const project = applyProjectTemplates(initialProject, templateIds, database.overviewTemplates);
     commit((current) => ({
@@ -215,15 +175,10 @@ export function AppProvider({ children, repository: providedRepository }: { chil
         : project),
     }));
   }, [commit]);
-  const saveOverviewTemplate = useCallback((template: OverviewTemplate) => commit((current) => ({ ...current, overviewTemplates: current.overviewTemplates.some((candidate) => candidate.id === template.id) ? current.overviewTemplates.map((candidate) => candidate.id === template.id ? template : candidate) : [template, ...current.overviewTemplates] })), [commit]);
-  const duplicateOverviewTemplate = useCallback((templateId: string): OverviewTemplate => {
-    const source = database.overviewTemplates.find((template) => template.id === templateId);
-    if (!source) throw new Error("Overview template not found");
-    const now = new Date().toISOString();
-    const duplicate = { ...structuredClone(source), id: newId("overview-template"), name: `${source.name} – Copy`, lifecycle: "active" as const, createdAt: now, updatedAt: now };
-    commit((current) => ({ ...current, overviewTemplates: [duplicate, ...current.overviewTemplates] }));
-    return duplicate;
-  }, [commit, database.overviewTemplates]);
+  const saveOverviewTemplate = useCallback((template: OverviewTemplate) => commit((current) => {
+    if (!validateOverviewTemplate(template, current.overviewTemplates).valid) return current;
+    return { ...current, overviewTemplates: current.overviewTemplates.some((candidate) => candidate.id === template.id) ? current.overviewTemplates.map((candidate) => candidate.id === template.id ? template : candidate) : [template, ...current.overviewTemplates] };
+  }), [commit]);
   const deleteOverviewTemplate = useCallback((templateId: string) => commit((current) => ({ ...current, overviewTemplates: current.overviewTemplates.filter((template) => template.id !== templateId) })), [commit]);
   const saveDocumentTemplate = useCallback((template: DocumentTemplate) => commit((current) => {
     const existing = current.documentTemplates.find((candidate) => candidate.id === template.id);
@@ -256,7 +211,7 @@ export function AppProvider({ children, repository: providedRepository }: { chil
   const value = useMemo<AppContextValue>(() => ({
     database, setLocale, createProject, updateProject, saveAssessment, createPlan, updatePlan, publishPlan,
     saveBlock, archiveBlock, restoreBlock, saveCategory, reorderCategories, archiveCategory, restoreCategory,
-    applyOverviewTemplates: applyTemplatesToProject, saveOverviewTemplate, duplicateOverviewTemplate, deleteOverviewTemplate,
+    applyOverviewTemplates: applyTemplatesToProject, saveOverviewTemplate, deleteOverviewTemplate,
     saveDocumentTemplate, deleteDocumentTemplate, setDocumentTemplate, addGeneratedDocument, resetDemo,
     migrationRecovery: {
       available: repository.current.hasBackup(),
@@ -266,7 +221,7 @@ export function AppProvider({ children, repository: providedRepository }: { chil
     getProject: (projectId) => database.projects.find((project) => project.id === projectId),
     getPlanForProject: (projectId) => database.plans.find((plan) => plan.projectId === projectId),
     getAssessment: (projectId) => database.assessments[projectId] ?? { ...defaultAssessmentAnswers },
-  }), [database, setLocale, createProject, updateProject, saveAssessment, createPlan, updatePlan, publishPlan, saveBlock, archiveBlock, restoreBlock, saveCategory, reorderCategories, archiveCategory, restoreCategory, applyTemplatesToProject, saveOverviewTemplate, duplicateOverviewTemplate, deleteOverviewTemplate, saveDocumentTemplate, deleteDocumentTemplate, setDocumentTemplate, addGeneratedDocument, restoreMigrationBackup, downloadMigrationBackup, resetDemo]);
+  }), [database, setLocale, createProject, updateProject, saveAssessment, createPlan, updatePlan, publishPlan, saveBlock, archiveBlock, restoreBlock, saveCategory, reorderCategories, archiveCategory, restoreCategory, applyTemplatesToProject, saveOverviewTemplate, deleteOverviewTemplate, saveDocumentTemplate, deleteDocumentTemplate, setDocumentTemplate, addGeneratedDocument, restoreMigrationBackup, downloadMigrationBackup, resetDemo]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

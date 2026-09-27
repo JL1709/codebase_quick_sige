@@ -2,6 +2,7 @@ import { Document, Packer, Paragraph } from "docx";
 import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import { createSeedDatabase } from "../data/seed";
+import { instantiateOverviewSection } from "../domain/overviewTemplates";
 import {
   blobToArrayBuffer, buildTemplateData, createStandardTemplate, inspectTemplate,
   MAX_TEMPLATE_FILE_BYTES, normalizePlaceholderKey, renderTemplate, validateTemplateFile,
@@ -23,6 +24,21 @@ describe("Word template engine", () => {
 
     expect(existing.missingPlaceholders).toEqual([]);
     expect(missing.missingPlaceholders).toEqual(["qs.overview.not_defined"]);
+  });
+
+  it("exposes hierarchical overview-template values to the Word engine", async () => {
+    const database = createSeedDatabase();
+    const template = database.overviewTemplates.find((candidate) => candidate.id === "overview-template-emergency")!;
+    let sequence = 0;
+    const section = instantiateOverviewSection(template, (prefix) => `${prefix}-${++sequence}`);
+    const project = { ...database.projects[0], overviewSections: [section] };
+    const data = buildTemplateData(project, database.plans[0], database.blocks) as {
+      qs: { overview: { notfallkontakte: { kontakte: Array<{ telefon: string }> } } };
+    };
+
+    expect(data.qs.overview.notfallkontakte.kontakte[0].telefon).toBe("112");
+    const inspection = await inspectTemplate(await commandTemplate("INS qs.overview.notfallkontakte.kontakte.0.telefon"), data);
+    expect(inspection.missingPlaceholders).toEqual([]);
   });
 
   it("blocks executable commands before rendering", async () => {

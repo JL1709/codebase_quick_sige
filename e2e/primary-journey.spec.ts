@@ -25,6 +25,20 @@ async function dragCategoryToEdge(page: Page, categoryBrowser: Locator, draggedC
   await page.mouse.up();
 }
 
+async function dragTemplateEntryInside(page: Page, entryLabel: string, groupLabel: string) {
+  const sourceRow = page.locator(".template-builder-row").filter({ has: page.locator(`input[value="${entryLabel}"]`) });
+  const targetRow = page.locator(".template-builder-row").filter({ has: page.locator(`input[value="${groupLabel}"]`) });
+  const sourceBox = await sourceRow.locator(".template-drag-handle").boundingBox();
+  const targetBox = await targetRow.boundingBox();
+  expect(sourceBox).not.toBeNull(); expect(targetBox).not.toBeNull();
+  await page.mouse.move(sourceBox!.x + sourceBox!.width / 2, sourceBox!.y + sourceBox!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(sourceBox!.x + sourceBox!.width / 2 + 10, sourceBox!.y + sourceBox!.height / 2, { steps: 3 });
+  await page.mouse.move(targetBox!.x + targetBox!.width / 2, targetBox!.y + targetBox!.height / 2, { steps: 12 });
+  await expect(targetRow).toHaveClass(/drop-inside-active/);
+  await page.mouse.up();
+}
+
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
   await page.evaluate(async () => {
@@ -135,7 +149,7 @@ test("project creation applies templates and guided assessment creates a plan", 
   await page.getByLabel("Address").fill("2 Test Street");
   await page.getByLabel("City").fill("Berlin");
   await page.getByLabel("Planned end").fill("2027-09-27");
-  await page.getByRole("checkbox", { name: /Standard project information/ }).check();
+  await page.getByRole("checkbox", { name: /Allgemein/ }).check();
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByText("Single-template project", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Bauherr", { exact: true })).toBeVisible();
@@ -146,8 +160,8 @@ test("project creation applies templates and guided assessment creates a plan", 
   await page.getByLabel("Address").fill("10 Campus Way");
   await page.getByLabel("City").fill("Hamburg");
   await page.getByLabel("Planned end").fill("2027-12-18");
-  const projectInformationTemplate = page.getByRole("checkbox", { name: /Standard project information/ });
-  const emergencyServicesTemplate = page.getByRole("checkbox", { name: /German emergency services/ });
+  const projectInformationTemplate = page.getByRole("checkbox", { name: /Allgemein/ });
+  const emergencyServicesTemplate = page.getByRole("checkbox", { name: /Notfallkontakte/ });
   await projectInformationTemplate.check();
   await emergencyServicesTemplate.check();
   await expect(projectInformationTemplate).toBeChecked();
@@ -386,10 +400,62 @@ test("Templates is separate from Settings and retains complete template manageme
   await page.getByLabel("Template name").fill("E2E project details");
   await page.getByRole("button", { name: "Add entry" }).click();
   await page.getByPlaceholder("Label").fill("Permit number");
+  await expect(page.getByText("Template type")).toHaveCount(0);
+  await expect(page.locator(".form-error")).toHaveCount(0);
+  await page.locator(".template-entry-menu summary").click();
+  await expect(page.getByText("{{INS qs.overview.e2e_project_details.permit_number}}", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("E2E project details")).toBeVisible();
   await page.reload();
   await expect(page.getByText("E2E project details")).toBeVisible();
+  const templateRow = page.locator(".template-row").filter({ hasText: "E2E project details" });
+  await expect(templateRow.getByRole("button", { name: /delete permanently/i })).toHaveCount(1);
+  await expect(templateRow.getByRole("button", { name: /Duplicate/ })).toHaveCount(0);
+  await templateRow.getByRole("button", { name: /delete permanently/i }).click();
+  await expect(page.getByRole("heading", { name: "Delete template" })).toBeVisible();
+  await page.getByRole("button", { name: "Delete permanently", exact: true }).click();
+  await expect(page.getByText("E2E project details")).toHaveCount(0);
+});
+
+test("overview template builder supports hierarchy, drag placement, dates, and project values", async ({ page }) => {
+  await useEnglishInterface(page);
+  await page.getByRole("link", { name: "Templates" }).click();
+  await page.getByRole("button", { name: "Add template" }).click();
+  await page.getByLabel("Template name").fill("Site handover");
+  await page.getByRole("button", { name: "Add entry" }).click();
+  await page.getByPlaceholder("Label").fill("Permit number");
+  await page.locator(".template-add-entry select").selectOption("group");
+  await page.getByRole("button", { name: "Add entry" }).click();
+  await page.getByPlaceholder("Label").last().fill("Handover details");
+  await page.locator(".template-builder-row").filter({ has: page.locator('input[value="Handover details"]') }).getByRole("button", { name: "Add nested field" }).click();
+  await page.getByPlaceholder("Label").last().fill("Inspector");
+  await page.locator(".template-add-entry select").selectOption("date");
+  await page.getByRole("button", { name: "Add entry" }).click();
+  await page.getByPlaceholder("Label").last().fill("Handover date");
+  await page.getByLabel("Default value (optional)").last().fill("2026-09-27");
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await dragTemplateEntryInside(page, "Permit number", "Handover details");
+  const nestedPermitRow = page.locator(".template-builder-children .template-builder-row").filter({ has: page.locator('input[value="Permit number"]') });
+  await expect(nestedPermitRow).toBeVisible();
+  await nestedPermitRow.locator(".template-entry-menu summary").click();
+  await expect(page.getByText("{{INS qs.overview.site_handover.handover_details.permit_number}}", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+
+  await page.goto("/projects/new");
+  await page.getByLabel("Project name").fill("Template-driven project");
+  await page.getByLabel("Address").fill("4 Template Road");
+  await page.getByLabel("City").fill("Berlin");
+  await page.getByLabel("Planned end").fill("2027-09-27");
+  await page.getByRole("checkbox", { name: /Site handover/ }).check();
+  await page.getByRole("button", { name: "Continue" }).click();
+  const overviewSection = page.locator(".overview-template-section").filter({ hasText: "Site handover" });
+  await expect(overviewSection.getByText("Inspector", { exact: true })).toBeVisible();
+  await expect(overviewSection.getByText("27/09/2026", { exact: true })).toBeVisible();
+  await overviewSection.getByRole("button", { name: "Edit" }).click();
+  await overviewSection.getByLabel("Permit number").fill("B-2042");
+  await overviewSection.getByRole("button", { name: "Save" }).click();
+  await expect(overviewSection.getByText("B-2042", { exact: true })).toBeVisible();
 });
 
 test("A0 canvas fits, zooms deeply, edits structural content, and navigates validation", async ({ page, browserName }) => {

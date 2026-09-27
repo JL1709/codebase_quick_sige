@@ -2,7 +2,8 @@ import { ArrowDown, ArrowUp, CalendarDays, Check, Copy, LayoutTemplate, MapPin, 
 import { Children, type FormEvent, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { Button, Modal } from "../components/Ui";
-import type { CustomField, CustomSection, EmergencyContact, Participant, Project } from "../domain/types";
+import { countOverviewEntries, instantiateRepeatingItem, normalizeOverviewKey } from "../domain/overviewTemplates";
+import type { CustomField, CustomSection, EmergencyContact, Participant, Project, ProjectOverviewEntry, ProjectOverviewSection } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
 import { newId, useApp } from "../state/AppProvider";
 import { NotFoundPage } from "./NotFoundPage";
@@ -127,6 +128,7 @@ export function ProjectPage() {
         </EntitySection>
 
         {project.customSections.map((section, index) => <CustomSectionCard key={section.id} section={section} onChange={updateSection} onMoveUp={() => moveSection(index, -1)} onMoveDown={() => moveSection(index, 1)} canMoveUp={index > 0} canMoveDown={index < project.customSections.length - 1} onDelete={() => { if (window.confirm(t("common.confirmDelete"))) updateProject({ ...project, customSections: project.customSections.filter((candidate) => candidate.id !== section.id) }); }} t={t} />)}
+        {project.overviewSections.map((section) => <OverviewSectionCard key={section.id} section={section} onChange={(nextSection) => updateProject({ ...project, overviewSections: project.overviewSections.map((candidate) => candidate.id === nextSection.id ? nextSection : candidate) })} onDelete={() => { if (window.confirm(t("common.confirmDelete"))) updateProject({ ...project, overviewSections: project.overviewSections.filter((candidate) => candidate.id !== section.id) }); }} t={t} formatDate={formatDate} />)}
       </div>
 
       <Modal open={participantOpen} title={editingParticipantId ? t("overview.editParticipant") : t("overview.addParticipant")} onClose={() => setParticipantOpen(false)}>
@@ -146,9 +148,57 @@ export function ProjectPage() {
         </div><ModalFooter close={() => setEmergencyOpen(false)} t={t} /></form>
       </Modal>
       <Modal open={sectionOpen} title={t("overview.addSection")} onClose={() => setSectionOpen(false)}><form onSubmit={addSection}><div className="modal-body"><label className="field"><span>{t("overview.sectionTitle")}</span><input required value={sectionTitle} onChange={(event) => setSectionTitle(event.target.value)} /></label></div><ModalFooter close={() => setSectionOpen(false)} t={t} /></form></Modal>
-      <Modal open={templateOpen} title={t("overview.applyTemplate")} onClose={() => setTemplateOpen(false)}><div className="modal-body"><p className="page-description">{t("overview.applyTemplateText")}</p><div className="template-picker-preview">{database.overviewTemplates.filter((template) => template.lifecycle !== "archived").map((template) => <label key={template.id}><input type="checkbox" checked={templateIds.includes(template.id)} onChange={(event) => setTemplateIds((current) => event.target.checked ? [...current, template.id] : current.filter((id) => id !== template.id))} /><span><strong>{template.name}</strong><small>{t(`templates.kind.${template.kind}`)} · {template.fields.length + template.emergencyContacts.length + template.participants.length} {t("overview.entries")}</small></span></label>)}</div></div><div className="modal-footer"><Button variant="secondary" onClick={() => setTemplateOpen(false)}>{t("common.cancel")}</Button><Button disabled={!templateIds.length} onClick={() => { applyOverviewTemplates(project.id, templateIds); setTemplateIds([]); setTemplateOpen(false); }}>{t("overview.applySelected")}</Button></div></Modal>
+      <Modal open={templateOpen} title={t("overview.applyTemplate")} onClose={() => setTemplateOpen(false)}><div className="modal-body"><p className="page-description">{t("overview.applyTemplateText")}</p><div className="template-picker-preview">{database.overviewTemplates.filter((template) => !project.overviewSections.some((section) => section.templateId === template.id || section.placeholderKey === normalizeOverviewKey(template.name, "template"))).map((template) => <label key={template.id}><input type="checkbox" checked={templateIds.includes(template.id)} onChange={(event) => setTemplateIds((current) => event.target.checked ? [...current, template.id] : current.filter((id) => id !== template.id))} /><span><strong>{template.name}</strong><small>{countOverviewEntries(template.entries)} {t("overview.entries")}</small></span></label>)}</div>{database.overviewTemplates.every((template) => project.overviewSections.some((section) => section.templateId === template.id || section.placeholderKey === normalizeOverviewKey(template.name, "template"))) && <p className="template-empty">{t("overview.allTemplatesApplied")}</p>}</div><div className="modal-footer"><Button variant="secondary" onClick={() => setTemplateOpen(false)}>{t("common.cancel")}</Button><Button disabled={!templateIds.length} onClick={() => { applyOverviewTemplates(project.id, templateIds); setTemplateIds([]); setTemplateOpen(false); }}>{t("overview.applySelected")}</Button></div></Modal>
     </div>
   );
+}
+
+function updateProjectOverviewEntry(entries: ProjectOverviewEntry[], entryId: string, update: (entry: ProjectOverviewEntry) => ProjectOverviewEntry): ProjectOverviewEntry[] {
+  return entries.map((entry) => {
+    const nestedEntry = {
+      ...entry,
+      children: updateProjectOverviewEntry(entry.children, entryId, update),
+      items: entry.items.map((item) => updateProjectOverviewEntry(item, entryId, update)),
+    };
+    return entry.id === entryId ? update(nestedEntry) : nestedEntry;
+  });
+}
+
+function OverviewSectionCard({ section, onChange, onDelete, t, formatDate }: {
+  section: ProjectOverviewSection;
+  onChange: (section: ProjectOverviewSection) => void;
+  onDelete: () => void;
+  t: (key: string, params?: Record<string, string | number>) => string;
+  formatDate: (value: string) => string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(() => structuredClone(section));
+  useEffect(() => { if (!editing) setDraft(structuredClone(section)); }, [editing, section]);
+  const updateEntry = (entryId: string, update: (entry: ProjectOverviewEntry) => ProjectOverviewEntry) => setDraft((current) => ({ ...current, entries: updateProjectOverviewEntry(current.entries, entryId, update) }));
+
+  return <section className="panel overview-template-section overview-span-two">
+    <div className="panel-header"><div><h2>{section.name}</h2><span className="panel-kicker">{countProjectOverviewValues(section.entries)} {t("overview.entries")}</span></div><div className="row-actions">{editing ? <><Button size="small" variant="ghost" onClick={() => { setDraft(structuredClone(section)); setEditing(false); }}><X size={14} />{t("common.cancel")}</Button><Button size="small" onClick={() => { onChange(draft); setEditing(false); }}><Check size={14} />{t("common.save")}</Button></> : <Button size="small" variant="secondary" onClick={() => setEditing(true)}><Pencil size={14} />{t("common.edit")}</Button>}<button type="button" className="icon-button danger-icon" onClick={onDelete} aria-label={t("common.deletePermanently")}><Trash2 size={14} /></button></div></div>
+    <div className="panel-body overview-template-values">{draft.entries.map((entry) => <ProjectOverviewEntryView key={entry.id} entry={entry} editing={editing} onUpdate={updateEntry} t={t} formatDate={formatDate} />)}</div>
+  </section>;
+}
+
+function countProjectOverviewValues(entries: ProjectOverviewEntry[]): number {
+  return entries.reduce((total, entry) => {
+    if (entry.type === "repeating_group") return total + 1 + entry.items.reduce((itemTotal, item) => itemTotal + countProjectOverviewValues(item), 0);
+    return total + 1 + countProjectOverviewValues(entry.children);
+  }, 0);
+}
+
+function ProjectOverviewEntryView({ entry, editing, onUpdate, t, formatDate }: {
+  entry: ProjectOverviewEntry;
+  editing: boolean;
+  onUpdate: (entryId: string, update: (entry: ProjectOverviewEntry) => ProjectOverviewEntry) => void;
+  t: (key: string, params?: Record<string, string | number>) => string;
+  formatDate: (value: string) => string;
+}) {
+  if (entry.type === "text" || entry.type === "date") return <div className="detail-item overview-template-value"><label>{entry.label}</label>{editing ? <input aria-label={entry.label} type={entry.type === "date" ? "date" : "text"} value={entry.value} onChange={(event) => onUpdate(entry.id, (candidate) => ({ ...candidate, value: event.target.value }))} /> : <p>{entry.type === "date" && entry.value ? formatDate(entry.value) : entry.value || "—"}</p>}</div>;
+  if (entry.type === "group") return <section className="overview-value-group"><h3>{entry.label}</h3><div className="overview-value-grid">{entry.children.map((child) => <ProjectOverviewEntryView key={child.id} entry={child} editing={editing} onUpdate={onUpdate} t={t} formatDate={formatDate} />)}</div></section>;
+  return <section className="overview-value-group overview-repeat-group"><div className="overview-value-group-header"><h3>{entry.label}</h3>{editing && <Button size="small" variant="secondary" onClick={() => onUpdate(entry.id, (candidate) => ({ ...candidate, items: [...candidate.items, instantiateRepeatingItem(candidate, newId)] }))}><Plus size={13} />{t("overview.addRecord")}</Button>}</div><div className="overview-repeat-items">{entry.items.map((item, index) => <article className="overview-repeat-item" key={`${entry.id}-${index}`}><div className="overview-repeat-item-header"><strong>{t("overview.record", { index: index + 1 })}</strong>{editing && <button type="button" className="icon-button danger-icon" aria-label={t("overview.removeRecord")} onClick={() => onUpdate(entry.id, (candidate) => ({ ...candidate, items: candidate.items.filter((_, itemIndex) => itemIndex !== index) }))}><Trash2 size={14} /></button>}</div><div className="overview-value-grid">{item.map((child) => <ProjectOverviewEntryView key={child.id} entry={child} editing={editing} onUpdate={onUpdate} t={t} formatDate={formatDate} />)}</div></article>)}</div></section>;
 }
 
 function DetailField({ editing, label, value, onChange, type = "text", textarea, icon, selectOptions }: { editing: boolean; label: string; value: string; onChange: (value: string) => void; type?: string; textarea?: boolean; icon?: React.ReactNode; selectOptions?: Array<{ value: string; label: string }> }) {
