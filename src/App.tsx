@@ -9,7 +9,7 @@ import { PlanEditorPage } from "./pages/PlanEditorPage";
 import { ProjectFormPage } from "./pages/ProjectFormPage";
 import { ProjectPage } from "./pages/ProjectPage";
 import { RecommendationsPage } from "./pages/RecommendationsPage";
-import { SettingsPage } from "./pages/SettingsPage";
+import { SettingsPage, TemplatesPage } from "./pages/SettingsPage";
 import { RevisionsPage } from "./pages/RevisionsPage";
 import { ProjectWorkspaceLayout } from "./components/ProjectWorkspaceLayout";
 
@@ -30,6 +30,7 @@ export function App() {
           <Route path="revisions" element={<RevisionsPage />} />
         </Route>
         <Route path="catalog" element={<CatalogPage />} />
+        <Route path="templates" element={<TemplatesPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>

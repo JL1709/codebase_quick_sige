@@ -1,4 +1,4 @@
-import type { BuildingBlock, Plan, PlanBlockElement, PlanElement, PlanLayout, PlanSection, PlanSectionElement } from "./types";
+import type { BuildingBlock, Plan, PlanBlockElement, PlanElement, PlanHeaderElement, PlanLayout, PlanSection, PlanSectionElement } from "./types";
 
 export const PLAN_UNITS_PER_MILLIMETRE = 10;
 export const A0_LANDSCAPE_WIDTH = 11_890;
@@ -18,6 +18,23 @@ const BLOCK_HEIGHT = 480;
 const SECTION_COLUMNS = 4;
 const NEW_SECTION_HEIGHT = 1_220;
 
+export const PLAN_HEADER_ELEMENT_ID = "layout-header";
+export const PLAN_TITLE_BLOCK_ELEMENT_ID = "layout-title-block";
+
+function createHeaderElement(): PlanHeaderElement {
+  return {
+    id: PLAN_HEADER_ELEMENT_ID,
+    kind: "header",
+    x: PLAN_SAFE_MARGIN,
+    y: PLAN_SAFE_MARGIN,
+    width: A0_LANDSCAPE_WIDTH - PLAN_SAFE_MARGIN * 2,
+    height: 520,
+    zIndex: 900,
+    semanticOrder: 0,
+    locked: false,
+  };
+}
+
 export function layoutUnitsToMillimetres(layoutUnits: number): number {
   return layoutUnits / PLAN_UNITS_PER_MILLIMETRE;
 }
@@ -36,7 +53,7 @@ function sectionHeight(itemCount: number): number {
 }
 
 export function createLayoutFromSections(sections: PlanSection[]): PlanLayout {
-  const elements: PlanElement[] = [];
+  const elements: PlanElement[] = [createHeaderElement()];
   let sectionY = PLAN_SAFE_MARGIN + HEADER_HEIGHT;
   sections.filter((section) => section.items.length > 0).forEach((section, sectionIndex) => {
     const height = sectionHeight(section.items.length);
@@ -72,7 +89,7 @@ export function createLayoutFromSections(sections: PlanSection[]): PlanLayout {
     sectionY += height + SECTION_GAP;
   });
   elements.push({
-    id: "layout-title-block",
+    id: PLAN_TITLE_BLOCK_ELEMENT_ID,
     kind: "title_block",
     x: A0_LANDSCAPE_WIDTH - 3_200,
     y: A0_LANDSCAPE_HEIGHT - PLAN_SAFE_MARGIN - TITLE_BLOCK_HEIGHT,
@@ -80,10 +97,10 @@ export function createLayoutFromSections(sections: PlanSection[]): PlanLayout {
     height: TITLE_BLOCK_HEIGHT,
     zIndex: 1_000,
     semanticOrder: 10_000,
-    locked: true,
+    locked: false,
   });
   return {
-    layoutVersion: 2,
+    layoutVersion: 3,
     format: "A0",
     orientation: "landscape",
     width: A0_LANDSCAPE_WIDTH,
@@ -95,7 +112,23 @@ export function createLayoutFromSections(sections: PlanSection[]): PlanLayout {
 }
 
 export function ensurePlanLayout(plan: Omit<Plan, "layout"> & { layout?: PlanLayout }): Plan {
-  return { ...plan, layout: plan.layout?.layoutVersion === 2 ? plan.layout : createLayoutFromSections(plan.sections) };
+  if (!plan.layout) return { ...plan, layout: createLayoutFromSections(plan.sections) };
+  if (plan.layout.layoutVersion === 3) {
+    const hasHeader = plan.layout.elements.some((element) => element.kind === "header");
+    return hasHeader ? plan as Plan : { ...plan, layout: { ...plan.layout, elements: [createHeaderElement(), ...plan.layout.elements] } };
+  }
+  const legacyLayout = plan.layout as unknown as Omit<PlanLayout, "layoutVersion"> & { layoutVersion: number };
+  const migratedElements = legacyLayout.elements
+    .filter((element) => element.kind !== "header")
+    .map((element) => element.kind === "title_block" ? { ...element, locked: false } : element) as PlanElement[];
+  return {
+    ...plan,
+    layout: {
+      ...legacyLayout,
+      layoutVersion: 3,
+      elements: [createHeaderElement(), ...migratedElements],
+    },
+  };
 }
 
 export function snapToGrid(value: number, gridSize = PLAN_GRID_SIZE): number {

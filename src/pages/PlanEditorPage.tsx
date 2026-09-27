@@ -1,19 +1,23 @@
 import { DndContext, type DragEndEvent, KeyboardSensor, PointerSensor, useDraggable, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
 import {
   AlignCenterHorizontal, AlignCenterVertical, AlignHorizontalDistributeCenter, AlignVerticalDistributeCenter,
-  ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight,
+  ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronRight,
   Copy, FileOutput, Image, Lock, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Search, ShieldCheck,
-  Trash2, TriangleAlert, Type, Undo2, Unlock, ZoomIn, ZoomOut,
+  Maximize2, SlidersHorizontal, Trash2, TriangleAlert, Type, Undo2, Unlock, ZoomIn, ZoomOut,
 } from "lucide-react";
 import Moveable from "react-moveable";
 import Selecto from "react-selecto";
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { Link, useParams } from "react-router-dom";
 import { BlockVisual } from "../components/BlockVisual";
 import { Badge, Button, EmptyState, Modal } from "../components/Ui";
 import { blobObjectUrl, getBlob } from "../data/blobRepository";
 import { renderPdfPage } from "../documents/pdfPreview";
+import { calculateAnchoredScroll, calculateFitZoom, clampCanvasZoom, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, stepCanvasZoom } from "../domain/canvasViewport";
+import { readableTextColor } from "../domain/colorContrast";
 import { A0_LANDSCAPE_HEIGHT, A0_LANDSCAPE_WIDTH, clampElementToPage, createSectionElement, CSS_PIXELS_PER_LAYOUT_UNIT, findNextFreeBlockPosition, snapToGrid } from "../domain/planLayout";
+import { createPlanValidationIssues, type PlanValidationIssue } from "../domain/planValidation";
 import { readValidatedImageDataUrl } from "../domain/projectAssets";
 import type { BuildingBlock, BuildingBlockCategory, Plan, PlanBlockElement, PlanElement, PlanItem, PlanSection, Project, SupportingDocumentType } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
@@ -21,10 +25,12 @@ import { translate } from "../i18n/translations";
 import { newId, useApp } from "../state/AppProvider";
 import { NotFoundPage } from "./NotFoundPage";
 
-const MIN_ZOOM = 0.45;
-const MAX_ZOOM = 1.15;
-const ZOOM_STEP = 0.08;
 const documentTypes: SupportingDocumentType[] = ["site_rules", "alarm_plan", "fire_safety", "first_aid", "participants", "advance_notice"];
+const DOUBLE_CLICK_INTERVAL_MS = 500;
+const DOUBLE_CLICK_DISTANCE_PX = 8;
+
+type InlineField = "brandText" | "titleText" | "projectNameText" | "projectDetailsText" | "statusText" | "coordinatorText" | "referenceText" | "sectionTitle" | "blockTitle" | "blockDescription" | "text";
+interface InlineEditingState { elementId: string; field: InlineField }
 
 interface SelectedBlock { sectionId: string; itemId: string; elementId: string }
 
@@ -49,25 +55,111 @@ export function PlanEditorPage() {
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
   const [selectedElementIds, setSelectedElementIds] = useState<string[]>([]);
   const [search, setSearch] = useState("");
-  const [inspectorTab, setInspectorTab] = useState<"properties" | "validation">("properties");
   const [publishOpen, setPublishOpen] = useState(false);
   const [publishInput, setPublishInput] = useState(() => ({ index: String.fromCharCode(65 + database.revisions.filter((revision) => revision.projectId === projectId).length), changeSummary: "", approvedBy: "" }));
   const [publishedIndex, setPublishedIndex] = useState("");
   const [zoom, setZoom] = useState(0.7);
+  const [fitMode, setFitMode] = useState(true);
   const [libraryOpen, setLibraryOpen] = useState(true);
-  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [propertiesOpen, setPropertiesOpen] = useState(false);
+  const [validationOpen, setValidationOpen] = useState(false);
+  const [editing, setEditing] = useState<InlineEditingState | null>(null);
+  const [focusedIssueElementId, setFocusedIssueElementId] = useState<string | null>(null);
+  const [moveableRevision, setMoveableRevision] = useState(0);
   const [expandedCategories, setExpandedCategories] = useState(() => {
     const saved = window.localStorage.getItem("quicksige.plan-library.expanded");
     return new Set<string>(saved ? JSON.parse(saved) as string[] : database.categories.filter((category) => !category.parentId).map((category) => category.id));
   });
   const canvasRef = useRef<HTMLDivElement | null>(null);
+  const canvasShellRef = useRef<HTMLElement | null>(null);
+  const moveableRef = useRef<{ updateRect: () => void } | null>(null);
+  const propertiesTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const validationTriggerRef = useRef<HTMLButtonElement | null>(null);
   const elementRefs = useRef(new Map<string, HTMLElement>());
   const transformSnapshot = useRef<Plan | null>(null);
   const groupTransform = useRef(new Map<string, { dx: number; dy: number; width?: number; height?: number }>());
+  const lastInlineClick = useRef<{ elementId: string; field: InlineField } | null>(null);
+  const lastInlinePointer = useRef<{ elementId: string; field: InlineField; timestamp: number; clientX: number; clientY: number } | null>(null);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
     useSensor(KeyboardSensor),
   );
+
+  const recalculateFit = useCallback(() => {
+    const viewport = canvasShellRef.current;
+    if (!viewport) return;
+    setZoom(calculateFitZoom(
+      viewport.clientWidth,
+      viewport.clientHeight,
+      A0_LANDSCAPE_WIDTH * CSS_PIXELS_PER_LAYOUT_UNIT,
+      A0_LANDSCAPE_HEIGHT * CSS_PIXELS_PER_LAYOUT_UNIT,
+    ));
+  }, []);
+  const fitPlan = useCallback(() => {
+    setFitMode(true);
+    window.requestAnimationFrame(recalculateFit);
+  }, [recalculateFit]);
+  const setZoomAroundPoint = useCallback((nextZoom: number, pointerX?: number, pointerY?: number) => {
+    const viewport = canvasShellRef.current;
+    const clampedZoom = clampCanvasZoom(nextZoom);
+    setFitMode(false);
+    if (!viewport) { setZoom(clampedZoom); return; }
+    const anchorX = pointerX ?? viewport.clientWidth / 2;
+    const anchorY = pointerY ?? viewport.clientHeight / 2;
+    const nextScroll = calculateAnchoredScroll(viewport.scrollLeft, viewport.scrollTop, anchorX, anchorY, zoom, clampedZoom);
+    setZoom(clampedZoom);
+    window.requestAnimationFrame(() => viewport.scrollTo({ left: nextScroll.left, top: nextScroll.top }));
+  }, [zoom]);
+
+  useEffect(() => {
+    const viewport = canvasShellRef.current;
+    if (!viewport) return undefined;
+    const resizeObserver = new ResizeObserver(() => { if (fitMode) recalculateFit(); else moveableRef.current?.updateRect(); });
+    resizeObserver.observe(viewport);
+    if (fitMode) recalculateFit();
+    return () => resizeObserver.disconnect();
+  }, [fitMode, libraryOpen, recalculateFit]);
+
+  useEffect(() => {
+    const viewport = canvasShellRef.current;
+    if (!viewport) return undefined;
+    const handleWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      const bounds = viewport.getBoundingClientRect();
+      const direction = event.deltaY < 0 ? "in" : "out";
+      const stepCount = Math.min(6, Math.max(1, Math.round(Math.abs(event.deltaY) / 100)));
+      let nextZoom = zoom;
+      for (let index = 0; index < stepCount; index += 1) nextZoom = stepCanvasZoom(nextZoom, direction);
+      setZoomAroundPoint(nextZoom, event.clientX - bounds.left, event.clientY - bounds.top);
+    };
+    viewport.addEventListener("wheel", handleWheel, { passive: false });
+    return () => viewport.removeEventListener("wheel", handleWheel);
+  }, [setZoomAroundPoint, zoom]);
+
+  useEffect(() => {
+    if (!propertiesOpen && !validationOpen) return undefined;
+    const dismiss = (event: PointerEvent) => {
+      if (!(event.target as HTMLElement | null)?.closest("[data-toolbar-popover]")) {
+        setPropertiesOpen(false);
+        setValidationOpen(false);
+      }
+    };
+    const dismissWithEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        const trigger = propertiesOpen ? propertiesTriggerRef.current : validationOpen ? validationTriggerRef.current : null;
+        setPropertiesOpen(false); setValidationOpen(false); trigger?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", dismissWithEscape);
+    return () => { document.removeEventListener("pointerdown", dismiss); document.removeEventListener("keydown", dismissWithEscape); };
+  }, [propertiesOpen, validationOpen]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => moveableRef.current?.updateRect());
+    return () => window.cancelAnimationFrame(frame);
+  }, [zoom, libraryOpen, plan, selectedElementIds]);
 
   const blockMap = useMemo(() => new Map(database.blocks.map((block) => [block.id, block])), [database.blocks]);
   const categoryMap = useMemo(() => new Map(database.categories.map((category) => [category.id, category])), [database.categories]);
@@ -97,6 +189,10 @@ export function PlanEditorPage() {
       if (command && (key === "z" || key === "y")) {
         event.preventDefault(); if (key === "y" || event.shiftKey) redo(); else undo(); return;
       }
+      if (command && (key === "+" || key === "=" || key === "-")) {
+        event.preventDefault(); setZoomAroundPoint(stepCanvasZoom(zoom, key === "-" ? "out" : "in")); return;
+      }
+      if (event.shiftKey && key === "1") { event.preventDefault(); fitPlan(); return; }
       if (selectedElementIds.length && (event.key === "Delete" || event.key === "Backspace")) {
         if (!plan) return;
         event.preventDefault();
@@ -105,7 +201,7 @@ export function PlanEditorPage() {
         applyPlan({
           ...plan,
           sections: plan.sections.map((section) => ({ ...section, items: section.items.filter((item) => !removedItemIds.has(item.id)) })),
-          layout: { ...plan.layout, elements: plan.layout.elements.filter((element) => !selectedIds.has(element.id) || element.kind === "title_block") },
+          layout: { ...plan.layout, elements: plan.layout.elements.filter((element) => !selectedIds.has(element.id) || element.kind === "header" || element.kind === "title_block") },
         });
         setSelected(null); setSelectedElementId(null); setSelectedElementIds([]); return;
       }
@@ -119,6 +215,47 @@ export function PlanEditorPage() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   });
 
+  useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!plan || (event.target as HTMLElement | null)?.matches("input, textarea, select, [contenteditable='true']")) return;
+      const inlineTarget = document.elementsFromPoint(event.clientX, event.clientY)
+        .map((candidate) => candidate.closest<HTMLElement>("[data-inline-field]"))
+        .find((candidate): candidate is HTMLElement => Boolean(candidate));
+      const elementId = inlineTarget?.closest<HTMLElement>(".canvas-element[data-element-id]")?.dataset.elementId;
+      const field = inlineTarget?.dataset.inlineField as InlineField | undefined;
+      const previous = lastInlinePointer.current;
+      const closeToPrevious = previous
+        ? Math.hypot(event.clientX - previous.clientX, event.clientY - previous.clientY) <= DOUBLE_CLICK_DISTANCE_PX
+        : false;
+      const resolvedElementId = elementId ?? (closeToPrevious ? previous?.elementId : undefined);
+      const resolvedField = field ?? (closeToPrevious ? previous?.field : undefined);
+      if (!resolvedElementId || !resolvedField) {
+        lastInlinePointer.current = null;
+        return;
+      }
+      const isDoubleClick = previous
+        && previous.elementId === resolvedElementId
+        && previous.field === resolvedField
+        && event.timeStamp - previous.timestamp <= DOUBLE_CLICK_INTERVAL_MS
+        && closeToPrevious;
+      lastInlinePointer.current = { elementId: resolvedElementId, field: resolvedField, timestamp: event.timeStamp, clientX: event.clientX, clientY: event.clientY };
+      if (!isDoubleClick) return;
+      const element = plan.layout.elements.find((candidate) => candidate.id === resolvedElementId);
+      if (!element) return;
+      event.preventDefault();
+      event.stopPropagation();
+      window.setTimeout(() => {
+        setSelectedElementId(element.id);
+        setSelectedElementIds([element.id]);
+        setSelected(element.kind === "block" ? { sectionId: element.sectionId, itemId: element.itemId, elementId: element.id } : null);
+        setEditing({ elementId: element.id, field: resolvedField });
+      }, 0);
+      lastInlinePointer.current = null;
+    };
+    window.addEventListener("pointerdown", handlePointerDown, true);
+    return () => window.removeEventListener("pointerdown", handlePointerDown, true);
+  });
+
   if (!project) return <NotFoundPage />;
   if (!plan) return <div className="workspace-page"><EmptyState icon={<ShieldCheck />} title={t("project.noPlan")} text={t("project.noPlanText")} /></div>;
 
@@ -130,46 +267,16 @@ export function PlanEditorPage() {
     const searchCorpus = [block.code, localized.title, localized.shortDescription, localized.longDescription, ...localized.searchTerms, ...block.tags, ...block.regulations].join(" ").toLocaleLowerCase(plan.documentLocale);
     return block.lifecycle === "active" && searchCorpus.includes(normalizedSearch);
   });
-  const printWarnings = plan.layout.elements.flatMap((element) => {
-    const outsideSafeArea = element.x < plan.layout.safeMargin || element.y < plan.layout.safeMargin
-      || element.x + element.width > plan.layout.width - plan.layout.safeMargin
-      || element.y + element.height > plan.layout.height - plan.layout.safeMargin;
-    const asset = (element.kind === "image" || element.kind === "pdf_page") ? project.assets.find((candidate) => candidate.id === element.assetId) : undefined;
-    const lowResolution = element.kind === "image" && asset?.width && asset?.height
-      ? asset.width / (element.width / 10 / 25.4) < 150 || asset.height / (element.height / 10 / 25.4) < 150
-      : false;
-    const item = element.kind === "block"
-      ? plan.sections.find((section) => section.id === element.sectionId)?.items.find((candidate) => candidate.id === element.itemId)
-      : undefined;
-    const block = item ? blockMap.get(item.blockId) : undefined;
-    const visibleText = item && block ? item.customShortDescription?.[plan.documentLocale] ?? block.translations[plan.documentLocale].shortDescription : "";
-    const estimatedTextCapacity = Math.max(40, Math.floor((element.width / 120) * (element.height / 150)));
-    const clippedContent = element.kind === "block" && visibleText.length > estimatedTextCapacity;
-    const belowPrintThreshold = (element.kind === "block" || element.kind === "text") && (element.width < 800 || element.height < 280);
-    return [
-      ...(outsideSafeArea ? [t("editor.outsideSafeArea")] : []),
-      ...(lowResolution ? [t("editor.lowResolution", { filename: asset?.filename ?? "" })] : []),
-      ...(clippedContent ? [t("editor.clippedContent")] : []),
-      ...(belowPrintThreshold ? [t("editor.smallPrintText")] : []),
-    ];
+  const validationIssues = createPlanValidationIssues({
+    plan,
+    project,
+    blocks: database.blocks,
+    documentConfigurations: database.documentConfigurations,
+    documentTemplates: database.documentTemplates,
+    t,
   });
-  const blockingValidationIssues = [
-    ...(presentBlockIds.size === 0 ? [t("editor.noBlocks")] : []),
-    ...(!project.participants.some((participant) => participant.role === "coordinator") ? [t("editor.missingCoordinator")] : []),
-    ...database.documentConfigurations.filter((configuration) => configuration.projectId === project.id).flatMap((configuration) => {
-      const template = database.documentTemplates.find((candidate) => candidate.id === configuration.templateId);
-      return !template || template.validation?.status === "invalid" ? [t("editor.invalidTemplate")] : [];
-    }),
-  ];
-  const warningValidationIssues = [
-    ...(project.emergencyContacts.length === 0 ? [t("editor.missingEmergency")] : []),
-    ...printWarnings,
-  ];
-  const informationValidationIssues = [t("editor.validationInfo", {
-    assets: project.assets.length,
-    templates: database.documentConfigurations.filter((configuration) => configuration.projectId === project.id).length,
-  })];
-  const validationIssues = [...blockingValidationIssues, ...warningValidationIssues];
+  const blockingValidationIssues = validationIssues.filter((issue) => issue.severity === "error");
+  const warningValidationIssues = validationIssues.filter((issue) => issue.severity === "warning");
 
   const addBlock = (blockId: string, requestedPosition?: { x: number; y: number }) => {
     const block = blockMap.get(blockId); if (!block) return;
@@ -236,8 +343,52 @@ export function PlanEditorPage() {
   const updateSection = (sectionId: string, patch: Partial<PlanSection>) => {
     applyPlan({ ...plan, sections: plan.sections.map((section) => section.id === sectionId ? { ...section, ...patch } : section) });
   };
+  const commitInlineEdit = (elementId: string, field: InlineField, value: string) => {
+    const element = plan.layout.elements.find((candidate) => candidate.id === elementId);
+    if (!element) return;
+    if (element.kind === "block" && (field === "blockTitle" || field === "blockDescription")) {
+      applyPlan({
+        ...plan,
+        sections: plan.sections.map((section) => section.id === element.sectionId ? {
+          ...section,
+          items: section.items.map((item) => item.id === element.itemId ? field === "blockTitle"
+            ? { ...item, customTitle: { ...item.customTitle, [plan.documentLocale]: value } }
+            : { ...item, customShortDescription: { ...item.customShortDescription, [plan.documentLocale]: value } }
+            : item),
+        } : section),
+      });
+    } else if (element.kind === "section" && field === "sectionTitle") {
+      updateSection(element.sectionId, { titleOverrides: { ...plan.sections.find((section) => section.id === element.sectionId)?.titleOverrides, [plan.documentLocale]: value } });
+    } else if (element.kind === "text" && field === "text") {
+      updateElement(element.id, { text: { ...element.text, [plan.documentLocale]: value } });
+    } else if (element.kind === "header" && ["brandText", "titleText", "projectNameText", "projectDetailsText", "statusText"].includes(field)) {
+      const existing = element[field as keyof typeof element] as Partial<Record<"de" | "en", string>> | undefined;
+      updateElement(element.id, { [field]: { ...existing, [plan.documentLocale]: value } } as Partial<PlanElement>);
+    } else if (element.kind === "title_block" && ["projectNameText", "coordinatorText", "referenceText"].includes(field)) {
+      const existing = element[field as keyof typeof element] as Partial<Record<"de" | "en", string>> | undefined;
+      updateElement(element.id, { [field]: { ...existing, [plan.documentLocale]: value } } as Partial<PlanElement>);
+    }
+    setEditing(null);
+  };
+  const navigateToIssue = (issue: PlanValidationIssue) => {
+    if (!issue.elementId || !plan.layout.elements.some((element) => element.id === issue.elementId)) return;
+    const element = plan.layout.elements.find((candidate) => candidate.id === issue.elementId);
+    setSelectedElementId(issue.elementId);
+    setSelectedElementIds([issue.elementId]);
+    setSelected(element?.kind === "block" ? { sectionId: element.sectionId, itemId: element.itemId, elementId: element.id } : null);
+    setValidationOpen(false);
+    setFocusedIssueElementId(issue.elementId);
+    if (zoom < 0.8) setZoomAroundPoint(0.8);
+    window.requestAnimationFrame(() => {
+      const target = elementRefs.current.get(issue.elementId as string);
+      target?.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+      target?.focus({ preventScroll: true });
+      window.setTimeout(() => setFocusedIssueElementId(null), 1_500);
+    });
+  };
   const removeElement = (elementId: string) => {
     const element = plan.layout.elements.find((candidate) => candidate.id === elementId); if (!element) return;
+    if (element.kind === "header" || element.kind === "title_block") return;
     const sections = element.kind === "block" ? plan.sections.map((section) => ({ ...section, items: section.items.filter((item) => item.id !== element.itemId) })) : plan.sections;
     applyPlan({ ...plan, sections, layout: { ...plan.layout, elements: plan.layout.elements.filter((candidate) => candidate.id !== elementId) } }); setSelected(null); setSelectedElementId(null); setSelectedElementIds([]);
   };
@@ -248,7 +399,7 @@ export function PlanEditorPage() {
     applyPlan({
       ...plan,
       sections: plan.sections.map((section) => ({ ...section, items: section.items.filter((item) => !removedItemIds.has(item.id)) })),
-      layout: { ...plan.layout, elements: plan.layout.elements.filter((element) => !ids.has(element.id) || element.kind === "title_block") },
+      layout: { ...plan.layout, elements: plan.layout.elements.filter((element) => !ids.has(element.id) || element.kind === "header" || element.kind === "title_block") },
     });
     setSelected(null); setSelectedElementId(null); setSelectedElementIds([]);
   };
@@ -271,6 +422,20 @@ export function PlanEditorPage() {
     }
     const next = { ...plan, sections, layout: { ...plan.layout, elements: plan.layout.elements.map((candidate) => candidate.id === resolvedElement.id ? resolvedElement : candidate) } };
     setFuture([]); setPlan(next); updatePlan(next); transformSnapshot.current = null;
+  };
+  const readElementBounds = (target: Element) => {
+    const pageElement = target.closest<HTMLElement>(".wysiwyg-page");
+    const pageBounds = pageElement?.getBoundingClientRect();
+    const targetBounds = target.getBoundingClientRect();
+    if (!pageBounds || !pageElement) return null;
+    const renderedScale = pageBounds.width / pageElement.offsetWidth;
+    const scale = CSS_PIXELS_PER_LAYOUT_UNIT * renderedScale;
+    return {
+      x: (targetBounds.left - pageBounds.left) / scale,
+      y: (targetBounds.top - pageBounds.top) / scale,
+      width: targetBounds.width / scale,
+      height: targetBounds.height / scale,
+    };
   };
   const selectedElement = selectedElementId ? plan.layout.elements.find((element) => element.id === selectedElementId) : undefined;
   const selectedTarget = selectedElement ? elementRefs.current.get(selectedElement.id) ?? null : null;
@@ -299,7 +464,7 @@ export function PlanEditorPage() {
         const duplicateItem = { ...structuredClone(item), id: newId("item") };
         sections = sections.map((section) => section.id === element.sectionId ? { ...section, items: [...section.items, duplicateItem] } : section);
         duplicates.push(clampElementToPage({ ...element, id: newId("layout-block"), itemId: duplicateItem.id, x: element.x + plan.layout.gridSize * 4, y: element.y + plan.layout.gridSize * 4, zIndex: element.zIndex + 1 }, plan.layout));
-      } else if (element.kind !== "title_block") {
+      } else if (element.kind !== "title_block" && element.kind !== "header") {
         duplicates.push(clampElementToPage({ ...structuredClone(element), id: newId(`layout-${element.kind}`), x: element.x + plan.layout.gridSize * 4, y: element.y + plan.layout.gridSize * 4, zIndex: element.zIndex + 1 }, plan.layout));
       }
     });
@@ -326,13 +491,17 @@ export function PlanEditorPage() {
   };
   const latestRevision = database.revisions.find((revision) => revision.projectId === project.id);
   const handlePublish = (event: FormEvent) => { event.preventDefault(); const revision = publishPlan(plan.id, publishInput); setPublishedIndex(revision.index); setPublishOpen(false); };
+  const selectedElementLabel = selectedElement?.kind === "block" && selectedBlock && selectedData
+    ? `${selectedBlock.code} · ${selectedData.item.customTitle?.[plan.documentLocale] ?? selectedBlock.translations[plan.documentLocale].title}`
+    : selectedElement ? t(`editor.element.${selectedElement.kind}`) : "";
 
-  return <DndContext sensors={sensors} onDragEnd={handleDragEnd}><div className={`editor-page ${libraryOpen ? "" : "library-collapsed"} ${inspectorOpen ? "" : "inspector-collapsed"}`}>
+  return <DndContext sensors={sensors} onDragEnd={handleDragEnd}><div className={`editor-page ${libraryOpen ? "" : "library-collapsed"}`}>
     <header className="editor-toolbar">
       <button className="icon-button" onClick={() => setLibraryOpen((open) => !open)} aria-label={t("editor.toggleLibrary")}>{libraryOpen ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />}</button>
       <div className="editor-toolbar-title"><strong>{t("editor.plan")}</strong><span>{t("editor.blocks", { count: presentBlockIds.size })} · A0 {t("editor.landscape")}</span></div>
       <div className="editor-toolbar-group"><button className="icon-button" onClick={undo} disabled={!past.length} aria-label={`${t("editor.undo")} (⌘Z / Ctrl+Z)`}><Undo2 size={16} /></button><button className="icon-button" onClick={redo} disabled={!future.length} aria-label={`${t("editor.redo")} (⇧⌘Z / Ctrl+Y)`}><Redo2 size={16} /></button></div>
       {selectedElementIds.length > 0 && <div className="editor-toolbar-group selection-tools">
+        <span className="selected-element-label" title={selectedElementLabel}>{selectedElementIds.length === 1 ? selectedElementLabel : t("editor.selectedCount", { count: selectedElementIds.length })}</span>
         <button className="icon-button" onClick={() => alignSelected("x")} disabled={selectedElementIds.length < 2} aria-label={t("editor.alignHorizontal")}><AlignCenterHorizontal size={16} /></button>
         <button className="icon-button" onClick={() => alignSelected("y")} disabled={selectedElementIds.length < 2} aria-label={t("editor.alignVertical")}><AlignCenterVertical size={16} /></button>
         <button className="icon-button" onClick={() => distributeSelected("x")} disabled={selectedElementIds.length < 3} aria-label={t("editor.distributeHorizontal")}><AlignHorizontalDistributeCenter size={16} /></button>
@@ -341,20 +510,27 @@ export function PlanEditorPage() {
         <button className="icon-button" onClick={() => updateSelectedElements((element) => ({ ...element, zIndex: Math.max(0, element.zIndex - 1) }))} aria-label={t("editor.sendBackward")}><ArrowDown size={16} /></button>
         <button className="icon-button" onClick={() => updateSelectedElements((element) => ({ ...element, locked: !element.locked }))} aria-label={selectedElement?.locked ? t("editor.unlock") : t("editor.lock")}>{selectedElement?.locked ? <Unlock size={16} /> : <Lock size={16} />}</button>
         <button className="icon-button" onClick={duplicateSelectedElements} aria-label={t("common.duplicate")}><Copy size={16} /></button>
-        <button className="icon-button" onClick={removeSelectedElements} aria-label={t("editor.remove")}><Trash2 size={16} /></button>
+        <button className="icon-button" onClick={removeSelectedElements} disabled={selectedElementIds.every((id) => { const element = plan.layout.elements.find((candidate) => candidate.id === id); return element?.kind === "header" || element?.kind === "title_block"; })} aria-label={t("editor.remove")}><Trash2 size={16} /></button>
+        {selectedElementIds.length === 1 && selectedElement && <div className="toolbar-popover-wrap" data-toolbar-popover>
+          <button ref={propertiesTriggerRef} className={`icon-button ${propertiesOpen ? "is-active" : ""}`} onClick={() => { setPropertiesOpen((open) => !open); setValidationOpen(false); }} aria-expanded={propertiesOpen} aria-label={t("editor.elementOptions")}><SlidersHorizontal size={16} /></button>
+          {propertiesOpen && <div className="toolbar-popover element-properties-popover" role="dialog" aria-label={t("editor.elementOptions")}><ElementInspector element={selectedElement} plan={plan} project={project} block={selectedBlock} selectedData={selectedData} onUpdateElement={(patch) => updateElement(selectedElement.id, patch)} onUpdateSection={updateSection} onUpdateItem={updateSelectedItem} onRemove={() => removeElement(selectedElement.id)} t={t} /></div>}
+        </div>}
       </div>}
-      <div className="editor-toolbar-group"><Button variant="ghost" size="small" onClick={() => setZoom(0.55)}>{t("editor.fit")}</Button><Button variant="ghost" size="small" onClick={() => setZoom(1)}>100%</Button><button className="icon-button" onClick={() => setZoom((current) => Math.max(MIN_ZOOM, current - ZOOM_STEP))} aria-label={t("editor.zoomOut")}><ZoomOut size={17} /></button><Badge>{Math.round(zoom * 100)}%</Badge><button className="icon-button" onClick={() => setZoom((current) => Math.min(MAX_ZOOM, current + ZOOM_STEP))} aria-label={t("editor.zoomIn")}><ZoomIn size={17} /></button></div>
-      <span className="save-indicator"><CheckCircle2 size={13} />{publishedIndex ? t("publish.success", { index: publishedIndex }) : t("editor.saveStatus")}</span>
+      <div className="editor-toolbar-group"><Button className="fit-plan-action" variant="ghost" size="small" onClick={fitPlan} title={`${t("editor.fitPlan")} · ⇧1`} aria-label={t("editor.fitPlan")}><Maximize2 size={15} /><span className="toolbar-action-label">{t("editor.fitPlan")}</span></Button><button className="icon-button" onClick={() => setZoomAroundPoint(stepCanvasZoom(zoom, "out"))} disabled={zoom <= MIN_CANVAS_ZOOM} aria-label={t("editor.zoomOut")}><ZoomOut size={17} /></button><Badge>{Math.round(zoom * 100)}%</Badge><button className="icon-button" onClick={() => setZoomAroundPoint(stepCanvasZoom(zoom, "in"))} disabled={zoom >= MAX_CANVAS_ZOOM} aria-label={t("editor.zoomIn")}><ZoomIn size={17} /></button></div>
+      <div className="toolbar-popover-wrap" data-toolbar-popover>
+        <button ref={validationTriggerRef} className="button button-secondary button-small" onClick={() => { setValidationOpen((open) => !open); setPropertiesOpen(false); }} aria-expanded={validationOpen} aria-label={t("editor.validation")}><TriangleAlert size={14} /><span className="toolbar-action-label">{t("editor.validation")}</span><Badge tone={blockingValidationIssues.length ? "danger" : warningValidationIssues.length ? "warning" : "success"}>{validationIssues.filter((issue) => issue.severity !== "information").length}</Badge></button>
+        {validationOpen && <ValidationPopover issues={validationIssues} onNavigate={navigateToIssue} t={t} />}
+      </div>
+      <span className={`save-indicator ${publishedIndex ? "is-published" : ""}`}><CheckCircle2 size={13} />{publishedIndex ? t("publish.success", { index: publishedIndex }) : t("editor.saveStatus")}</span>
       <Button variant="secondary" size="small" onClick={() => void import("../export/exports").then(({ exportPlanPdf }) => exportPlanPdf(project, plan, database.blocks, database.categories, latestRevision))}>A0 PDF</Button>
-      <Link to={`/projects/${project.id}/documents`}><Button variant="secondary" size="small"><FileOutput size={14} />{t("editor.wordDocuments")}</Button></Link>
-      <Button size="small" onClick={() => { setPublishInput((current) => ({ ...current, approvedBy: project.participants.find((participant) => participant.role === "coordinator")?.name ?? "" })); setPublishOpen(true); }} disabled={blockingValidationIssues.length > 0}><ShieldCheck size={14} />{t("editor.publish")}</Button>
-      <button className="icon-button" onClick={() => setInspectorOpen((open) => !open)} aria-label={t("editor.toggleInspector")}>{inspectorOpen ? <ChevronRight size={17} /> : <ChevronLeft size={17} />}</button>
+      <Link to={`/projects/${project.id}/documents`}><Button variant="secondary" size="small" aria-label={t("editor.wordDocuments")}><FileOutput size={14} /><span className="toolbar-action-label">{t("editor.wordDocuments")}</span></Button></Link>
+      <Button size="small" aria-label={t("editor.publish")} onClick={() => { setPublishInput((current) => ({ ...current, approvedBy: project.participants.find((participant) => participant.role === "coordinator")?.name ?? "" })); setPublishOpen(true); }} disabled={blockingValidationIssues.length > 0}><ShieldCheck size={14} /><span className="toolbar-action-label">{t("editor.publish")}</span></Button>
     </header>
     <div className="editor-workspace">
       {libraryOpen && <aside className="editor-sidebar"><div className="editor-pane-header"><h2>{t("editor.catalog")}</h2><div className="search-shell"><Search size={15} /><input className="search-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("editor.searchBlocks")} aria-label={t("editor.searchBlocks")} /></div></div><div className="editor-library"><CategoryLibrary categories={database.categories.filter((category) => category.lifecycle === "active")} blocks={activeBlocks} expanded={expandedCategories} locale={plan.documentLocale} usageCounts={blockUsageCounts} onToggle={(id) => setExpandedCategories((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; })} onAdd={(id) => addBlock(id)} t={t} /><LibraryGroup title={t("editor.projectFiles")} defaultOpen>{project.assets.map((asset) => <DraggableLibraryItem key={asset.id} id={`asset:${asset.id}`} title={asset.filename} subtitle={asset.mimeType === "application/pdf" ? t("editor.pdfPageOne") : t("editor.imageFile")} icon={asset.mimeType === "application/pdf" ? <FileOutput size={16} /> : <Image size={16} />} onAdd={() => addAsset(asset.id)} addLabel={t("common.add")} />)}</LibraryGroup><LibraryGroup title={t("editor.documentElements")}>{documentTypes.map((type) => <DraggableLibraryItem key={type} id={`document:${type}`} title={t(`documents.${type}`)} subtitle={t("editor.placeDocument")} icon={<FileOutput size={16} />} onAdd={() => addDocument(type)} addLabel={t("common.add")} />)}</LibraryGroup><LibraryGroup title={t("editor.annotations")}><DraggableLibraryItem id="text:note" title={t("editor.textNote")} subtitle={t("editor.placeText")} icon={<Type size={16} />} onAdd={() => addText()} addLabel={t("common.add")} /></LibraryGroup></div></aside>}
-      <main className="editor-canvas-shell">
+      <main ref={canvasShellRef} className="editor-canvas-shell">
         <div className="canvas-stage" style={{ width: A0_LANDSCAPE_WIDTH * CSS_PIXELS_PER_LAYOUT_UNIT * zoom, height: A0_LANDSCAPE_HEIGHT * CSS_PIXELS_PER_LAYOUT_UNIT * zoom }}>
-          <PlanCanvas ref={canvasRef} plan={plan} project={project} zoom={zoom} blockMap={blockMap} categoryMap={categoryMap} selectedIds={selectedElementIds} setElementRef={(id, element) => { if (element) elementRefs.current.set(id, element); else elementRefs.current.delete(id); }} onSelect={(element) => { setSelectedElementId(element.id); setSelectedElementIds([element.id]); if (element.kind === "block") setSelected({ sectionId: element.sectionId, itemId: element.itemId, elementId: element.id }); else setSelected(null); }} t={t} />
+          <PlanCanvas ref={canvasRef} plan={plan} project={project} zoom={zoom} blockMap={blockMap} categoryMap={categoryMap} selectedIds={selectedElementIds} editing={editing} focusedIssueElementId={focusedIssueElementId} setElementRef={(id, element) => { if (element) elementRefs.current.set(id, element); else elementRefs.current.delete(id); }} onSelect={(element) => { setSelectedElementId(element.id); setSelectedElementIds([element.id]); if (element.kind === "block") setSelected({ sectionId: element.sectionId, itemId: element.itemId, elementId: element.id }); else setSelected(null); }} onEditStart={(elementId, field) => setEditing({ elementId, field })} onEditCommit={commitInlineEdit} onEditCancel={() => setEditing(null)} t={t} />
         </div>
         <Selecto
           dragContainer=".editor-canvas-shell"
@@ -364,25 +540,52 @@ export function PlanEditorPage() {
           toggleContinueSelect={["shift"]}
           hitRate={10}
           onSelectEnd={(event) => {
-            const ids = event.selected.map((element) => (element as HTMLElement).dataset.elementId).filter((id): id is string => Boolean(id));
+            const inputEvent = event.inputEvent as MouseEvent | PointerEvent | undefined;
+            const inlineTarget = inputEvent
+              ? document.elementsFromPoint(inputEvent.clientX, inputEvent.clientY)
+                .map((candidate) => candidate.closest<HTMLElement>("[data-inline-field]"))
+                .find((candidate): candidate is HTMLElement => Boolean(candidate))
+              : undefined;
+            const inlineField = inlineTarget?.dataset.inlineField as InlineField | undefined;
+            const clickedElementId = inlineTarget?.closest<HTMLElement>(".canvas-element[data-element-id]")?.dataset.elementId;
+            const selectedIds = event.selected.map((element) => (element as HTMLElement).dataset.elementId).filter((id): id is string => Boolean(id));
+            const currentInlineClick = typeof clickedElementId === "string" && typeof inlineField === "string" ? { elementId: clickedElementId, field: inlineField } : null;
+            const previousInlineClick = lastInlineClick.current;
+            const matchingDoubleClick = event.isDouble && (inputEvent?.detail ?? 0) >= 2 && previousInlineClick && (!currentInlineClick || (currentInlineClick.elementId === previousInlineClick.elementId && currentInlineClick.field === previousInlineClick.field));
+            if (currentInlineClick) lastInlineClick.current = currentInlineClick;
+            const inlineSelection = matchingDoubleClick ? previousInlineClick : null;
+            const ids = inlineSelection ? [inlineSelection.elementId] : selectedIds;
             setSelectedElementIds(ids); setSelectedElementId(ids.at(-1) ?? null);
             const primary = plan.layout.elements.find((element) => element.id === ids.at(-1));
             if (primary?.kind === "block") setSelected({ sectionId: primary.sectionId, itemId: primary.itemId, elementId: primary.id }); else setSelected(null);
+            if (event.isDouble && primary && inlineSelection) {
+              setEditing({ elementId: primary.id, field: inlineSelection.field });
+            }
           }}
         />
-        {selectedElement && selectedTarget && !selectedElement.locked && selectedTargets.length === 1 && <Moveable
+        {selectedElement && selectedTarget && !selectedElement.locked && selectedTargets.length === 1 && !editing && <Moveable
+          key={`single-${selectedElement.id}-${moveableRevision}`}
+          ref={moveableRef as React.Ref<never>}
           target={selectedTarget}
+          flushSync={flushSync}
+          useResizeObserver
+          useMutationObserver
           draggable resizable throttleDrag={1} throttleResize={1} origin={false} keepRatio={false}
           snappable snapGridWidth={2} snapGridHeight={2} verticalGuidelines={[0, A0_LANDSCAPE_WIDTH * CSS_PIXELS_PER_LAYOUT_UNIT / 2, A0_LANDSCAPE_WIDTH * CSS_PIXELS_PER_LAYOUT_UNIT]} horizontalGuidelines={[0, A0_LANDSCAPE_HEIGHT * CSS_PIXELS_PER_LAYOUT_UNIT / 2, A0_LANDSCAPE_HEIGHT * CSS_PIXELS_PER_LAYOUT_UNIT]}
           onDragStart={() => { transformSnapshot.current = structuredClone(plan); }}
-          onDrag={({ target, beforeTranslate }) => { target.style.transform = `translate(${beforeTranslate[0]}px, ${beforeTranslate[1]}px)`; }}
-          onDragEnd={({ target, lastEvent }) => { if (!lastEvent) return; target.style.transform = ""; finishTransform(clampElementToPage({ ...selectedElement, x: selectedElement.x + lastEvent.beforeTranslate[0] / CSS_PIXELS_PER_LAYOUT_UNIT, y: selectedElement.y + lastEvent.beforeTranslate[1] / CSS_PIXELS_PER_LAYOUT_UNIT }, plan.layout)); }}
+          onDrag={({ target, transform }) => { target.style.transform = transform; }}
+          onDragEnd={({ target }) => { const bounds = readElementBounds(target); target.style.transform = ""; if (!bounds) return; flushSync(() => finishTransform(clampElementToPage({ ...selectedElement, x: bounds.x, y: bounds.y }, plan.layout))); setMoveableRevision((revision) => revision + 1); }}
           onResizeStart={() => { transformSnapshot.current = structuredClone(plan); }}
           onResize={({ target, width, height, drag }) => { target.style.width = `${width}px`; target.style.height = `${height}px`; target.style.transform = drag.transform; }}
-          onResizeEnd={({ target, lastEvent }) => { if (!lastEvent) return; target.style.transform = ""; finishTransform(clampElementToPage({ ...selectedElement, x: selectedElement.x + lastEvent.drag.beforeTranslate[0] / CSS_PIXELS_PER_LAYOUT_UNIT, y: selectedElement.y + lastEvent.drag.beforeTranslate[1] / CSS_PIXELS_PER_LAYOUT_UNIT, width: Math.max(600, lastEvent.width / CSS_PIXELS_PER_LAYOUT_UNIT), height: Math.max(240, lastEvent.height / CSS_PIXELS_PER_LAYOUT_UNIT) }, plan.layout)); }}
+          onResizeEnd={({ target, lastEvent }) => { if (!lastEvent) return; const bounds = readElementBounds(target); target.style.transform = ""; target.style.width = ""; target.style.height = ""; if (!bounds) return; flushSync(() => finishTransform(clampElementToPage({ ...selectedElement, x: bounds.x, y: bounds.y, width: Math.max(600, bounds.width), height: Math.max(240, bounds.height) }, plan.layout))); setMoveableRevision((revision) => revision + 1); }}
         />}
-        {unlockedSelectedTargets.length > 1 && <Moveable
+        {unlockedSelectedTargets.length > 1 && !editing && <Moveable
+          key={`group-${selectedElementIds.join("-")}-${moveableRevision}`}
+          ref={moveableRef as React.Ref<never>}
           target={unlockedSelectedTargets}
+          flushSync={flushSync}
+          useResizeObserver
+          useMutationObserver
           draggable resizable origin={false} keepRatio={false} snappable snapGridWidth={2} snapGridHeight={2}
           onDragGroupStart={() => { groupTransform.current.clear(); }}
           onDragGroup={({ events }) => events.forEach((item) => {
@@ -390,11 +593,11 @@ export function PlanEditorPage() {
             const id = (item.target as HTMLElement).dataset.elementId; if (id) groupTransform.current.set(id, { dx: item.beforeTranslate[0], dy: item.beforeTranslate[1] });
           })}
           onDragGroupEnd={({ targets }) => {
-            targets.forEach((target) => { (target as HTMLElement).style.transform = ""; });
-            const changes = new Map(groupTransform.current); groupTransform.current.clear();
-            applyPlan({ ...plan, layout: { ...plan.layout, elements: plan.layout.elements.map((element) => {
-              const change = changes.get(element.id); return change ? clampElementToPage({ ...element, x: element.x + change.dx / CSS_PIXELS_PER_LAYOUT_UNIT, y: element.y + change.dy / CSS_PIXELS_PER_LAYOUT_UNIT }, plan.layout) : element;
-            }) } });
+            const boundsById = new Map(targets.flatMap((target) => { const htmlTarget = target as HTMLElement; const id = htmlTarget.dataset.elementId; const bounds = readElementBounds(htmlTarget); return id && bounds ? [[id, bounds] as const] : []; }));
+            targets.forEach((target) => { (target as HTMLElement).style.transform = ""; }); groupTransform.current.clear();
+            flushSync(() => applyPlan({ ...plan, layout: { ...plan.layout, elements: plan.layout.elements.map((element) => {
+              const bounds = boundsById.get(element.id); return bounds ? clampElementToPage({ ...element, x: bounds.x, y: bounds.y }, plan.layout) : element;
+            }) } })); setMoveableRevision((revision) => revision + 1);
           }}
           onResizeGroupStart={() => { groupTransform.current.clear(); }}
           onResizeGroup={({ events }) => events.forEach((item) => {
@@ -402,17 +605,17 @@ export function PlanEditorPage() {
             const id = (item.target as HTMLElement).dataset.elementId; if (id) groupTransform.current.set(id, { dx: item.drag.beforeTranslate[0], dy: item.drag.beforeTranslate[1], width: item.width, height: item.height });
           })}
           onResizeGroupEnd={({ targets }) => {
+            const boundsById = new Map(targets.flatMap((target) => { const htmlTarget = target as HTMLElement; const id = htmlTarget.dataset.elementId; const bounds = readElementBounds(htmlTarget); return id && bounds ? [[id, bounds] as const] : []; }));
             targets.forEach((target) => { const htmlTarget = target as HTMLElement; htmlTarget.style.transform = ""; htmlTarget.style.width = ""; htmlTarget.style.height = ""; });
-            const changes = new Map(groupTransform.current); groupTransform.current.clear();
-            applyPlan({ ...plan, layout: { ...plan.layout, elements: plan.layout.elements.map((element) => {
-              const change = changes.get(element.id); return change ? clampElementToPage({ ...element, x: element.x + change.dx / CSS_PIXELS_PER_LAYOUT_UNIT, y: element.y + change.dy / CSS_PIXELS_PER_LAYOUT_UNIT, width: Math.max(600, (change.width ?? element.width * CSS_PIXELS_PER_LAYOUT_UNIT) / CSS_PIXELS_PER_LAYOUT_UNIT), height: Math.max(240, (change.height ?? element.height * CSS_PIXELS_PER_LAYOUT_UNIT) / CSS_PIXELS_PER_LAYOUT_UNIT) }, plan.layout) : element;
-            }) } });
+            groupTransform.current.clear();
+            flushSync(() => applyPlan({ ...plan, layout: { ...plan.layout, elements: plan.layout.elements.map((element) => {
+              const bounds = boundsById.get(element.id); return bounds ? clampElementToPage({ ...element, x: bounds.x, y: bounds.y, width: Math.max(600, bounds.width), height: Math.max(240, bounds.height) }, plan.layout) : element;
+            }) } })); setMoveableRevision((revision) => revision + 1);
           }}
         />}
       </main>
-      {inspectorOpen && <aside className="editor-inspector"><div className="editor-pane-header"><div className="inspector-tabs"><button className={inspectorTab === "properties" ? "is-active" : ""} onClick={() => setInspectorTab("properties")}>{t("editor.inspector")}</button><button className={inspectorTab === "validation" ? "is-active" : ""} onClick={() => setInspectorTab("validation")}>{t("editor.validation")} {validationIssues.length > 0 && <Badge tone="warning">{validationIssues.length}</Badge>}</button></div></div>{inspectorTab === "properties" ? <div className="inspector-body">{selectedElement ? <ElementInspector element={selectedElement} plan={plan} project={project} block={selectedBlock} selectedData={selectedData} onUpdateElement={(patch) => updateElement(selectedElement.id, patch)} onUpdateSection={updateSection} onUpdateItem={updateSelectedItem} onRemove={() => removeElement(selectedElement.id)} t={t} /> : <EmptyState icon={<ChevronDown />} title={t("editor.noSelection")} text={t("editor.dragHint")} />}</div> : <div className="inspector-body"><div className="validation-list">{validationIssues.length === 0 && <div className="validation-item is-ready"><span className="validation-icon"><CheckCircle2 size={15} /></span><span><strong>{t("editor.validationReady")}</strong></span></div>}{blockingValidationIssues.map((issue) => <div className="validation-item is-error" key={`error-${issue}`}><span className="validation-icon"><TriangleAlert size={15} /></span><span><small>{t("editor.validationError")}</small><strong>{issue}</strong></span></div>)}{warningValidationIssues.map((issue) => <div className="validation-item" key={`warning-${issue}`}><span className="validation-icon"><TriangleAlert size={15} /></span><span><small>{t("editor.validationWarning")}</small><strong>{issue}</strong></span></div>)}{informationValidationIssues.map((issue) => <div className="validation-item is-info" key={`info-${issue}`}><span className="validation-icon"><CheckCircle2 size={15} /></span><span><small>{t("editor.validationInformation")}</small><strong>{issue}</strong></span></div>)}</div></div>}</aside>}
     </div>
-    <Modal open={publishOpen} title={t("publish.title")} onClose={() => setPublishOpen(false)}><form onSubmit={handlePublish}><div className="modal-body"><p className="page-description">{t("publish.subtitle")}</p>{warningValidationIssues.length > 0 && <div className="publish-warning-list">{warningValidationIssues.map((issue) => <p key={issue}><TriangleAlert size={14} />{issue}</p>)}</div>}<div className="form-grid"><label className="field"><span>{t("publish.index")}</span><input required value={publishInput.index} onChange={(event) => setPublishInput((current) => ({ ...current, index: event.target.value }))} /></label><label className="field"><span>{t("publish.approver")}</span><input required value={publishInput.approvedBy} onChange={(event) => setPublishInput((current) => ({ ...current, approvedBy: event.target.value }))} /></label><label className="field span-two"><span>{t("publish.summary")}</span><textarea required value={publishInput.changeSummary} onChange={(event) => setPublishInput((current) => ({ ...current, changeSummary: event.target.value }))} /></label></div></div><div className="modal-footer"><Button type="button" variant="secondary" onClick={() => setPublishOpen(false)}>{t("common.cancel")}</Button><Button type="submit">{t("publish.confirm")}</Button></div></form></Modal>
+    <Modal open={publishOpen} title={t("publish.title")} onClose={() => setPublishOpen(false)}><form onSubmit={handlePublish}><div className="modal-body"><p className="page-description">{t("publish.subtitle")}</p>{warningValidationIssues.length > 0 && <div className="publish-warning-list">{warningValidationIssues.map((issue) => <p key={issue.id}><TriangleAlert size={14} /><span><strong>{issue.title}</strong>{issue.description}</span></p>)}</div>}<div className="form-grid"><label className="field"><span>{t("publish.index")}</span><input required value={publishInput.index} onChange={(event) => setPublishInput((current) => ({ ...current, index: event.target.value }))} /></label><label className="field"><span>{t("publish.approver")}</span><input required value={publishInput.approvedBy} onChange={(event) => setPublishInput((current) => ({ ...current, approvedBy: event.target.value }))} /></label><label className="field span-two"><span>{t("publish.summary")}</span><textarea required value={publishInput.changeSummary} onChange={(event) => setPublishInput((current) => ({ ...current, changeSummary: event.target.value }))} /></label></div></div><div className="modal-footer"><Button type="button" variant="secondary" onClick={() => setPublishOpen(false)}>{t("common.cancel")}</Button><Button type="submit">{t("publish.confirm")}</Button></div></form></Modal>
   </div></DndContext>;
 }
 
@@ -445,13 +648,15 @@ function ElementInspector({ element, plan, project, block, selectedData, onUpdat
     </>}
     {element.kind === "section" && section && <div className="inspector-section"><label>{t("editor.sectionTitle")}</label><input aria-label={t("editor.sectionTitle")} value={section.titleOverrides?.[plan.documentLocale] ?? ""} placeholder={t("editor.defaultCategoryTitle")} onChange={(event) => onUpdateSection(section.id, { titleOverrides: { ...section.titleOverrides, [plan.documentLocale]: event.target.value } })} /></div>}
     {element.kind === "text" && <div className="inspector-section"><label>{t("editor.textContent")}</label><textarea aria-label={t("editor.textContent")} value={element.text[plan.documentLocale] ?? ""} onChange={(event) => onUpdateElement({ text: { ...element.text, [plan.documentLocale]: event.target.value } })} /></div>}
+    {element.kind === "header" && <><p className="field-help">{t("editor.inlineEditHint")}</p><div className="inspector-section"><label>{t("editor.headerTitle")}</label><input aria-label={t("editor.headerTitle")} value={element.titleText?.[plan.documentLocale] ?? plan.title} onChange={(event) => onUpdateElement({ titleText: { ...element.titleText, [plan.documentLocale]: event.target.value } })} /></div><Button variant="secondary" size="small" onClick={() => onUpdateElement({ brandText: undefined, titleText: undefined, projectNameText: undefined, projectDetailsText: undefined, statusText: undefined })}>{t("editor.restoreAutomaticContent")}</Button></>}
+    {element.kind === "title_block" && <><p className="field-help">{t("editor.inlineEditHint")}</p><Button variant="secondary" size="small" onClick={() => onUpdateElement({ projectNameText: undefined, coordinatorText: undefined, referenceText: undefined })}>{t("editor.restoreAutomaticContent")}</Button></>}
     {(element.kind === "image" || element.kind === "pdf_page") && <>
       <div className="inspector-section"><label>{t("editor.imageFit")}</label><select aria-label={t("editor.imageFit")} value={element.fitMode ?? "contain"} onChange={(event) => onUpdateElement({ fitMode: event.target.value as "contain" | "cover" })}><option value="contain">{t("editor.contain")}</option><option value="cover">{t("editor.cover")}</option></select></div>
       {element.fitMode === "cover" && <><div className="inspector-section"><label>{t("editor.cropHorizontal")}</label><input aria-label={t("editor.cropHorizontal")} type="range" min="0" max="100" value={element.crop?.x ?? 50} onChange={(event) => onUpdateElement({ crop: { x: Number(event.target.value), y: element.crop?.y ?? 50, width: 100, height: 100 } })} /></div><div className="inspector-section"><label>{t("editor.cropVertical")}</label><input aria-label={t("editor.cropVertical")} type="range" min="0" max="100" value={element.crop?.y ?? 50} onChange={(event) => onUpdateElement({ crop: { x: element.crop?.x ?? 50, y: Number(event.target.value), width: 100, height: 100 } })} /></div></>}
       {element.kind === "pdf_page" && <div className="inspector-section"><label>{t("editor.pageNumber")}</label><input aria-label={t("editor.pageNumber")} type="number" min="1" max={asset?.pageCount ?? 1} value={element.pageNumber ?? 1} onChange={(event) => onUpdateElement({ pageNumber: Math.max(1, Math.min(asset?.pageCount ?? 1, Number(event.target.value))) })} /><small>{t("editor.pageCount", { count: asset?.pageCount ?? 1 })}</small></div>}
     </>}
     {element.kind === "document" && <div className="inspector-section"><label>{t("editor.displayVariant")}</label><select aria-label={t("editor.displayVariant")} value={element.displayVariant ?? "compact"} onChange={(event) => onUpdateElement({ displayVariant: event.target.value as typeof element.displayVariant })}><option value="compact">{t("editor.variantCompact")}</option><option value="emergency_card">{t("editor.variantEmergency")}</option><option value="participant_list">{t("editor.variantParticipants")}</option><option value="qr_link">{t("editor.variantQr")}</option></select></div>}
-    <div className="inspector-actions"><Button variant="secondary" size="small" onClick={() => onUpdateElement({ locked: !element.locked })}>{element.locked ? <Unlock size={14} /> : <Lock size={14} />}{element.locked ? t("editor.unlock") : t("editor.lock")}</Button>{element.kind !== "title_block" && <Button variant="danger" size="small" onClick={onRemove}><Trash2 size={14} />{t("editor.remove")}</Button>}</div>
+    <div className="inspector-actions"><Button variant="secondary" size="small" onClick={() => onUpdateElement({ locked: !element.locked })}>{element.locked ? <Unlock size={14} /> : <Lock size={14} />}{element.locked ? t("editor.unlock") : t("editor.lock")}</Button>{element.kind !== "title_block" && element.kind !== "header" && <Button variant="danger" size="small" onClick={onRemove}><Trash2 size={14} />{t("editor.remove")}</Button>}</div>
   </>;
 }
 
@@ -467,22 +672,144 @@ function CategoryLibrary({ categories, blocks, expanded, locale, usageCounts, on
 
 function LibraryGroup({ title, children, defaultOpen = false }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) { const [open, setOpen] = useState(defaultOpen); return <div className="library-group"><button className="library-category-header" onClick={() => setOpen((value) => !value)}>{open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<strong>{title}</strong></button>{open && <div className="library-category-blocks">{children}</div>}</div>; }
 
-function DraggableLibraryItem({ id, title, subtitle, icon, onAdd, addLabel }: { id: string; title: string; subtitle: string; icon: React.ReactNode; added?: boolean; onAdd: () => void; addLabel: string }) { const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id }); return <article ref={setNodeRef} {...attributes} {...listeners} className={`editor-catalog-card ${isDragging ? "is-dragging" : ""}`} style={{ transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined }}><span className="library-drag-icon">{icon}</span><div><strong>{title}</strong><span>{subtitle}</span></div><button className="icon-button" aria-label={`${addLabel}: ${title}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onAdd(); }}><Plus size={15} /></button></article>; }
+function DraggableLibraryItem({ id, title, subtitle, icon, onAdd, addLabel }: { id: string; title: string; subtitle: string; icon: React.ReactNode; added?: boolean; onAdd: () => void; addLabel: string }) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id });
+  return <article ref={setNodeRef} className={`editor-catalog-card ${isDragging ? "is-dragging" : ""}`} style={{ transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined }}>
+    <button type="button" className="library-drag-handle" {...attributes} {...listeners}>
+      <span className="library-drag-icon">{icon}</span>
+      <span className="library-drag-copy"><strong>{title}</strong><span>{subtitle}</span></span>
+    </button>
+    <button type="button" className="icon-button" aria-label={`${addLabel}: ${title}`} onClick={onAdd}><Plus size={15} /></button>
+  </article>;
+}
 
-const PlanCanvas = function PlanCanvas({ ref, plan, project, zoom, blockMap, categoryMap, selectedIds, setElementRef, onSelect, t }: { ref: React.Ref<HTMLDivElement>; plan: Plan; project: NonNullable<ReturnType<typeof useApp>["database"]["projects"][number]>; zoom: number; blockMap: Map<string, ReturnType<typeof useApp>["database"]["blocks"][number]>; categoryMap: Map<string, BuildingBlockCategory>; selectedIds: string[]; setElementRef: (id: string, element: HTMLElement | null) => void; onSelect: (element: PlanElement) => void; t: (key: string) => string }) { const { setNodeRef } = useDroppable({ id: "plan-canvas" }); const combinedRef = (node: HTMLDivElement | null) => { setNodeRef(node); if (typeof ref === "function") ref(node); else if (ref) ref.current = node; }; return <div ref={combinedRef} className="wysiwyg-page" style={{ transform: `scale(${zoom})` }}><header className="plan-header"><div><span className="plan-header-brand">QUICKSiGe</span><h2>{plan.title}</h2></div><div className="plan-header-meta"><strong>{project.name}</strong><span>{project.projectNumber} · {project.address}, {project.city}</span><span>{plan.status === "published" ? t("status.published") : translate(plan.documentLocale, "editor.workingDraft")}</span></div></header>{plan.layout.elements.filter((element) => !element.hidden).map((element) => <PlanElementView key={element.id} element={element} plan={plan} project={project} blockMap={blockMap} categoryMap={categoryMap} selected={selectedIds.includes(element.id)} setRef={(node) => setElementRef(element.id, node)} onSelect={() => onSelect(element)} t={t} />)}</div>; };
+const PlanCanvas = function PlanCanvas({ ref, plan, project, zoom, blockMap, categoryMap, selectedIds, editing, focusedIssueElementId, setElementRef, onSelect, onEditStart, onEditCommit, onEditCancel, t }: {
+  ref: React.Ref<HTMLDivElement>;
+  plan: Plan;
+  project: NonNullable<ReturnType<typeof useApp>["database"]["projects"][number]>;
+  zoom: number;
+  blockMap: Map<string, ReturnType<typeof useApp>["database"]["blocks"][number]>;
+  categoryMap: Map<string, BuildingBlockCategory>;
+  selectedIds: string[];
+  editing: InlineEditingState | null;
+  focusedIssueElementId: string | null;
+  setElementRef: (id: string, element: HTMLElement | null) => void;
+  onSelect: (element: PlanElement) => void;
+  onEditStart: (elementId: string, field: InlineField) => void;
+  onEditCommit: (elementId: string, field: InlineField, value: string) => void;
+  onEditCancel: () => void;
+  t: (key: string) => string;
+}) {
+  const { setNodeRef } = useDroppable({ id: "plan-canvas" });
+  const combinedRef = (node: HTMLDivElement | null) => {
+    setNodeRef(node);
+    if (typeof ref === "function") ref(node); else if (ref) ref.current = node;
+  };
+  return <div ref={combinedRef} className="wysiwyg-page" style={{ transform: `scale(${zoom})` }} onPointerDown={(event) => { if (event.target === event.currentTarget) onEditCancel(); }}>
+    {plan.layout.elements.filter((element) => !element.hidden).map((element) => <PlanElementView
+      key={element.id}
+      element={element}
+      plan={plan}
+      project={project}
+      blockMap={blockMap}
+      categoryMap={categoryMap}
+      selected={selectedIds.includes(element.id)}
+      editing={editing}
+      focused={focusedIssueElementId === element.id}
+      setRef={(node) => setElementRef(element.id, node)}
+      onSelect={() => onSelect(element)}
+      onEditStart={(field) => { onSelect(element); onEditStart(element.id, field); }}
+      onEditCommit={(field, value) => onEditCommit(element.id, field, value)}
+      onEditCancel={onEditCancel}
+      t={t}
+    />)}
+  </div>;
+};
 
-function PlanElementView({ element, plan, project, blockMap, categoryMap, selected, setRef, onSelect, t }: { element: PlanElement; plan: Plan; project: ReturnType<typeof useApp>["database"]["projects"][number]; blockMap: Map<string, ReturnType<typeof useApp>["database"]["blocks"][number]>; categoryMap: Map<string, BuildingBlockCategory>; selected: boolean; setRef: (node: HTMLElement | null) => void; onSelect: () => void; t: (key: string) => string }) {
+function PlanElementView({ element, plan, project, blockMap, categoryMap, selected, editing, focused, setRef, onSelect, onEditStart, onEditCommit, onEditCancel, t }: {
+  element: PlanElement;
+  plan: Plan;
+  project: ReturnType<typeof useApp>["database"]["projects"][number];
+  blockMap: Map<string, ReturnType<typeof useApp>["database"]["blocks"][number]>;
+  categoryMap: Map<string, BuildingBlockCategory>;
+  selected: boolean;
+  editing: InlineEditingState | null;
+  focused: boolean;
+  setRef: (node: HTMLElement | null) => void;
+  onSelect: () => void;
+  onEditStart: (field: InlineField) => void;
+  onEditCommit: (field: InlineField, value: string) => void;
+  onEditCancel: () => void;
+  t: (key: string) => string;
+}) {
   const style: React.CSSProperties = { left: element.x * CSS_PIXELS_PER_LAYOUT_UNIT, top: element.y * CSS_PIXELS_PER_LAYOUT_UNIT, width: element.width * CSS_PIXELS_PER_LAYOUT_UNIT, height: element.height * CSS_PIXELS_PER_LAYOUT_UNIT, zIndex: element.zIndex };
-  if (element.kind === "section") { const section = plan.sections.find((candidate) => candidate.id === element.sectionId); const category = section && categoryMap.get(section.categoryId); if (!section || !category) return null; return <section ref={setRef} data-element-id={element.id} className={`canvas-element canvas-section ${selected ? "is-selected" : ""}`} style={style} onClick={(event) => { event.stopPropagation(); onSelect(); }}><div style={{ backgroundColor: category.color }}>{section.titleOverrides?.[plan.documentLocale] ?? category.translations[plan.documentLocale].name}</div></section>; }
-  if (element.kind === "block") { const section = plan.sections.find((candidate) => candidate.id === element.sectionId); const item = section?.items.find((candidate) => candidate.id === element.itemId); const block = item && blockMap.get(item.blockId); if (!item || !block) return null; const content = block.translations[plan.documentLocale]; const imageDataUrl = item.imageDataUrl ?? block.imageDataUrl; return <button ref={setRef as React.Ref<HTMLButtonElement>} data-element-id={element.id} aria-pressed={selected} className={`canvas-element canvas-block ${selected ? "is-selected" : ""}`} style={style} onClick={(event) => { event.stopPropagation(); onSelect(); }}><span className="canvas-block-title" style={{ backgroundColor: block.color }}>{item.customTitle?.[plan.documentLocale] ?? content.title}</span><span className="canvas-block-content">{imageDataUrl ? <img className="canvas-block-image" src={imageDataUrl} alt="" /> : <BlockVisual visualKey={block.visualKey} color={block.color} size="small" />}<span>{item.customShortDescription?.[plan.documentLocale] ?? content.shortDescription}</span></span><span className="canvas-block-references">{block.regulations.join(" · ")}</span></button>; }
-  if (element.kind === "image" || element.kind === "pdf_page") { const asset = project.assets.find((candidate) => candidate.id === element.assetId); if (!asset) return null; return <div ref={setRef} data-element-id={element.id} className={`canvas-element canvas-asset ${selected ? "is-selected" : ""}`} style={style} onClick={(event) => { event.stopPropagation(); onSelect(); }}><CanvasAssetImage asset={asset} pdfPage={element.kind === "pdf_page"} pageNumber={element.pageNumber} fitMode={element.fitMode} crop={element.crop} t={t} /></div>; }
+  const interactiveProps = {
+    ref: setRef,
+    "data-element-id": element.id,
+    "data-locked": String(Boolean(element.locked)),
+    tabIndex: -1,
+    className: `canvas-element ${selected ? "is-selected" : ""} ${focused ? "is-validation-focus" : ""}`,
+    style,
+    onClick: (event: React.MouseEvent) => { event.stopPropagation(); onSelect(); },
+  };
+  const isEditing = (field: InlineField) => editing?.elementId === element.id && editing.field === field;
+  if (element.kind === "header") {
+    const status = plan.status === "published" ? translate(plan.documentLocale, "status.published") : translate(plan.documentLocale, "editor.workingDraft");
+    return <header {...interactiveProps} className={`${interactiveProps.className} plan-header canvas-plan-header`}>
+      <div>
+        <InlineText field="brandText" className="plan-header-brand" value={element.brandText?.[plan.documentLocale] ?? "QUICKSiGe"} editing={isEditing("brandText")} onStart={() => onEditStart("brandText")} onCommit={(value) => onEditCommit("brandText", value)} onCancel={onEditCancel} label={t("editor.headerBrand")} />
+        <InlineText field="titleText" className="plan-header-title" value={element.titleText?.[plan.documentLocale] ?? plan.title} editing={isEditing("titleText")} onStart={() => onEditStart("titleText")} onCommit={(value) => onEditCommit("titleText", value)} onCancel={onEditCancel} label={t("editor.headerTitle")} />
+      </div>
+      <div className="plan-header-meta">
+        <InlineText field="projectNameText" className="plan-header-project" value={element.projectNameText?.[plan.documentLocale] ?? project.name} editing={isEditing("projectNameText")} onStart={() => onEditStart("projectNameText")} onCommit={(value) => onEditCommit("projectNameText", value)} onCancel={onEditCancel} label={t("editor.headerProject")} />
+        <InlineText field="projectDetailsText" value={element.projectDetailsText?.[plan.documentLocale] ?? `${project.projectNumber} · ${project.address}, ${project.city}`} editing={isEditing("projectDetailsText")} onStart={() => onEditStart("projectDetailsText")} onCommit={(value) => onEditCommit("projectDetailsText", value)} onCancel={onEditCancel} label={t("editor.headerDetails")} />
+        <InlineText field="statusText" value={element.statusText?.[plan.documentLocale] ?? status} editing={isEditing("statusText")} onStart={() => onEditStart("statusText")} onCommit={(value) => onEditCommit("statusText", value)} onCancel={onEditCancel} label={t("editor.headerStatus")} />
+      </div>
+    </header>;
+  }
+  if (element.kind === "section") { const section = plan.sections.find((candidate) => candidate.id === element.sectionId); const category = section && categoryMap.get(section.categoryId); if (!section || !category) return null; const title = section.titleOverrides?.[plan.documentLocale] ?? category.translations[plan.documentLocale].name; return <section {...interactiveProps} className={`${interactiveProps.className} canvas-section`}><div style={{ backgroundColor: category.color, color: readableTextColor(category.color) }}><InlineText field="sectionTitle" value={title} editing={isEditing("sectionTitle")} onStart={() => onEditStart("sectionTitle")} onCommit={(value) => onEditCommit("sectionTitle", value)} onCancel={onEditCancel} label={t("editor.sectionTitle")} /></div></section>; }
+  if (element.kind === "block") { const section = plan.sections.find((candidate) => candidate.id === element.sectionId); const item = section?.items.find((candidate) => candidate.id === element.itemId); const block = item && blockMap.get(item.blockId); if (!item || !block) return null; const content = block.translations[plan.documentLocale]; const imageDataUrl = item.imageDataUrl ?? block.imageDataUrl; const title = item.customTitle?.[plan.documentLocale] ?? content.title; const description = item.customShortDescription?.[plan.documentLocale] ?? content.shortDescription; return <div {...interactiveProps} role="button" aria-pressed={selected} className={`${interactiveProps.className} canvas-block`}><span className="canvas-block-title" style={{ backgroundColor: block.color, color: readableTextColor(block.color) }}><InlineText field="blockTitle" value={title} editing={isEditing("blockTitle")} onStart={() => onEditStart("blockTitle")} onCommit={(value) => onEditCommit("blockTitle", value)} onCancel={onEditCancel} label={t("editor.visibleTitle")} /></span><span className="canvas-block-content">{imageDataUrl ? <img className="canvas-block-image" src={imageDataUrl} alt="" /> : <BlockVisual visualKey={block.visualKey} color={block.color} size="small" />}<InlineText field="blockDescription" value={description} editing={isEditing("blockDescription")} multiline onStart={() => onEditStart("blockDescription")} onCommit={(value) => onEditCommit("blockDescription", value)} onCancel={onEditCancel} label={t("editor.visibleDescription")} /></span><span className="canvas-block-references">{block.regulations.join(" · ")}</span></div>; }
+  if (element.kind === "image" || element.kind === "pdf_page") { const asset = project.assets.find((candidate) => candidate.id === element.assetId); if (!asset) return null; return <div {...interactiveProps} className={`${interactiveProps.className} canvas-asset`}><CanvasAssetImage asset={asset} pdfPage={element.kind === "pdf_page"} pageNumber={element.pageNumber} fitMode={element.fitMode} crop={element.crop} t={t} /></div>; }
   if (element.kind === "document") {
     const variant = element.displayVariant ?? "compact";
-    return <div ref={setRef} data-element-id={element.id} className={`canvas-element canvas-document variant-${variant} ${selected ? "is-selected" : ""}`} style={style} onClick={(event) => { event.stopPropagation(); onSelect(); }}><FileOutput size={22} /><strong>{t(`documents.${element.documentType}`)}</strong>{variant === "emergency_card" && <span>{project.emergencyContacts.slice(0, 3).map((contact) => `${contact.label}: ${contact.phone}`).join(" · ") || "—"}</span>}{variant === "participant_list" && <span>{project.participants.slice(0, 4).map((participant) => `${participant.name} · ${participant.company}`).join(" · ") || "—"}</span>}{variant === "qr_link" && <span className="qr-placeholder" aria-label={t("editor.qrPlaceholder")}>QR</span>}</div>;
+    return <div {...interactiveProps} className={`${interactiveProps.className} canvas-document variant-${variant}`}><FileOutput size={22} /><strong>{t(`documents.${element.documentType}`)}</strong>{variant === "emergency_card" && <span>{project.emergencyContacts.slice(0, 3).map((contact) => `${contact.label}: ${contact.phone}`).join(" · ") || "—"}</span>}{variant === "participant_list" && <span>{project.participants.slice(0, 4).map((participant) => `${participant.name} · ${participant.company}`).join(" · ") || "—"}</span>}{variant === "qr_link" && <span className="qr-placeholder" aria-label={t("editor.qrPlaceholder")}>QR</span>}</div>;
   }
-  if (element.kind === "title_block") return <div className="canvas-element canvas-title-block" style={style}><strong>{project.name}</strong><span>{project.participants.find((participant) => participant.role === "coordinator")?.name ?? "—"}</span><span>{project.projectNumber} · A0</span></div>;
-  if (element.kind === "text") return <div ref={setRef} data-element-id={element.id} className={`canvas-element canvas-text ${selected ? "is-selected" : ""}`} style={style} onClick={(event) => { event.stopPropagation(); onSelect(); }}>{element.text[plan.documentLocale] ?? ""}</div>;
+  if (element.kind === "title_block") { const coordinator = project.participants.find((participant) => participant.role === "coordinator")?.name ?? "—"; return <div {...interactiveProps} className={`${interactiveProps.className} canvas-title-block`}><InlineText field="projectNameText" className="title-block-project" value={element.projectNameText?.[plan.documentLocale] ?? project.name} editing={isEditing("projectNameText")} onStart={() => onEditStart("projectNameText")} onCommit={(value) => onEditCommit("projectNameText", value)} onCancel={onEditCancel} label={t("editor.titleBlockProject")} /><InlineText field="coordinatorText" value={element.coordinatorText?.[plan.documentLocale] ?? coordinator} editing={isEditing("coordinatorText")} onStart={() => onEditStart("coordinatorText")} onCommit={(value) => onEditCommit("coordinatorText", value)} onCancel={onEditCancel} label={t("editor.titleBlockCoordinator")} /><InlineText field="referenceText" value={element.referenceText?.[plan.documentLocale] ?? `${project.projectNumber} · A0`} editing={isEditing("referenceText")} onStart={() => onEditStart("referenceText")} onCommit={(value) => onEditCommit("referenceText", value)} onCancel={onEditCancel} label={t("editor.titleBlockReference")} /></div>; }
+  if (element.kind === "text") return <div {...interactiveProps} className={`${interactiveProps.className} canvas-text`}><InlineText field="text" value={element.text[plan.documentLocale] ?? ""} editing={isEditing("text")} multiline onStart={() => onEditStart("text")} onCommit={(value) => onEditCommit("text", value)} onCancel={onEditCancel} label={t("editor.textContent")} /></div>;
   return null;
+}
+
+function InlineText({ value, editing, field, multiline = false, className, onStart, onCommit, onCancel, label }: { value: string; editing: boolean; field: InlineField; multiline?: boolean; className?: string; onStart: () => void; onCommit: (value: string) => void; onCancel: () => void; label: string }) {
+  const [draft, setDraft] = useState(value);
+  const cancelled = useRef(false);
+  useEffect(() => { setDraft(value); }, [value, editing]);
+  if (!editing) return <span className={className} data-inline-field={field} onDoubleClick={(event) => { event.stopPropagation(); onStart(); }}>{value}</span>;
+  const sharedProps = {
+    autoFocus: true,
+    className: `canvas-inline-editor ${className ?? ""}`,
+    value: draft,
+    "aria-label": label,
+    onClick: (event: React.MouseEvent) => event.stopPropagation(),
+    onPointerDown: (event: React.PointerEvent) => event.stopPropagation(),
+    onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setDraft(event.target.value),
+    onBlur: () => { if (!cancelled.current) onCommit(draft); },
+    onKeyDown: (event: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+      if (event.key === "Escape") { cancelled.current = true; event.preventDefault(); onCancel(); }
+      if (event.key === "Enter" && (!multiline || event.metaKey || event.ctrlKey)) { event.preventDefault(); onCommit(draft); }
+    },
+  };
+  return multiline ? <textarea {...sharedProps} /> : <input {...sharedProps} />;
+}
+
+function ValidationPopover({ issues, onNavigate, t }: { issues: PlanValidationIssue[]; onNavigate: (issue: PlanValidationIssue) => void; t: (key: string, params?: Record<string, string | number>) => string }) {
+  const actionableIssues = issues.filter((issue) => issue.severity !== "information");
+  return <div className="toolbar-popover validation-popover" role="dialog" aria-label={t("editor.validation")}>
+    <div className="toolbar-popover-heading"><strong>{t("editor.validation")}</strong><span>{actionableIssues.length ? t("editor.validationIssues", { count: actionableIssues.length }) : t("editor.validationReady")}</span></div>
+    <div className="validation-list">{issues.map((issue) => <button type="button" className={`validation-item is-${issue.severity}`} key={issue.id} onClick={() => issue.elementId && onNavigate(issue)} disabled={!issue.elementId}>
+      <span className="validation-icon">{issue.severity === "information" ? <CheckCircle2 size={15} /> : <TriangleAlert size={15} />}</span>
+      <span><small>{t(`editor.validation.severity.${issue.severity}`)}</small><strong>{issue.title}</strong><span>{issue.description}</span>{issue.suggestedAction && <em>{issue.suggestedAction}</em>}</span>
+    </button>)}</div>
+  </div>;
 }
 
 function CanvasAssetImage({ asset, pdfPage, pageNumber, fitMode, crop, t }: { asset: Project["assets"][number]; pdfPage: boolean; pageNumber?: number; fitMode?: "contain" | "cover"; crop?: { x: number; y: number; width: number; height: number }; t: (key: string) => string }) {

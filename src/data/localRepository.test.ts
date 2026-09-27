@@ -21,7 +21,7 @@ describe("local database migration", () => {
 
     const migrated = migrateDatabase(legacy);
 
-    expect(migrated?.schemaVersion).toBe(5);
+    expect(migrated?.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(migrated?.projects[0].id).toBe(project.id);
     expect(migrated?.projects[0].customFields).toEqual([]);
     expect(migrated?.plans[0].layout.format).toBe("A0");

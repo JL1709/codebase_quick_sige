@@ -13,6 +13,7 @@ import {
 } from "docx";
 import { jsPDF } from "jspdf";
 import { blobDataUrl, getBlob } from "../data/blobRepository";
+import { readableTextColor } from "../domain/colorContrast";
 import type {
   BuildingBlock,
   BuildingBlockCategory,
@@ -88,36 +89,29 @@ export function buildPlanPdf(
   const blockMap = getBlockMap(blocks);
   const categoryMap = getCategoryMap(categories);
   const unit = (value: number) => value / 10;
-  const pageWidth = pdf.internal.pageSize.getWidth();
-  const margin = unit(plan.layout.safeMargin);
-  pdf.setFillColor(18, 36, 31);
-  pdf.roundedRect(margin, margin, pageWidth - margin * 2, 58, 5, 5, "F");
-  pdf.setTextColor(213, 255, 63);
-  pdf.setFont("helvetica", "bold");
-  pdf.setFontSize(15);
-  pdf.text("QUICKSiGe", margin + 13, margin + 20);
-  pdf.setTextColor(255, 255, 255);
-  pdf.setFontSize(23);
-  pdf.text(plan.title, margin + 13, margin + 42);
-  pdf.setFontSize(10);
-  pdf.setFont("helvetica", "normal");
-  pdf.text(`${project.projectNumber} · ${project.name}`, pageWidth - margin - 13, margin + 19, { align: "right" });
-  pdf.text(`${project.address}, ${project.city}`, pageWidth - margin - 13, margin + 34, { align: "right" });
-  const metadata = revision
-    ? `Revision ${revision.index} · ${new Date(revision.publishedAt).toLocaleDateString(locale === "de" ? "de-DE" : "en-GB")}`
-    : locale === "de" ? "Arbeitsstand" : "Working draft";
-  pdf.text(metadata, pageWidth - margin - 13, margin + 49, { align: "right" });
 
   const sections = new Map(plan.sections.map((section) => [section.id, section]));
   const assets = new Map(project.assets.map((asset) => [asset.id, asset]));
   for (const element of [...plan.layout.elements].filter((candidate) => !candidate.hidden).sort((a, b) => a.zIndex - b.zIndex)) {
     const x = unit(element.x); const y = unit(element.y); const width = unit(element.width); const height = unit(element.height);
-    if (element.kind === "section") {
+    if (element.kind === "header") {
+      const projectDetails = `${project.projectNumber} · ${project.address}, ${project.city}`;
+      const status = revision
+        ? `Revision ${revision.index} · ${new Date(revision.publishedAt).toLocaleDateString(locale === "de" ? "de-DE" : "en-GB")}`
+        : locale === "de" ? "Arbeitsstand" : "Working draft";
+      pdf.setFillColor(18, 36, 31); pdf.roundedRect(x, y, width, height, 5, 5, "F");
+      pdf.setTextColor(213, 255, 63); pdf.setFont("helvetica", "bold"); pdf.setFontSize(15); pdf.text(element.brandText?.[locale] ?? "QUICKSiGe", x + 13, y + 18);
+      pdf.setTextColor(255, 255, 255); pdf.setFontSize(23); pdf.text(pdf.splitTextToSize(element.titleText?.[locale] ?? plan.title, width * .58).slice(0, 1), x + 13, y + 40);
+      pdf.setFontSize(10); pdf.setFont("helvetica", "normal");
+      pdf.text(element.projectNameText?.[locale] ?? project.name, x + width - 13, y + 16, { align: "right" });
+      pdf.text(pdf.splitTextToSize(element.projectDetailsText?.[locale] ?? projectDetails, width * .36).slice(0, 1), x + width - 13, y + 30, { align: "right" });
+      pdf.text(element.statusText?.[locale] ?? status, x + width - 13, y + 44, { align: "right" });
+    } else if (element.kind === "section") {
       const section = sections.get(element.sectionId); const category = section && categoryMap.get(section.categoryId); if (!section || !category) continue;
-      const color = hexToRgb(category.color); pdf.setDrawColor(204, 215, 210); pdf.setFillColor(255, 255, 255); pdf.roundedRect(x, y, width, height, 4, 4, "FD"); pdf.setFillColor(...color); pdf.roundedRect(x, y, width, 16, 4, 4, "F"); pdf.rect(x, y + 12, width, 4, "F"); pdf.setTextColor(255, 255, 255); pdf.setFont("helvetica", "bold"); pdf.setFontSize(8); pdf.text(section.titleOverrides?.[locale] ?? category.translations[locale].name, x + 8, y + 11);
+      const color = hexToRgb(category.color); pdf.setDrawColor(204, 215, 210); pdf.setFillColor(255, 255, 255); pdf.roundedRect(x, y, width, height, 4, 4, "FD"); pdf.setFillColor(...color); pdf.roundedRect(x, y, width, 16, 4, 4, "F"); pdf.rect(x, y + 12, width, 4, "F"); pdf.setTextColor(...hexToRgb(readableTextColor(category.color))); pdf.setFont("helvetica", "bold"); pdf.setFontSize(8); pdf.text(section.titleOverrides?.[locale] ?? category.translations[locale].name, x + 8, y + 11);
     } else if (element.kind === "block") {
       const section = sections.get(element.sectionId); const item = section?.items.find((candidate) => candidate.id === element.itemId); const block = item && blockMap.get(item.blockId); if (!item || !block) continue;
-      const content = block.translations[locale] ?? block.translations.de; const accent = hexToRgb(block.color); const blockImage = item.imageDataUrl ?? block.imageDataUrl; pdf.setDrawColor(212, 221, 217); pdf.setFillColor(255, 255, 255); pdf.roundedRect(x, y, width, height, 3, 3, "FD"); pdf.setFillColor(...accent); pdf.roundedRect(x, y, width, 14, 3, 3, "F"); pdf.rect(x, y + 10, width, 4, "F"); pdf.setTextColor(255, 255, 255); pdf.setFont("helvetica", "bold"); pdf.setFontSize(7.4); pdf.text(pdf.splitTextToSize(item.customTitle?.[locale] ?? content.title, width - 12).slice(0, 1), x + 6, y + 9); let descriptionX = x + 8; let descriptionWidth = width - 16; if (blockImage) { try { pdf.addImage(blockImage, blockImage.startsWith("data:image/png") ? "PNG" : "JPEG", x + 8, y + 20, 18, 18, undefined, "FAST"); descriptionX += 23; descriptionWidth -= 23; } catch { /* Preserve text when an old image override cannot be decoded. */ } } pdf.setTextColor(44, 60, 54); pdf.setFont("helvetica", "normal"); pdf.setFontSize(6.7); pdf.text(pdf.splitTextToSize(item.customShortDescription?.[locale] ?? content.shortDescription, descriptionWidth).slice(0, 4), descriptionX, y + 24); pdf.setDrawColor(227, 232, 229); pdf.line(x + 6, y + height - 13, x + width - 6, y + height - 13); pdf.setTextColor(104, 117, 111); pdf.setFontSize(5.5); pdf.text(pdf.splitTextToSize(block.regulations.join(" · "), width - 12).slice(0, 2), x + 6, y + height - 7);
+      const content = block.translations[locale] ?? block.translations.de; const accent = hexToRgb(block.color); const blockImage = item.imageDataUrl ?? block.imageDataUrl; pdf.setDrawColor(212, 221, 217); pdf.setFillColor(255, 255, 255); pdf.roundedRect(x, y, width, height, 3, 3, "FD"); pdf.setFillColor(...accent); pdf.roundedRect(x, y, width, 14, 3, 3, "F"); pdf.rect(x, y + 10, width, 4, "F"); pdf.setTextColor(...hexToRgb(readableTextColor(block.color))); pdf.setFont("helvetica", "bold"); pdf.setFontSize(7.4); pdf.text(pdf.splitTextToSize(item.customTitle?.[locale] ?? content.title, width - 12).slice(0, 1), x + 6, y + 9); let descriptionX = x + 8; let descriptionWidth = width - 16; if (blockImage) { try { pdf.addImage(blockImage, blockImage.startsWith("data:image/png") ? "PNG" : "JPEG", x + 8, y + 20, 18, 18, undefined, "FAST"); descriptionX += 23; descriptionWidth -= 23; } catch { /* Preserve text when an old image override cannot be decoded. */ } } pdf.setTextColor(44, 60, 54); pdf.setFont("helvetica", "normal"); pdf.setFontSize(6.7); pdf.text(pdf.splitTextToSize(item.customShortDescription?.[locale] ?? content.shortDescription, descriptionWidth).slice(0, 4), descriptionX, y + 24); pdf.setDrawColor(227, 232, 229); pdf.line(x + 6, y + height - 13, x + width - 6, y + height - 13); pdf.setTextColor(104, 117, 111); pdf.setFontSize(5.5); pdf.text(pdf.splitTextToSize(block.regulations.join(" · "), width - 12).slice(0, 2), x + 6, y + height - 7);
     } else if (element.kind === "image") {
       const asset = assets.get(element.assetId); if (!asset?.dataUrl) continue;
       const preview = assetPreviewByElement.get(element.id) ?? asset.dataUrl;
@@ -143,7 +137,7 @@ export function buildPlanPdf(
     } else if (element.kind === "text") {
       pdf.setTextColor(18, 36, 31); pdf.setFontSize(8); pdf.text(pdf.splitTextToSize(element.text[locale] ?? "", width), x, y + 8);
     } else if (element.kind === "title_block") {
-      pdf.setDrawColor(18, 36, 31); pdf.roundedRect(x, y, width, height, 3, 3, "S"); pdf.setTextColor(18, 36, 31); pdf.setFont("helvetica", "bold"); pdf.setFontSize(8); pdf.text(project.name, x + 8, y + 14); pdf.setFont("helvetica", "normal"); pdf.setFontSize(6); pdf.text(project.participants.find((participant) => participant.role === "coordinator")?.name ?? "—", x + 8, y + 28); pdf.text(`${project.projectNumber} · A0`, x + 8, y + 41);
+      pdf.setDrawColor(18, 36, 31); pdf.roundedRect(x, y, width, height, 3, 3, "S"); pdf.setTextColor(18, 36, 31); pdf.setFont("helvetica", "bold"); pdf.setFontSize(8); pdf.text(element.projectNameText?.[locale] ?? project.name, x + 8, y + 14); pdf.setFont("helvetica", "normal"); pdf.setFontSize(6); pdf.text(element.coordinatorText?.[locale] ?? project.participants.find((participant) => participant.role === "coordinator")?.name ?? "—", x + 8, y + 28); pdf.text(element.referenceText?.[locale] ?? `${project.projectNumber} · A0`, x + 8, y + 41);
     }
   }
 

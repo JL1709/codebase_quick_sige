@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { createSeedDatabase } from "../data/seed";
+import type { Plan } from "./types";
 import {
   A0_LANDSCAPE_HEIGHT, A0_LANDSCAPE_WIDTH, clampElementToPage, createSectionElement,
-  cssPixelsToLayoutUnits, findNextFreeBlockPosition, layoutUnitsToCssPixels, layoutUnitsToMillimetres,
+  cssPixelsToLayoutUnits, ensurePlanLayout, findNextFreeBlockPosition, layoutUnitsToCssPixels, layoutUnitsToMillimetres,
   PLAN_UNITS_PER_MILLIMETRE, snapToGrid,
 } from "./planLayout";
 
@@ -30,6 +31,24 @@ describe("physical A0 layout", () => {
     expect(section.locked).toBe(false);
     expect(section.y).toBeGreaterThanOrEqual(layout.safeMargin);
     expect(section.y + section.height).toBeLessThanOrEqual(layout.height - layout.safeMargin);
+  });
+
+  it("creates selectable structural header and title-block elements", () => {
+    const layout = createSeedDatabase().plans[0].layout;
+    expect(layout.layoutVersion).toBe(3);
+    expect(layout.elements.find((element) => element.kind === "header")?.locked).toBe(false);
+    expect(layout.elements.find((element) => element.kind === "title_block")?.locked).toBe(false);
+  });
+
+  it("migrates a version-two layout without changing existing element geometry", () => {
+    const plan = structuredClone(createSeedDatabase().plans[0]);
+    const before = plan.layout.elements.filter((element) => element.kind !== "header");
+    const legacyPlan = { ...plan, layout: { ...plan.layout, layoutVersion: 2, elements: before } };
+    const migrated = ensurePlanLayout(legacyPlan as unknown as Plan);
+    expect(migrated.layout.layoutVersion).toBe(3);
+    expect(migrated.layout.elements[0].kind).toBe("header");
+    expect(migrated.layout.elements.filter((element) => element.kind !== "header").map(({ x, y, width, height }) => ({ x, y, width, height })))
+      .toEqual(before.map(({ x, y, width, height }) => ({ x, y, width, height })));
   });
 
   it.each([0.55, 0.78, 1, 1.1])("round-trips exact physical coordinates at %s zoom", (zoom) => {

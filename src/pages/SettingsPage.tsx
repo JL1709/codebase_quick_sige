@@ -20,11 +20,25 @@ const placeholderReference = [
 ];
 
 export function SettingsPage() {
+  const { database, resetDemo, migrationRecovery, restoreMigrationBackup, downloadMigrationBackup } = useApp();
+  const { locale, setLocale, t } = useI18n();
+
+  return <div className="page settings-page">
+    <PageHeader title={t("settings.title")} description={t("settings.subtitle")} />
+    <div className="settings-grid">
+      <section className="panel settings-card"><span className="stat-icon"><Languages size={18} /></span><h2>{t("settings.uiLanguage")}</h2><p>{t("settings.languageText")}</p><div className="language-options"><button className={`language-option ${locale === "de" ? "is-selected" : ""}`} onClick={() => setLocale("de")}><strong>Deutsch</strong><span>DE · Deutschland</span></button><button className={`language-option ${locale === "en" ? "is-selected" : ""}`} onClick={() => setLocale("en")}><strong>English</strong><span>EN · International</span></button></div></section>
+      <section className="panel settings-card"><span className="stat-icon"><ShieldCheck size={18} /></span><h2>{t("settings.organization")}</h2><p><strong>{database.organization.name}</strong><br />{database.user.email}<br />{t("settings.role")}: {t(`user.role.${database.user.role}`)}</p></section>
+    </div>
+    <section className="panel settings-card settings-storage"><span className="stat-icon"><Database size={18} /></span><h2>{t("settings.storage")}</h2><p>{t("settings.storageText")}</p>{migrationRecovery.error && <div className="form-error">{migrationRecovery.error}</div>}<div className="row-actions">{migrationRecovery.available && <><Button variant="secondary" onClick={downloadMigrationBackup}><Download size={15} />{t("settings.downloadBackup")}</Button><Button variant="secondary" onClick={restoreMigrationBackup}><ArchiveRestore size={15} />{t("settings.restoreBackup")}</Button></>}<Button variant="danger" onClick={() => { if (window.confirm(t("settings.resetConfirm"))) resetDemo(); }}><RotateCcw size={15} />{t("common.resetWorkspace")}</Button></div></section>
+  </div>;
+}
+
+export function TemplatesPage() {
   const {
-    database, resetDemo, migrationRecovery, restoreMigrationBackup, downloadMigrationBackup,
+    database,
     saveOverviewTemplate, duplicateOverviewTemplate, deleteOverviewTemplate, saveDocumentTemplate, deleteDocumentTemplate,
   } = useApp();
-  const { locale, setLocale, t } = useI18n();
+  const { t } = useI18n();
   const [overviewOpen, setOverviewOpen] = useState(false);
   const [editingOverview, setEditingOverview] = useState<OverviewTemplate | null>(null);
   const [documentOpen, setDocumentOpen] = useState(false);
@@ -51,11 +65,7 @@ export function SettingsPage() {
   };
 
   return <div className="page settings-page">
-    <PageHeader title={t("settings.title")} description={t("settings.subtitle")} />
-    <div className="settings-grid">
-      <section className="panel settings-card"><span className="stat-icon"><Languages size={18} /></span><h2>{t("settings.uiLanguage")}</h2><p>{t("settings.languageText")}</p><div className="language-options"><button className={`language-option ${locale === "de" ? "is-selected" : ""}`} onClick={() => setLocale("de")}><strong>Deutsch</strong><span>DE · Deutschland</span></button><button className={`language-option ${locale === "en" ? "is-selected" : ""}`} onClick={() => setLocale("en")}><strong>English</strong><span>EN · International</span></button></div></section>
-      <section className="panel settings-card"><span className="stat-icon"><ShieldCheck size={18} /></span><h2>{t("settings.organization")}</h2><p><strong>{database.organization.name}</strong><br />{database.user.email}<br />{t("settings.role")}: {t(`user.role.${database.user.role}`)}</p></section>
-    </div>
+    <PageHeader title={t("templates.pageTitle")} description={t("templates.pageSubtitle")} />
 
     <section className="settings-section">
       <div className="settings-section-header">
@@ -85,8 +95,6 @@ export function SettingsPage() {
     <section className="settings-section"><div className="settings-section-header"><div><h2>{t("templates.wordTitle")}</h2><p>{t("templates.wordText")}</p></div><Button onClick={() => openDocument()}><FilePlus2 size={15} />{t("templates.uploadWord")}</Button></div><div className="template-list">{database.documentTemplates.filter((template) => showArchived || template.lifecycle !== "archived").map((template) => <article className="template-row" key={template.id}><div><strong>{template.name}</strong><span>{t(`documents.${template.documentType}`)} · {t(`common.language.${template.locale}`)} · {template.origin === "standard" ? t("templates.standard") : template.filename} · v{template.revision ?? 1}{template.lifecycle === "archived" ? ` · ${t("common.archived")}` : ""}</span></div><div className="row-actions"><Button size="small" variant="secondary" onClick={() => void import("../documents/templateEngine").then(async ({ createStandardTemplate, downloadBlob }) => { const blob = template.origin === "standard" ? await createStandardTemplate(template.documentType, template.locale) : template.blobId ? await getBlob(template.blobId) : undefined; if (blob) downloadBlob(blob, template.filename); })}><Download size={14} />{t("common.download")}</Button><button className="icon-button" onClick={() => void duplicateDocumentTemplate(template)} aria-label={t("common.duplicate")}><Copy size={14} /></button>{template.origin === "custom" && <><Button size="small" variant="secondary" onClick={() => openDocument(template)}><Pencil size={14} />{t("common.edit")}</Button>{template.lifecycle === "archived" ? <><button className="icon-button" onClick={() => saveDocumentTemplate({ ...template, lifecycle: "active", updatedAt: new Date().toISOString() })} aria-label={t("common.restore")}><ArchiveRestore size={14} /></button><button className="icon-button danger-icon" onClick={() => { if (window.confirm(t("common.confirmDelete"))) removeDocumentTemplate(template); }} aria-label={t("common.deletePermanently")}><Trash2 size={14} /></button></> : <button className="icon-button danger-icon" onClick={() => saveDocumentTemplate({ ...template, lifecycle: "archived", updatedAt: new Date().toISOString() })} aria-label={t("common.archive")}><Trash2 size={14} /></button>}</>}</div></article>)}</div></section>
 
     <section className="panel template-reference"><div><h2>{t("templates.placeholderTitle")}</h2><p>{t("templates.placeholderText")}</p><div className="search-shell"><Search size={15} /><input className="search-input" value={placeholderQuery} onChange={(event) => setPlaceholderQuery(event.target.value)} placeholder={t("templates.searchPlaceholders")} /></div></div><div className="placeholder-examples">{placeholderReference.filter((token) => token.toLowerCase().includes(placeholderQuery.toLowerCase())).map((token) => <button className="placeholder-copy" key={token} onClick={() => void navigator.clipboard.writeText(token)}><code>{token}</code><Copy size={13} /></button>)}</div><p className="field-help">{t("templates.placeholderLocations")}</p></section>
-
-    <section className="panel settings-card settings-storage"><span className="stat-icon"><Database size={18} /></span><h2>{t("settings.storage")}</h2><p>{t("settings.storageText")}</p>{migrationRecovery.error && <div className="form-error">{migrationRecovery.error}</div>}<div className="row-actions">{migrationRecovery.available && <><Button variant="secondary" onClick={downloadMigrationBackup}><Download size={15} />{t("settings.downloadBackup")}</Button><Button variant="secondary" onClick={restoreMigrationBackup}><ArchiveRestore size={15} />{t("settings.restoreBackup")}</Button></>}<Button variant="danger" onClick={() => { if (window.confirm(t("settings.resetConfirm"))) resetDemo(); }}><RotateCcw size={15} />{t("common.resetWorkspace")}</Button></div></section>
 
     <OverviewTemplateModal key={`overview-${editingOverview?.id ?? "new"}-${overviewOpen}`} open={overviewOpen} template={editingOverview} organizationId={database.organization.id} onClose={() => setOverviewOpen(false)} onSave={(template) => { saveOverviewTemplate(template); setOverviewOpen(false); }} t={t} />
     <DocumentTemplateModal key={`document-${editingDocument?.id ?? "new"}-${documentOpen}`} open={documentOpen} template={editingDocument} organizationId={database.organization.id} onClose={() => setDocumentOpen(false)} onSave={(template) => { saveDocumentTemplate(template); setDocumentOpen(false); }} t={t} />

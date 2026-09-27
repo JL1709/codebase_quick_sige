@@ -1,4 +1,4 @@
-import { BookOpenText, BriefcaseBusiness, ChevronDown, Settings, Sparkles } from "lucide-react";
+import { BookOpenText, BriefcaseBusiness, ChevronDown, LayoutTemplate, Settings, Sparkles } from "lucide-react";
 import { NavLink, Outlet } from "react-router-dom";
 import { useI18n } from "../i18n/I18nProvider";
 import { useApp } from "../state/AppProvider";
@@ -21,6 +21,7 @@ export function AppShell() {
         <nav className="sidebar-nav" aria-label={t("nav.primaryLabel")}>
           <NavLink to="/" end><BriefcaseBusiness size={19} /><span>{t("nav.projects")}</span></NavLink>
           <NavLink to="/catalog"><BookOpenText size={19} /><span>{t("nav.catalog")}</span></NavLink>
+          <NavLink to="/templates"><LayoutTemplate size={19} /><span>{t("nav.templates")}</span></NavLink>
           <NavLink to="/settings"><Settings size={19} /><span>{t("nav.settings")}</span></NavLink>
         </nav>
 

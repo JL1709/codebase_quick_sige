@@ -133,7 +133,7 @@ export interface PlanSection { id: string; categoryId: string; titleOverrides?: 
 export type SupportingDocumentType = "site_rules" | "alarm_plan" | "fire_safety" | "first_aid" | "participants" | "advance_notice";
 export interface PlanSupportingDocument { id: string; type: SupportingDocumentType; included: boolean }
 
-export type PlanElementKind = "section" | "block" | "image" | "pdf_page" | "document" | "text" | "title_block";
+export type PlanElementKind = "header" | "section" | "block" | "image" | "pdf_page" | "document" | "text" | "title_block";
 export interface PlanElementBase {
   id: string;
   kind: PlanElementKind;
@@ -161,12 +161,25 @@ export interface PlanDocumentElement extends PlanElementBase {
   displayVariant?: "compact" | "emergency_card" | "participant_list" | "qr_link";
 }
 export interface PlanTextElement extends PlanElementBase { kind: "text"; text: Partial<Record<Locale, string>> }
-export interface PlanTitleBlockElement extends PlanElementBase { kind: "title_block" }
-export type PlanElement = PlanSectionElement | PlanBlockElement | PlanAssetElement | PlanDocumentElement | PlanTextElement | PlanTitleBlockElement;
+export interface PlanHeaderElement extends PlanElementBase {
+  kind: "header";
+  brandText?: Partial<Record<Locale, string>>;
+  titleText?: Partial<Record<Locale, string>>;
+  projectNameText?: Partial<Record<Locale, string>>;
+  projectDetailsText?: Partial<Record<Locale, string>>;
+  statusText?: Partial<Record<Locale, string>>;
+}
+export interface PlanTitleBlockElement extends PlanElementBase {
+  kind: "title_block";
+  projectNameText?: Partial<Record<Locale, string>>;
+  coordinatorText?: Partial<Record<Locale, string>>;
+  referenceText?: Partial<Record<Locale, string>>;
+}
+export type PlanElement = PlanHeaderElement | PlanSectionElement | PlanBlockElement | PlanAssetElement | PlanDocumentElement | PlanTextElement | PlanTitleBlockElement;
 
 /** Coordinates are integer tenths of a millimetre to avoid floating-point drift. */
 export interface PlanLayout {
-  layoutVersion: 2;
+  layoutVersion: 3;
   format: "A0";
   orientation: "landscape";
   width: number;
