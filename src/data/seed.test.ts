@@ -2,17 +2,27 @@ import { describe, expect, it } from "vitest";
 import { createSeedDatabase } from "./seed";
 
 describe("seed data", () => {
-  it("provides localized starter content with explicit unverified provenance", () => {
+  it("provides localized starter content without internal review metadata", () => {
     const database = createSeedDatabase();
     expect(database.blocks.length).toBeGreaterThanOrEqual(15);
     for (const block of database.blocks) {
+      expect(block).not.toHaveProperty("code");
+      expect(block).not.toHaveProperty("tags");
       expect(block.translations.de.title).not.toBe("");
       expect(block.translations.en.title).not.toBe("");
-      expect(["starter_content", "imported", "organization"]).toContain(block.provenance.kind);
+      expect(block).not.toHaveProperty("provenance");
+      expect(block).not.toHaveProperty("reviewedAt");
+      expect(block).not.toHaveProperty("contentRevision");
+      expect(block).not.toHaveProperty("source");
+      expect(block.translations.de).not.toHaveProperty("status");
+      expect(block.translations.en).not.toHaveProperty("status");
     }
-    expect(database.blocks.filter((block) => block.provenance.kind === "imported")).toHaveLength(4);
+    expect(database.blocks.filter((block) => block.id.startsWith("import-"))).toHaveLength(4);
     expect(database.blocks.some((block) => block.regulations.some((reference) => reference.includes("xyz")))).toBe(false);
-    expect(database.blocks.filter((block) => block.provenance.kind === "starter_content").every((block) => block.provenance.label.includes("verification required"))).toBe(true);
+    const activeBlocks = database.blocks.filter((block) => block.lifecycle === "active");
+    expect(activeBlocks).toHaveLength(23);
+    expect(activeBlocks.every((block) => block.imageDataUrl?.startsWith("/block-images/"))).toBe(true);
+    expect(new Set(activeBlocks.map((block) => block.imageDataUrl)).size).toBe(23);
   });
 
   it("contains a complete local test project and generated plan", () => {

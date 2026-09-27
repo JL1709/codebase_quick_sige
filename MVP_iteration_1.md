@@ -200,7 +200,7 @@ Acceptance:
 - [x] Add multiple category assignments to a block plus one primary category for default plan placement.
 - [x] Add block lifecycle state (`active` or `archived`) without exposing an unexplained approval pill.
 - [x] Keep content revision metadata internal to persistence and immutable publication snapshots.
-- [x] Add block provenance fields: system library, organization-created, imported source, and last reviewed metadata.
+- [x] Keep block data focused on editable plan content; omit internal provenance and review metadata.
 - [x] Add flexible project fields and custom overview sections.
 - [x] Add reusable overview-template models for project details, emergency contacts, participants, and custom sections.
 - [x] Add document-template, project-document, generated-document, and blob-reference models.
@@ -261,7 +261,7 @@ Acceptance:
 - [x] Remove the catalog-level language switcher; catalog content follows the current UI content layer.
 - [x] Remove the prominent `Approved` pill from catalog cards.
 - [x] Remove visible `Content version` from normal catalog browsing.
-- [x] Show provenance and review metadata only in the block editor or details drawer, where it has context.
+- [x] Remove provenance and professional-review metadata from the block editor and persisted block model.
 - [x] Remove approval-based publication blocking until a real review workflow and authority model are defined.
 - [x] Keep organization-created blocks visually indistinguishable in quality from standard blocks.
 
@@ -272,7 +272,7 @@ Content correction:
 - [x] Remove `Vorschrift xyz` from any production-facing standard block.
 - [x] Mark regulatory references as unverified internally until reviewed by a qualified SiGe expert.
 - [x] Do not claim regulatory correctness in the interface.
-- [x] Add a content-review export that lists block, language, provenance, and regulation references for expert verification.
+- [x] Remove the provenance-based content-review export from the catalog.
 
 Tests:
 
@@ -316,7 +316,7 @@ Acceptance:
 - [x] Support custom-section placeholders through stable section and field keys.
 - [x] Support emergency-contact and participant loops.
 - [x] Support plan section and plan block loops.
-- [x] Support block fields: code, category, title, A0 description, A4 description, regulations, image, and project-specific overrides.
+- [x] Support block fields: category, title, A0 description, A4 description, regulations, image, and project-specific overrides.
 - [x] Support a block grid loop for templates that intentionally use a repeatable table row or grid.
 - [x] Support a controlled page-break placeholder.
 - [x] Support image placeholders only in supported paragraph/table-cell locations.
@@ -359,7 +359,7 @@ Acceptance:
 - [x] Populate project details from the same placeholder registry.
 - [x] Repeat all plan blocks in semantic order through a template loop.
 - [x] Include user-edited block title and description rather than catalog defaults when overrides exist.
-- [x] Include block images/icons, category, code, regulations, and optional expert-visible fields selected for export.
+- [x] Include block images/icons, category, regulations, and optional expert-visible fields selected for export.
 - [x] Provide a polished standard layout with a compact grid/table pattern that users can redesign in Word.
 - [x] Do not export internal expert notes unless the chosen template explicitly requests an allowed expert-note field.
 
@@ -411,7 +411,7 @@ Foundation components:
 - [x] Make the left library collapsible.
 - [x] Display a recursive expandable category tree.
 - [x] Remember expanded categories per user.
-- [x] Search across localized title, descriptions, tags, code, and regulations.
+- [x] Search across the selected language layer's title, descriptions, search terms, and regulations.
 - [x] Show the category path on block results.
 - [x] Drag a block from the library to an exact canvas location.
 - [x] Keep a `+` action that uses intelligent next-free-position placement.
@@ -574,7 +574,7 @@ Iteration 1 is complete only when all of the following are true:
 - [x] The product contains no user-facing prototype or MVP wording.
 - [x] The project workspace navigation remains consistent across all five tabs.
 - [x] Catalog categories are recursive and catalog blocks are user-manageable.
-- [x] All current standard-block provenance and regulatory references are represented honestly.
+- [x] Regulatory references remain part of standard blocks without separate provenance metadata.
 - [x] Overview fields, contacts, participants, and custom sections support complete inline CRUD.
 - [x] Reusable project-data templates work during project creation.
 - [x] The Safety plan is an actual landscape A0 drag-and-drop editor with collapsible categorized library, visible content overrides, and keyboard undo/redo.

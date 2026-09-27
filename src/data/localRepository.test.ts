@@ -18,6 +18,16 @@ describe("local database migration", () => {
     delete plan.layout;
     delete legacy.overviewTemplates;
     delete legacy.documentTemplates;
+    const legacyBlock = (legacy.blocks as Array<Record<string, unknown>>)[0];
+    legacyBlock.code = "PRE-001";
+    legacyBlock.tags = ["legacy global term"];
+    legacyBlock.provenance = { kind: "starter_content", label: "Legacy source", verifiedAt: "2026-09-01" };
+    legacyBlock.contentRevision = 2;
+    legacyBlock.reviewedAt = "2026-09-01";
+    legacyBlock.source = "system";
+    const legacyGermanContent = ((legacyBlock.translations as Record<string, Record<string, unknown>>).de);
+    legacyGermanContent.status = "approved";
+    legacyBlock.imageDataUrl = "/block-images/pre-001.png";
 
     const migrated = migrateDatabase(legacy);
 
@@ -26,21 +36,32 @@ describe("local database migration", () => {
     expect(migrated?.projects[0].customFields).toEqual([]);
     expect(migrated?.plans[0].layout.format).toBe("A0");
     expect(migrated?.documentTemplates.length).toBeGreaterThan(0);
+    expect(migrated?.blocks[0].imageDataUrl).toBe("/block-images/block-existing-utilities.png");
+    expect(migrated?.blocks[0]).not.toHaveProperty("code");
+    expect(migrated?.blocks[0]).not.toHaveProperty("tags");
+    expect(migrated?.blocks[0]).not.toHaveProperty("provenance");
+    expect(migrated?.blocks[0]).not.toHaveProperty("contentRevision");
+    expect(migrated?.blocks[0]).not.toHaveProperty("reviewedAt");
+    expect(migrated?.blocks[0]).not.toHaveProperty("source");
+    expect(migrated?.blocks[0].translations.de).not.toHaveProperty("status");
+    expect(migrated?.blocks[0].translations.de.searchTerms).toContain("legacy global term");
+    expect(migrated?.blocks[0].translations.en.searchTerms).toContain("legacy global term");
   });
 
-  it("is repeatable and preserves deep categories plus multiple assignments", () => {
+  it("is repeatable and normalizes a deep category into one complete placement path", () => {
     const source = createSeedDatabase();
     source.categories.push(
       { id: "depth-3", parentId: "site-access-emergency", color: "#123456", sortOrder: 99, lifecycle: "active", translations: { de: { name: "Tiefe 3", description: "" }, en: { name: "Depth 3", description: "" } } },
       { id: "depth-4", parentId: "depth-3", color: "#123456", sortOrder: 100, lifecycle: "active", translations: { de: { name: "Tiefe 4", description: "" }, en: { name: "Depth 4", description: "" } } },
     );
-    source.blocks[0].categoryIds = [source.blocks[0].primaryCategoryId, "depth-4"];
+    source.blocks[0].primaryCategoryId = "depth-4";
+    source.blocks[0].categoryIds = ["depth-4"];
 
     const first = migrateDatabase(source);
     const second = migrateDatabase(first);
 
     expect(second?.categories.find((category) => category.id === "depth-4")?.parentId).toBe("depth-3");
-    expect(second?.blocks[0].categoryIds).toContain("depth-4");
+    expect(second?.blocks[0].categoryIds).toEqual(["site-setup", "site-access-emergency", "depth-3", "depth-4"]);
     expect(second?.schemaVersion).toBe(first?.schemaVersion);
   });
 

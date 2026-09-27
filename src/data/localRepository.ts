@@ -1,5 +1,7 @@
 import { createSeedDatabase } from "./seed";
 import { ensurePlanLayout } from "../domain/planLayout";
+import { defaultBlockImageSource } from "../domain/blockImages";
+import { blockHierarchyColor, categoryPlacementIds } from "../domain/categoryTree";
 import type { AppDatabase, BuildingBlock, BuildingBlockCategory, Project } from "../domain/types";
 import { z } from "zod";
 
@@ -7,14 +9,14 @@ export const STORAGE_KEY = "quicksige.database.v3";
 const LEGACY_STORAGE_KEYS = ["quicksige.prototype.database.v2"];
 export const BACKUP_KEY = "quicksige.database.migration-backup.v2";
 export const MIGRATION_ERROR_KEY = "quicksige.database.migration-error";
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 11;
 
 const persistedDatabaseSchema = z.object({
   schemaVersion: z.number().int().nonnegative(),
   organization: z.object({ id: z.string(), name: z.string(), defaultLocale: z.enum(["de", "en"]), accentColor: z.string() }),
   user: z.object({ id: z.string(), organizationId: z.string(), name: z.string(), email: z.string(), role: z.enum(["owner", "admin", "editor", "viewer"]), preferredLocale: z.enum(["de", "en"]) }),
   projects: z.array(z.object({ id: z.string() }).passthrough()),
-  blocks: z.array(z.object({ id: z.string(), code: z.string() }).passthrough()),
+  blocks: z.array(z.object({ id: z.string() }).passthrough()),
   categories: z.array(z.object({ id: z.string() }).passthrough()),
   plans: z.array(z.object({ id: z.string(), projectId: z.string() }).passthrough()),
   revisions: z.array(z.object({ id: z.string() }).passthrough()),
@@ -25,12 +27,30 @@ const persistedDatabaseSchema = z.object({
   auditEvents: z.array(z.object({ id: z.string() }).passthrough()),
 }).passthrough();
 
-const DETAILED_CATEGORY_BY_CODE: Record<string, string> = {
-  "SET-001": "site-access-emergency", "SET-002": "site-access-emergency", "SET-003": "site-access-emergency",
-  "SET-004": "site-access-emergency", "SET-005": "site-utilities", "SET-006": "site-access-emergency",
-  "HEI-001": "height-fall-protection", "HEI-002": "height-fall-protection", "HAZ-001": "hazardous-permit-work",
-  "HAZ-002": "hazardous-permit-work", "HAZ-003": "hazardous-permit-work",
+const DETAILED_CATEGORY_BY_BLOCK_ID: Record<string, string> = {
+  "block-site-fencing": "site-access-emergency",
+  "block-site-access": "site-access-emergency",
+  "block-first-aid": "site-access-emergency",
+  "block-emergency-information": "site-access-emergency",
+  "block-temporary-power": "site-utilities",
+  "block-traffic-routes": "site-access-emergency",
+  "block-fall-protection": "height-fall-protection",
+  "block-scaffolding": "height-fall-protection",
+  "block-hot-works": "hazardous-permit-work",
+  "block-hazardous-substances": "hazardous-permit-work",
+  "block-confined-spaces": "hazardous-permit-work",
 };
+
+type PersistedBuildingBlock = BuildingBlock & {
+  code?: string;
+  tags?: string[];
+  provenance?: unknown;
+  contentRevision?: number;
+  reviewedAt?: string;
+  source?: "system" | "organization";
+};
+
+const LEGACY_BLOCK_METADATA_FIELDS = ["code", "tags", "provenance", "contentRevision", "reviewedAt", "source"] as const;
 
 export interface AppRepository {
   load(): AppDatabase;
@@ -59,24 +79,47 @@ function migrateProject(project: Project): Project {
   };
 }
 
-function migrateBlock(block: BuildingBlock): BuildingBlock {
+function migrateBlock(block: PersistedBuildingBlock): BuildingBlock {
   const originalCategoryId = block.primaryCategoryId ?? block.categoryId ?? "uncategorized";
-  const detailedCategoryId = block.source !== "organization" ? DETAILED_CATEGORY_BY_CODE[block.code] : undefined;
+  const detailedCategoryId = DETAILED_CATEGORY_BY_BLOCK_ID[block.id];
   const primaryCategoryId = detailedCategoryId ?? originalCategoryId;
+  const bundledImageSource = defaultBlockImageSource(block.id);
+  const imageDataUrl = !block.imageDataUrl || block.imageDataUrl.startsWith("/block-images/")
+    ? bundledImageSource
+    : block.imageDataUrl;
+  const legacySearchTerms = block.tags ?? [];
+  const translations = Object.fromEntries(Object.entries(block.translations).map(([locale, content]) => {
+    const contentWithoutLegacyStatus = { ...content } as typeof content & { status?: string };
+    Reflect.deleteProperty(contentWithoutLegacyStatus, "status");
+    return [
+      locale,
+      { ...contentWithoutLegacyStatus, searchTerms: [...new Set([...content.searchTerms, ...legacySearchTerms])] },
+    ];
+  })) as BuildingBlock["translations"];
+  const blockWithoutLegacyFields = { ...block };
+  LEGACY_BLOCK_METADATA_FIELDS.forEach((field) => Reflect.deleteProperty(blockWithoutLegacyFields, field));
   return {
-    ...block,
+    ...blockWithoutLegacyFields,
+    imageDataUrl,
+    translations,
     primaryCategoryId,
     categoryIds: [...new Set([...(block.categoryIds?.length ? block.categoryIds : [originalCategoryId]), ...(detailedCategoryId ? [detailedCategoryId] : [])])],
     lifecycle: block.lifecycle ?? "active",
-    provenance: block.provenance ?? {
-      kind: block.source === "organization" ? "organization" : "starter_content",
-      label: block.source === "organization" ? "Organization content" : "Migrated starter content — professional verification required",
-    },
   };
 }
 
 function migrateCategory(category: BuildingBlockCategory, sortOrder: number): BuildingBlockCategory {
   return { ...category, sortOrder: category.sortOrder ?? sortOrder, lifecycle: category.lifecycle ?? "active" };
+}
+
+function normalizeBlockPlacement(block: BuildingBlock, categories: BuildingBlockCategory[]): BuildingBlock {
+  const categoryIds = categoryPlacementIds(block.primaryCategoryId, categories);
+  if (!categoryIds.length) return block;
+  return {
+    ...block,
+    categoryIds,
+    color: blockHierarchyColor(block, categories),
+  };
 }
 
 export function migrateDatabase(value: unknown): AppDatabase | null {
@@ -97,7 +140,7 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
     ...source,
     schemaVersion: CURRENT_SCHEMA_VERSION,
     projects,
-    blocks: source.blocks.map(migrateBlock),
+    blocks: source.blocks.map(migrateBlock).map((block) => normalizeBlockPlacement(block, categories)),
     categories,
     plans,
     revisions: (source.revisions ?? []).map((revision) => ({

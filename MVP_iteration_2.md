@@ -115,7 +115,7 @@ QuickSiGe should become calmer and more direct:
 - [x] Remove the visible starter-content and regulatory-reference helper sentence from the catalog.
 - [x] Remove its translation keys and unused notice styling.
 - [x] Close the resulting whitespace so search, filters, categories, and catalog cards retain a balanced hierarchy.
-- [x] Preserve internal provenance, review metadata, and expert-review export behavior without advertising development state in normal browsing.
+- [x] Remove internal provenance, review metadata, and the expert-review export from the block catalog.
 - [x] Confirm that catalog search, category filtering, block overflow actions, archive/restore, and editing still work.
 
 ### Phase 3 acceptance
@@ -228,7 +228,7 @@ QuickSiGe should become calmer and more direct:
 
 - [x] Give each validation issue a stable issue ID, severity, rule code, affected element ID, localized title, explanation, and suggested action.
 - [x] Replace generic overflow warnings with messages that name the exact element and explain what exceeds its available bounds.
-- [x] Include the block code or meaningful element name where available.
+- [x] Include the meaningful localized element name where available.
 - [x] Keep professional-review warnings separate from technical layout errors so users understand what they can fix on the canvas.
 - [x] Recalculate affected validation results after content edits, resizing, moving, deleting, undo, and redo.
 - [x] Remove resolved issues immediately without changing unrelated issue order.

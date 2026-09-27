@@ -4,7 +4,6 @@ import {
   HeadingLevel,
   Packer,
   Paragraph,
-  ShadingType,
   Table,
   TableCell,
   TableRow,
@@ -14,6 +13,8 @@ import {
 import { jsPDF } from "jspdf";
 import { blobDataUrl, getBlob } from "../data/blobRepository";
 import { readableTextColor } from "../domain/colorContrast";
+import { hydrateBlockImages } from "../domain/blockImages";
+import { blockHierarchyColor, categoryHierarchyColor } from "../domain/categoryTree";
 import type {
   BuildingBlock,
   BuildingBlockCategory,
@@ -108,10 +109,26 @@ export function buildPlanPdf(
       pdf.text(element.statusText?.[locale] ?? status, x + width - 13, y + 44, { align: "right" });
     } else if (element.kind === "section") {
       const section = sections.get(element.sectionId); const category = section && categoryMap.get(section.categoryId); if (!section || !category) continue;
-      const color = hexToRgb(category.color); pdf.setDrawColor(204, 215, 210); pdf.setFillColor(255, 255, 255); pdf.roundedRect(x, y, width, height, 4, 4, "FD"); pdf.setFillColor(...color); pdf.roundedRect(x, y, width, 16, 4, 4, "F"); pdf.rect(x, y + 12, width, 4, "F"); pdf.setTextColor(...hexToRgb(readableTextColor(category.color))); pdf.setFont("helvetica", "bold"); pdf.setFontSize(8); pdf.text(section.titleOverrides?.[locale] ?? category.translations[locale].name, x + 8, y + 11);
+      const categoryColor = categoryHierarchyColor(category.id, categories); const color = hexToRgb(categoryColor); pdf.setDrawColor(204, 215, 210); pdf.setFillColor(255, 255, 255); pdf.roundedRect(x, y, width, height, 4, 4, "FD"); pdf.setFillColor(...color); pdf.roundedRect(x, y, width, 16, 4, 4, "F"); pdf.rect(x, y + 12, width, 4, "F"); pdf.setTextColor(...hexToRgb(readableTextColor(categoryColor))); pdf.setFont("helvetica", "bold"); pdf.setFontSize(8); pdf.text(section.titleOverrides?.[locale] ?? category.translations[locale].name, x + 8, y + 11);
     } else if (element.kind === "block") {
       const section = sections.get(element.sectionId); const item = section?.items.find((candidate) => candidate.id === element.itemId); const block = item && blockMap.get(item.blockId); if (!item || !block) continue;
-      const content = block.translations[locale] ?? block.translations.de; const accent = hexToRgb(block.color); const blockImage = item.imageDataUrl ?? block.imageDataUrl; pdf.setDrawColor(212, 221, 217); pdf.setFillColor(255, 255, 255); pdf.roundedRect(x, y, width, height, 3, 3, "FD"); pdf.setFillColor(...accent); pdf.roundedRect(x, y, width, 14, 3, 3, "F"); pdf.rect(x, y + 10, width, 4, "F"); pdf.setTextColor(...hexToRgb(readableTextColor(block.color))); pdf.setFont("helvetica", "bold"); pdf.setFontSize(7.4); pdf.text(pdf.splitTextToSize(item.customTitle?.[locale] ?? content.title, width - 12).slice(0, 1), x + 6, y + 9); let descriptionX = x + 8; let descriptionWidth = width - 16; if (blockImage) { try { pdf.addImage(blockImage, blockImage.startsWith("data:image/png") ? "PNG" : "JPEG", x + 8, y + 20, 18, 18, undefined, "FAST"); descriptionX += 23; descriptionWidth -= 23; } catch { /* Preserve text when an old image override cannot be decoded. */ } } pdf.setTextColor(44, 60, 54); pdf.setFont("helvetica", "normal"); pdf.setFontSize(6.7); pdf.text(pdf.splitTextToSize(item.customShortDescription?.[locale] ?? content.shortDescription, descriptionWidth).slice(0, 4), descriptionX, y + 24); pdf.setDrawColor(227, 232, 229); pdf.line(x + 6, y + height - 13, x + width - 6, y + height - 13); pdf.setTextColor(104, 117, 111); pdf.setFontSize(5.5); pdf.text(pdf.splitTextToSize(block.regulations.join(" · "), width - 12).slice(0, 2), x + 6, y + height - 7);
+      const content = block.translations[locale] ?? block.translations.de;
+      const blockColor = blockHierarchyColor(block, categories);
+      const accent = hexToRgb(blockColor);
+      const blockImage = item.imageDataUrl ?? block.imageDataUrl;
+      pdf.setDrawColor(212, 221, 217); pdf.setFillColor(255, 255, 255); pdf.roundedRect(x, y, width, height, 3, 3, "FD");
+      pdf.setFillColor(...accent); pdf.roundedRect(x, y, width, 14, 3, 3, "F"); pdf.rect(x, y + 10, width, 4, "F");
+      pdf.setTextColor(...hexToRgb(readableTextColor(blockColor))); pdf.setFont("helvetica", "bold"); pdf.setFontSize(7.4); pdf.text(pdf.splitTextToSize(item.customTitle?.[locale] ?? content.title, width - 12).slice(0, 1), x + 6, y + 9);
+      const bodyX = x + 6; const bodyY = y + 18; const bodyWidth = width - 12; const bodyHeight = Math.max(10, height - 34); const columnGap = 6; const columnWidth = (bodyWidth - columnGap) / 2;
+      let descriptionX = bodyX; let descriptionWidth = bodyWidth;
+      if (blockImage) {
+        try {
+          pdf.addImage(blockImage, blockImage.startsWith("data:image/png") ? "PNG" : "JPEG", bodyX, bodyY, columnWidth, bodyHeight, undefined, "FAST");
+          descriptionX = bodyX + columnWidth + columnGap; descriptionWidth = columnWidth;
+        } catch { /* Preserve text when an old image override cannot be decoded. */ }
+      }
+      pdf.setTextColor(44, 60, 54); pdf.setFont("helvetica", "normal"); pdf.setFontSize(6.7); pdf.text(pdf.splitTextToSize(item.customShortDescription?.[locale] ?? content.shortDescription, descriptionWidth).slice(0, 4), descriptionX, bodyY + 4);
+      pdf.setDrawColor(227, 232, 229); pdf.line(x + 6, y + height - 13, x + width - 6, y + height - 13); pdf.setTextColor(104, 117, 111); pdf.setFontSize(5.5); pdf.text(pdf.splitTextToSize(block.regulations.join(" · "), width - 12).slice(0, 2), x + 6, y + height - 7);
     } else if (element.kind === "image") {
       const asset = assets.get(element.assetId); if (!asset?.dataUrl) continue;
       const preview = assetPreviewByElement.get(element.id) ?? asset.dataUrl;
@@ -151,6 +168,7 @@ export async function exportPlanPdf(
   categories: BuildingBlockCategory[],
   revision?: PlanRevision,
 ): Promise<void> {
+  const blocksWithImages = await hydrateBlockImages(blocks);
   const assets = await Promise.all(project.assets.map(async (asset) => ({
     ...asset,
     dataUrl: await blobDataUrl(asset.blobId, asset.dataUrl),
@@ -185,16 +203,8 @@ export async function exportPlanPdf(
       // Keep the labelled PDF placeholder when a source page cannot be decoded.
     }
   }));
-  buildPlanPdf({ ...project, assets }, plan, blocks, categories, revision, assetPreviewByElement)
+  buildPlanPdf({ ...project, assets }, plan, blocksWithImages, categories, revision, assetPreviewByElement)
     .save(`${safeFilename(project.projectNumber)}-sige-plan-${revision?.index ?? "draft"}.pdf`);
-}
-
-function textCell(text: string, bold = false, shading?: string): TableCell {
-  return new TableCell({
-    shading: shading ? { fill: shading, type: ShadingType.CLEAR } : undefined,
-    margins: { top: 120, bottom: 120, left: 140, right: 140 },
-    children: [new Paragraph({ children: [new TextRun({ text, bold, size: 20 })] })],
-  });
 }
 
 function blockDetailsCell(description: string, regulationLabel: string, regulations: string): TableCell {
@@ -274,7 +284,6 @@ export function buildPlanDocxDocument(
           new TableRow({
             cantSplit: true,
             children: [
-              textCell(block.code, true, "EAF0EC"),
               blockDetailsCell(
                 content.longDescription,
                 locale === "de" ? "Vorschriften" : "Regulations",

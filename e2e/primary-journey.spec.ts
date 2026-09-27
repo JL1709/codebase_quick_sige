@@ -1,11 +1,28 @@
 import AxeBuilder from "@axe-core/playwright";
 import { Document, Packer, Paragraph } from "docx";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 async function useEnglishInterface(page: Page) {
   await page.goto("/settings");
   await page.getByRole("button", { name: /English/ }).click();
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+}
+
+async function dragCategoryToEdge(page: Page, categoryBrowser: Locator, draggedCategoryId: string, targetCategoryId: string, edge: "before" | "after") {
+  const dragHandle = categoryBrowser.locator(`[data-category-id="${draggedCategoryId}"] .category-drag-handle`);
+  const targetRow = categoryBrowser.locator(`[data-category-id="${targetCategoryId}"]`);
+  const dragHandleBox = await dragHandle.boundingBox();
+  const targetRowBox = await targetRow.boundingBox();
+  expect(dragHandleBox).not.toBeNull(); expect(targetRowBox).not.toBeNull();
+  const dragStartX = dragHandleBox!.x + dragHandleBox!.width / 2;
+  const dragStartY = dragHandleBox!.y + dragHandleBox!.height / 2;
+  await page.mouse.move(dragStartX, dragStartY);
+  await page.mouse.down();
+  await page.mouse.move(dragStartX + 10, dragStartY, { steps: 3 });
+  const targetY = targetRowBox!.y + targetRowBox!.height * (edge === "before" ? 0.25 : 0.75);
+  await page.mouse.move(targetRowBox!.x + targetRowBox!.width / 2, targetY, { steps: 15 });
+  await expect(targetRow).toHaveClass(new RegExp(`is-drop-${edge}`));
+  await page.mouse.up();
 }
 
 test.beforeEach(async ({ page }) => {
@@ -191,31 +208,111 @@ test("custom Word template reports missing data and generates with explicit cons
 test("catalog content is manageable and primary pages meet critical accessibility checks", async ({ page }) => {
   await useEnglishInterface(page);
   await page.getByRole("link", { name: "Block catalog" }).click();
+  await expect(page.locator(".catalog-card")).toHaveCount(23);
+  await expect(page.getByRole("button", { name: "Export review list" })).toHaveCount(0);
+  await expect(page.locator(".catalog-block-preview-image img")).toHaveCount(23);
+  await expect(page.locator("body")).not.toContainText(/\d+ assignments/);
+  const portableDistributionCard = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Portable electrical distribution board" }) });
+  await expect(portableDistributionCard.locator(".catalog-category-trail li")).toHaveCount(5);
+  await expect(portableDistributionCard.locator(".catalog-block-preview-references")).toContainText("DGUV Information 203-070");
+  const catalogImageBox = await portableDistributionCard.locator(".catalog-block-preview-image").boundingBox();
+  const catalogDescriptionBox = await portableDistributionCard.locator(".catalog-block-preview-content > p").boundingBox();
+  expect(catalogImageBox).not.toBeNull(); expect(catalogDescriptionBox).not.toBeNull();
+  expect(Math.abs(catalogImageBox!.width - catalogDescriptionBox!.width)).toBeLessThanOrEqual(1);
+  const firstAidCard = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Organize first aid" }) });
+  const temporaryPowerCard = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Temporary construction power" }) });
+  await expect(firstAidCard.locator("h3")).toHaveCSS("background-color", await temporaryPowerCard.locator("h3").evaluate((element) => getComputedStyle(element).backgroundColor));
+  await expect(portableDistributionCard.locator("h3")).not.toHaveCSS("background-color", await firstAidCard.locator("h3").evaluate((element) => getComputedStyle(element).backgroundColor));
+  const categoryBrowser = page.locator(".category-browser");
+  await categoryBrowser.getByRole("button", { name: "Edit: Site setup", exact: true }).click();
+  const categoryDialog = page.getByRole("dialog");
+  await expect(categoryDialog.getByLabel("Category name")).toHaveValue("Site setup");
+  await expect(categoryDialog.locator('input[type="number"]')).toHaveCount(0);
+  await expect(categoryDialog.getByLabel("Description", { exact: true })).toHaveCount(0);
+  await expect(categoryDialog.getByText("Deutsch", { exact: true })).toHaveCount(0);
+  await expect(categoryDialog.getByText("English", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => {
+    const stored = window.localStorage.getItem("quicksige.database.v3");
+    if (!stored) return "";
+    const category = (JSON.parse(stored) as { categories: Array<{ id: string; translations: { de: { name: string } } }> }).categories.find((candidate) => candidate.id === "site-setup");
+    return category?.translations.de.name ?? "";
+  })).toBe("Baustelleneinrichtung");
+  const siteSetupDragHandle = categoryBrowser.getByRole("button", { name: "Reorder category: Site setup" });
+  await expect(siteSetupDragHandle).toBeVisible();
+  await dragCategoryToEdge(page, categoryBrowser, "site-setup", "preparation", "before");
+  await expect(categoryBrowser.locator('[data-parent-id="root"]').first()).toHaveAttribute("data-category-id", "site-setup");
+  await dragCategoryToEdge(page, categoryBrowser, "site-access-emergency", "site-utilities", "after");
+  await expect.poll(() => categoryBrowser.locator('[data-parent-id="site-setup"]').evaluateAll((rows) => rows.map((row) => row.getAttribute("data-category-id")))).toEqual([
+    "site-utilities", "site-access-emergency", "imported-site-security",
+  ]);
+  await dragCategoryToEdge(page, categoryBrowser, "imported-site-security", "site-utilities", "after");
+  await expect.poll(() => categoryBrowser.locator('[data-parent-id="site-setup"]').evaluateAll((rows) => rows.map((row) => row.getAttribute("data-category-id")))).toEqual([
+    "site-utilities", "imported-site-security", "site-access-emergency",
+  ]);
+  await expect(portableDistributionCard.getByRole("button", { name: /Edit:/ })).toBeVisible();
+  await expect(portableDistributionCard.getByRole("button", { name: /More actions/ })).toHaveCount(0);
+  await portableDistributionCard.getByRole("button", { name: /Edit:/ }).click();
+  const blockDialog = page.getByRole("dialog");
+  await expect(blockDialog.getByText("Provenance and professional review", { exact: true })).toHaveCount(0);
+  await expect(blockDialog.getByLabel("Provenance", { exact: true })).toHaveCount(0);
+  await expect(blockDialog.getByLabel("Source reference", { exact: true })).toHaveCount(0);
+  await expect(blockDialog.getByLabel("Professionally reviewed on", { exact: true })).toHaveCount(0);
+  expect(await blockDialog.getByLabel("Regulatory references").evaluate((input) => input.closest(".field")?.nextElementSibling?.querySelector("span")?.textContent)).toBe("Search terms");
+  await expect(page.locator(".block-image-dropzone img")).toBeVisible();
+  await expect(page.locator(".block-image-dropzone img")).toHaveCSS("object-fit", "contain");
+  const imageDropzoneBox = await page.locator(".block-image-dropzone").boundingBox();
+  const editorImageBox = await page.locator(".block-image-dropzone img").boundingBox();
+  expect(Math.abs((imageDropzoneBox?.width ?? 0) - (editorImageBox?.width ?? 1))).toBeLessThanOrEqual(1);
+  await expect(page.getByRole("button", { name: "Replace image" })).toBeVisible();
+  await expect(page.getByLabel("Choose image file")).toBeHidden();
+  expect(await page.getByLabel("Title", { exact: true }).evaluate((input) => input.closest(".field")?.nextElementSibling?.classList.contains("block-image-editor"))).toBe(true);
+  await expect(page.locator('.category-placement-tree [data-category-id="preparation"]')).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator('.category-placement-tree [data-category-id="site-setup"]')).toHaveAttribute("aria-expanded", "true");
+  await expect(page.locator('.category-placement-tree input[type="checkbox"]:checked')).toHaveCount(5);
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await page.getByRole("button", { name: "Add block" }).click();
-  await page.getByLabel("Code").fill("ORG-E2E-001");
-  const germanContent = page.getByRole("group", { name: "Deutsch" });
-  const englishContent = page.getByRole("group", { name: "English" });
-  await germanContent.getByLabel("Title").fill("Testbaustein");
-  await englishContent.getByLabel("Title").fill("Test block");
-  await germanContent.getByLabel("Short description for the A0 plan").fill("Kurze Beschreibung");
-  await englishContent.getByLabel("Short description for the A0 plan").fill("Short description");
+  await expect(page.getByRole("dialog").getByLabel("Short code")).toHaveCount(0);
+  await expect(page.getByRole("group", { name: "Deutsch" })).toHaveCount(0);
+  await expect(page.getByRole("group", { name: "English" })).toHaveCount(0);
+  await expect(page.getByLabel("Color", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Primary category", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Search terms", { exact: true })).toHaveCount(1);
+  await expect(page.getByLabel("Localized search terms", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("tree", { name: "Catalog placement" })).toBeVisible();
+  await page.getByLabel("Title", { exact: true }).fill("Test block");
+  await page.getByLabel("Short description for the A0 plan").fill("Short description");
+  await page.getByLabel("Search terms", { exact: true }).fill("exclusive catalog phrase");
+  await page.getByRole("tree", { name: "Catalog placement" }).getByRole("button", { name: "Site setup", exact: true }).click();
+  await page.getByRole("checkbox", { name: "Access and emergency organization" }).check();
+  await expect(page.getByRole("checkbox", { name: "Site setup" })).toBeChecked();
+  await expect(page.getByRole("checkbox", { name: "Access and emergency organization" })).toBeChecked();
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Test block" })).toBeVisible();
+  const catalogSearch = page.getByLabel("Title, description, search term, or regulation");
+  await catalogSearch.fill("exclusive catalog phrase");
+  await expect(page.getByRole("heading", { name: "Test block" })).toBeVisible();
+  await catalogSearch.clear();
   const customCard = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Test block" }) });
-  await customCard.getByRole("button", { name: /More actions/ }).click();
-  await customCard.getByRole("menuitem", { name: "Edit" }).click();
-  await page.getByRole("group", { name: "English" }).getByLabel("Title").fill("Edited test block");
+  await expect(customCard.locator(".catalog-category-trail li")).toHaveCount(2);
+  const noReferences = customCard.locator(".catalog-block-preview-references");
+  await expect(noReferences).toHaveText("No references");
+  expect((await noReferences.boundingBox())!.height).toBeLessThan(40);
+  const editAction = customCard.getByRole("button", { name: /Edit:/ });
+  await editAction.hover();
+  await expect(editAction).toHaveCSS("background-color", "rgb(233, 239, 236)");
+  await editAction.click();
+  await page.getByLabel("Title", { exact: true }).fill("Edited test block");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Edited test block" })).toBeVisible();
   const editedCard = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Edited test block" }) });
-  await editedCard.getByRole("button", { name: /More actions/ }).click();
-  await editedCard.getByRole("menuitem", { name: "Edit" }).click();
+  await editedCard.getByRole("button", { name: /Edit:/ }).click();
   await page.getByRole("button", { name: "Archive", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Edited test block" })).toHaveCount(0);
   await page.getByRole("button", { name: "Show archived" }).click();
   const archivedCard = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Edited test block" }) });
-  await archivedCard.getByRole("button", { name: /More actions/ }).click();
-  await archivedCard.getByRole("menuitem", { name: "Restore" }).click();
+  await archivedCard.getByRole("button", { name: /Edit:/ }).click();
+  await page.getByRole("button", { name: "Restore", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Edited test block" })).toBeVisible();
 
   await expect(page.locator("body")).not.toContainText("Included starter content and regulatory references");
@@ -300,6 +397,11 @@ test("A0 canvas fits, zooms deeply, edits structural content, and navigates vali
   await page.goto("/projects/project-logistics-center/plan");
   await expect(page.locator(".wysiwyg-page")).toBeVisible();
   await expect(page.locator(".editor-inspector")).toHaveCount(0);
+  const firstCanvasBlock = page.locator(".canvas-block").filter({ has: page.locator(".canvas-block-image") }).first();
+  const canvasImageBox = await firstCanvasBlock.locator(".canvas-block-image").boundingBox();
+  const canvasDescriptionBox = await firstCanvasBlock.locator('[data-inline-field="blockDescription"]').boundingBox();
+  expect(canvasImageBox).not.toBeNull(); expect(canvasDescriptionBox).not.toBeNull();
+  expect(Math.abs(canvasImageBox!.width - canvasDescriptionBox!.width)).toBeLessThanOrEqual(1);
 
   for (const viewport of [
     { width: 1920, height: 1080 },

@@ -3,6 +3,7 @@ import { LocalStorageRepository, type AppRepository } from "../data/localReposit
 import { defaultAssessmentAnswers } from "../data/seed";
 import { createPlanFromAssessment } from "../domain/recommendationEngine";
 import { buildRevisionSnapshot } from "../domain/revisionSnapshot";
+import { blockHierarchyColor, categoryPlacementIds } from "../domain/categoryTree";
 import type {
   AppDatabase, AssessmentAnswers, BuildingBlock, BuildingBlockCategory, DocumentTemplate, GeneratedDocument,
   Locale, OverviewTemplate, Plan, PlanRevision, Project, ProjectDocumentConfiguration, ProjectFormValues, Recommendation,
@@ -20,10 +21,10 @@ interface AppContextValue {
   updatePlan: (plan: Plan) => void;
   publishPlan: (planId: string, input: PublishInput) => PlanRevision;
   saveBlock: (block: BuildingBlock) => void;
-  duplicateBlock: (blockId: string) => BuildingBlock;
   archiveBlock: (blockId: string) => void;
   restoreBlock: (blockId: string) => void;
   saveCategory: (category: BuildingBlockCategory) => void;
+  reorderCategories: (parentId: string | undefined, orderedCategoryIds: string[]) => void;
   archiveCategory: (categoryId: string) => void;
   restoreCategory: (categoryId: string) => void;
   applyOverviewTemplates: (projectId: string, templateIds: string[]) => void;
@@ -173,24 +174,37 @@ export function AppProvider({ children, repository: providedRepository }: { chil
     return revision;
   }, [commit, database]);
 
-  const saveBlock = useCallback((block: BuildingBlock) => commit((current) => ({ ...current, blocks: current.blocks.some((candidate) => candidate.id === block.id) ? current.blocks.map((candidate) => candidate.id === block.id ? block : candidate) : [block, ...current.blocks] })), [commit]);
-  const duplicateBlock = useCallback((blockId: string): BuildingBlock => {
-    const source = database.blocks.find((block) => block.id === blockId);
-    if (!source) throw new Error("Building block not found");
-    const duplicate: BuildingBlock = {
-      ...structuredClone(source), id: newId("block"), code: `${source.code}-COPY`, lifecycle: "active",
-      provenance: { kind: "organization", label: "Organization content", sourceReference: source.id },
-      translations: {
-        de: { ...source.translations.de, title: `${source.translations.de.title} (Kopie)` },
-        en: { ...source.translations.en, title: `${source.translations.en.title} (copy)` },
-      },
+  const saveBlock = useCallback((block: BuildingBlock) => commit((current) => {
+    const normalizedBlock = {
+      ...block,
+      categoryIds: categoryPlacementIds(block.primaryCategoryId, current.categories),
+      color: blockHierarchyColor(block, current.categories),
     };
-    commit((current) => ({ ...current, blocks: [duplicate, ...current.blocks] }));
-    return duplicate;
-  }, [commit, database.blocks]);
+    return { ...current, blocks: current.blocks.some((candidate) => candidate.id === block.id) ? current.blocks.map((candidate) => candidate.id === block.id ? normalizedBlock : candidate) : [normalizedBlock, ...current.blocks] };
+  }), [commit]);
   const archiveBlock = useCallback((blockId: string) => commit((current) => ({ ...current, blocks: current.blocks.map((block) => block.id === blockId ? { ...block, lifecycle: "archived" } : block) })), [commit]);
   const restoreBlock = useCallback((blockId: string) => commit((current) => ({ ...current, blocks: current.blocks.map((block) => block.id === blockId ? { ...block, lifecycle: "active" } : block) })), [commit]);
-  const saveCategory = useCallback((category: BuildingBlockCategory) => commit((current) => ({ ...current, categories: current.categories.some((candidate) => candidate.id === category.id) ? current.categories.map((candidate) => candidate.id === category.id ? category : candidate) : [...current.categories, category] })), [commit]);
+  const saveCategory = useCallback((category: BuildingBlockCategory) => commit((current) => {
+    const categories = current.categories.some((candidate) => candidate.id === category.id)
+      ? current.categories.map((candidate) => candidate.id === category.id ? category : candidate)
+      : [...current.categories, category];
+    const blocks = current.blocks.map((block) => ({
+      ...block,
+      categoryIds: categoryPlacementIds(block.primaryCategoryId, categories),
+      color: blockHierarchyColor(block, categories),
+    }));
+    return { ...current, categories, blocks };
+  }), [commit]);
+  const reorderCategories = useCallback((parentId: string | undefined, orderedCategoryIds: string[]) => commit((current) => {
+    const positions = new Map(orderedCategoryIds.map((categoryId, index) => [categoryId, index]));
+    return {
+      ...current,
+      categories: current.categories.map((category) => {
+        const position = positions.get(category.id);
+        return category.parentId === parentId && position !== undefined ? { ...category, sortOrder: position } : category;
+      }),
+    };
+  }), [commit]);
   const archiveCategory = useCallback((categoryId: string) => commit((current) => ({ ...current, categories: current.categories.map((category) => category.id === categoryId ? { ...category, lifecycle: "archived" } : category) })), [commit]);
   const restoreCategory = useCallback((categoryId: string) => commit((current) => ({ ...current, categories: current.categories.map((category) => category.id === categoryId ? { ...category, lifecycle: "active" } : category) })), [commit]);
   const applyTemplatesToProject = useCallback((projectId: string, templateIds: string[]) => {
@@ -241,7 +255,7 @@ export function AppProvider({ children, repository: providedRepository }: { chil
   const resetDemo = useCallback(() => setDatabase(repository.current.reset()), []);
   const value = useMemo<AppContextValue>(() => ({
     database, setLocale, createProject, updateProject, saveAssessment, createPlan, updatePlan, publishPlan,
-    saveBlock, duplicateBlock, archiveBlock, restoreBlock, saveCategory, archiveCategory, restoreCategory,
+    saveBlock, archiveBlock, restoreBlock, saveCategory, reorderCategories, archiveCategory, restoreCategory,
     applyOverviewTemplates: applyTemplatesToProject, saveOverviewTemplate, duplicateOverviewTemplate, deleteOverviewTemplate,
     saveDocumentTemplate, deleteDocumentTemplate, setDocumentTemplate, addGeneratedDocument, resetDemo,
     migrationRecovery: {
@@ -252,7 +266,7 @@ export function AppProvider({ children, repository: providedRepository }: { chil
     getProject: (projectId) => database.projects.find((project) => project.id === projectId),
     getPlanForProject: (projectId) => database.plans.find((plan) => plan.projectId === projectId),
     getAssessment: (projectId) => database.assessments[projectId] ?? { ...defaultAssessmentAnswers },
-  }), [database, setLocale, createProject, updateProject, saveAssessment, createPlan, updatePlan, publishPlan, saveBlock, duplicateBlock, archiveBlock, restoreBlock, saveCategory, archiveCategory, restoreCategory, applyTemplatesToProject, saveOverviewTemplate, duplicateOverviewTemplate, deleteOverviewTemplate, saveDocumentTemplate, deleteDocumentTemplate, setDocumentTemplate, addGeneratedDocument, restoreMigrationBackup, downloadMigrationBackup, resetDemo]);
+  }), [database, setLocale, createProject, updateProject, saveAssessment, createPlan, updatePlan, publishPlan, saveBlock, archiveBlock, restoreBlock, saveCategory, reorderCategories, archiveCategory, restoreCategory, applyTemplatesToProject, saveOverviewTemplate, duplicateOverviewTemplate, deleteOverviewTemplate, saveDocumentTemplate, deleteDocumentTemplate, setDocumentTemplate, addGeneratedDocument, restoreMigrationBackup, downloadMigrationBackup, resetDemo]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

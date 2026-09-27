@@ -73,20 +73,10 @@ export interface LocalizedBuildingBlockContent {
   shortDescription: string;
   longDescription: string;
   searchTerms: string[];
-  /** Migration-only legacy review flag; not displayed as product truth. */
-  status?: "draft" | "reviewed" | "approved";
-}
-
-export interface BuildingBlockProvenance {
-  kind: "starter_content" | "organization" | "imported";
-  label: string;
-  sourceReference?: string;
-  verifiedAt?: string;
 }
 
 export interface BuildingBlock {
   id: string;
-  code: string;
   primaryCategoryId: string;
   categoryIds: string[];
   /** Retained while existing version-two data is migrated. */
@@ -95,13 +85,8 @@ export interface BuildingBlock {
   imageDataUrl?: string;
   color: string;
   regulations: string[];
-  tags: string[];
   lifecycle: RecordLifecycle;
-  provenance: BuildingBlockProvenance;
   translations: Record<Locale, LocalizedBuildingBlockContent>;
-  contentRevision?: number;
-  reviewedAt?: string;
-  source?: "system" | "organization";
 }
 
 export interface BuildingBlockCategory {

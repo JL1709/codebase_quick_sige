@@ -122,7 +122,6 @@ export function buildTemplateData(
     if (!block) return null;
     const content = block.translations[planLocale] ?? block.translations.de;
     return {
-      code: block.code,
       category: sectionTitle,
       title: item.customTitle?.[planLocale] ?? content.title,
       a0_description: item.customShortDescription?.[planLocale] ?? content.shortDescription,
@@ -375,7 +374,7 @@ function standardA4Template(locale: Locale): Document {
         new Paragraph({ children: [label(locale === "de" ? "Projekt: " : "Project: "), command("INS qs.project.name"), new TextRun(" · "), command("INS qs.project.number")] }),
         new Paragraph({ children: [command("FOR block IN qs.plan.blocks")] }),
         new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [
-          new TableRow({ children: [new TableCell({ shading: { fill: "E7F1ED", type: ShadingType.CLEAR }, children: [new Paragraph({ children: [command("INS $block.code"), new TextRun("  "), command("INS $block.title")] })] })] }),
+          new TableRow({ children: [new TableCell({ shading: { fill: "E7F1ED", type: ShadingType.CLEAR }, children: [new Paragraph({ children: [command("INS $block.title")] })] })] }),
           new TableRow({ children: [new TableCell({ children: [new Paragraph({ children: [command("IMAGE $block.image")] }), new Paragraph({ children: [command("INS $block.short_description")] }), new Paragraph({ children: [command("INS $block.long_description")] }), new Paragraph({ children: [label(locale === "de" ? "Regelwerk: " : "References: "), command("INS $block.regulations")] })] })] }),
         ] }),
         new Paragraph({ children: [command("END-FOR block")] }),

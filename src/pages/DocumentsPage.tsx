@@ -5,6 +5,7 @@ import { Button, Modal } from "../components/Ui";
 import { blobObjectUrl, getBlob, saveBlob } from "../data/blobRepository";
 import { inspectPdf } from "../documents/pdfPreview";
 import { hasValidProjectAssetSignature, MAX_PROJECT_ASSET_TOTAL_BYTES, validateProjectAsset } from "../domain/projectAssets";
+import { hydrateBlockImages } from "../domain/blockImages";
 import type { DocumentTemplate, DocumentType, ProjectAsset } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
 import { newId, useApp } from "../state/AppProvider";
@@ -87,7 +88,8 @@ export function DocumentsPage() {
   };
   const finishGeneration = async (type: DocumentType, template: DocumentTemplate, buffer: ArrayBuffer) => {
     const { buildTemplateData, documentDependencyFingerprint, downloadBlob, renderTemplate } = await import("../documents/templateEngine");
-    const generated = await renderTemplate(buffer, buildTemplateData(project, plan, database.blocks, database.categories, configurations));
+    const blocksWithImages = await hydrateBlockImages(database.blocks);
+    const generated = await renderTemplate(buffer, buildTemplateData(project, plan, blocksWithImages, database.categories, configurations));
     const safeProject = project.projectNumber.replace(/[^a-z0-9-]+/gi, "-").toLowerCase();
     const filename = `${safeProject}-${type}-${new Date().toISOString().slice(0, 10)}.docx`;
     const blobId = newId("generated-blob"); await saveBlob(blobId, generated);
@@ -102,7 +104,7 @@ export function DocumentsPage() {
   const proceedWithMissing = async () => { if (!pending) return; setGenerating(pending.type); try { await finishGeneration(pending.type, pending.template, pending.templateBuffer); setPending(null); } catch { setDocumentMessage({ tone: "danger", text: t("documents.generationFailed") }); } finally { setGenerating(null); } };
 
   return <div className="workspace-page">
-    <section className="overview-heading"><div><h1>{t("documents.title")}</h1><p>{t("documents.subtitle")}</p></div><Link to="/settings"><Button variant="secondary"><Settings size={15} />{t("documents.manageTemplates")}</Button></Link></section>
+    <section className="overview-heading"><div><h1>{t("documents.title")}</h1><p>{t("documents.subtitle")}</p></div><Link to="/templates"><Button variant="secondary"><Settings size={15} />{t("documents.manageTemplates")}</Button></Link></section>
     {documentMessage && <div className={`asset-message is-${documentMessage.tone}`}>{documentMessage.text}</div>}
     <section className="panel asset-panel"><div className="panel-header"><div><h2>{t("documents.assetsTitle")}</h2><p>{t("documents.assetsSubtitle")}</p></div><label className="button button-primary button-small asset-upload"><Upload size={14} />{t("documents.uploadAsset")}<input type="file" accept=".png,.jpg,.jpeg,.pdf,image/png,image/jpeg,application/pdf" onChange={(event) => void handleAsset(event)} /></label></div><div className="panel-body">{assetMessage && <div className={`asset-message is-${assetMessage.tone}`}>{assetMessage.tone === "success" && <CheckCircle2 size={15} />}{assetMessage.text}</div>}{project.assets.length === 0 ? <p className="page-description">{t("documents.noAssets")}</p> : <div className="asset-list">{project.assets.map((asset) => <article className="asset-row" key={asset.id}><span className="asset-preview"><AssetPreview asset={asset} /></span><span><strong>{asset.filename}</strong><small>{asset.mimeType === "application/pdf" ? "PDF" : <><FileImage size={11} /> {asset.mimeType === "image/png" ? "PNG" : "JPG"}</>} · {new Intl.NumberFormat(locale).format(Math.ceil(asset.byteSize / 1024))} KB</small></span><span className="asset-availability">{t("documents.availableInPlan")}</span></article>)}</div>}</div></section>
     <div className="document-grid">{documentTypes.map(({ type, icon: Icon }) => { const options = templates.filter((template) => template.documentType === type); const selected = selectedTemplate(type); return <article className="document-card" key={type}><span className="document-card-icon"><Icon size={21} /></span><h3>{t(`documents.${type}`)}</h3><p>{t("documents.templateUsed")}</p><select className="document-template-select" value={selected?.id ?? ""} onChange={(event) => selectTemplate(type, event.target.value)}>{options.length === 0 && <option value="">{t("documents.noTemplate")}</option>}{options.map((template) => <option key={template.id} value={template.id}>{template.name} · {template.origin === "standard" ? t("templates.standard") : template.filename}</option>)}</select><Button size="small" disabled={!selected || generating !== null} onClick={() => void startGeneration(type)}>{generating === type ? t("documents.generating") : t("documents.generateWord")}</Button></article>; })}</div>

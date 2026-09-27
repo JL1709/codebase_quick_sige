@@ -16,7 +16,7 @@ describe("plan validation", () => {
     const issues = createPlanValidationIssues({ plan, project: database.projects[0], blocks: database.blocks, documentConfigurations: database.documentConfigurations, documentTemplates: database.documentTemplates, t });
     const overflow = issues.find((issue) => issue.ruleCode === "TEXT_OVERFLOW" && issue.elementId === element.id);
     expect(overflow?.id).toBe(`TEXT_OVERFLOW:${element.id}`);
-    expect(overflow?.title).toContain(database.blocks.find((block) => block.id === element.blockId)?.code);
+    expect(overflow?.title).toContain(database.blocks.find((block) => block.id === element.blockId)?.translations[plan.documentLocale].title);
   });
 
   it("removes resolved element issues without disturbing stable global issue IDs", () => {

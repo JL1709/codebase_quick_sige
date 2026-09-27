@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { BlockVisual } from "../components/BlockVisual";
 import { Badge, Button, PageHeader, Toggle } from "../components/Ui";
+import { blockHierarchyColor } from "../domain/categoryTree";
 import { assessRequirements, generateRecommendations, toggleRecommendation } from "../domain/recommendationEngine";
 import type { RecommendationStrength } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
@@ -51,7 +52,7 @@ export function RecommendationsPage() {
           if (!block) return null;
           const content = block.translations[project.documentLocale] ?? block.translations.de;
           return <article className={`recommendation-card ${recommendation.included ? "" : "is-excluded"}`} key={recommendation.id}>
-            <BlockVisual visualKey={block.visualKey} color={block.color} />
+            <BlockVisual visualKey={block.visualKey} color={blockHierarchyColor(block, database.categories)} />
             <div className="recommendation-content"><div className="recommendation-title"><strong>{content.title}</strong><Badge tone={strengthTone(recommendation.strength)}>{t(`recommendations.${recommendation.strength}`)}</Badge></div><p>{t(recommendation.reasonKey, recommendation.reasonParams)}</p></div>
             <Toggle checked={recommendation.included} onChange={() => setRecommendations((current) => toggleRecommendation(current, recommendation.id))} label={recommendation.included ? t("recommendations.included") : t("recommendations.excluded")} />
           </article>;

@@ -14,7 +14,7 @@ const placeholderReference = [
   "{{INS qs.project.city}}", "{{INS qs.project.start_date}}", "{{INS qs.project.end_date}}",
   "{{INS qs.overview.your_field_key}}", "{{FOR contact IN qs.emergency_contacts}}", "{{INS $contact.label}}",
   "{{FOR participant IN qs.participants}}", "{{INS $participant.role_label}}", "{{FOR section IN qs.plan.sections}}",
-  "{{FOR block IN qs.plan.blocks}}", "{{INS $block.code}}", "{{INS $block.category}}", "{{INS $block.title}}",
+  "{{FOR block IN qs.plan.blocks}}", "{{INS $block.category}}", "{{INS $block.title}}",
   "{{INS $block.a0_description}}", "{{INS $block.a4_description}}", "{{INS $block.regulations}}", "{{IMAGE $block.image}}",
   "{{INS $block.expert_note}}", "{{PAGEBREAK}}",
 ];

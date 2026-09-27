@@ -28,7 +28,7 @@ function elementName(plan: Plan, project: Project, blocks: Map<string, BuildingB
   if (element.kind === "block") {
     const item = plan.sections.find((section) => section.id === element.sectionId)?.items.find((candidate) => candidate.id === element.itemId);
     const block = item ? blocks.get(item.blockId) : undefined;
-    return block ? `${block.code} · ${item?.customTitle?.[plan.documentLocale] ?? block.translations[plan.documentLocale].title}` : element.id;
+    return block ? item?.customTitle?.[plan.documentLocale] ?? block.translations[plan.documentLocale].title : element.id;
   }
   if (element.kind === "image" || element.kind === "pdf_page") return project.assets.find((asset) => asset.id === element.assetId)?.filename ?? element.id;
   if (element.kind === "text") return element.text[plan.documentLocale]?.slice(0, 48) || t("editor.element.text");
