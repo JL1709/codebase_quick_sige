@@ -3,7 +3,7 @@ import {
   AlignCenterHorizontal, AlignCenterVertical, AlignHorizontalDistributeCenter, AlignVerticalDistributeCenter,
   ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronRight,
   Copy, FileOutput, Image, Lock, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Search, ShieldCheck,
-  Maximize2, SlidersHorizontal, Trash2, TriangleAlert, Type, Undo2, Unlock, ZoomIn, ZoomOut,
+  LayoutGrid, Maximize2, Scan, SlidersHorizontal, Trash2, TriangleAlert, Type, Undo2, Unlock, ZoomIn, ZoomOut,
 } from "lucide-react";
 import Moveable from "react-moveable";
 import Selecto from "react-selecto";
@@ -17,10 +17,14 @@ import { renderPdfPage } from "../documents/pdfPreview";
 import { calculateAnchoredScroll, calculateFitZoom, clampCanvasZoom, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, stepCanvasZoom } from "../domain/canvasViewport";
 import { readableTextColor } from "../domain/colorContrast";
 import { blockHierarchyColor, categoryDescendantIds, categoryHierarchyColor } from "../domain/categoryTree";
-import { A0_LANDSCAPE_HEIGHT, A0_LANDSCAPE_WIDTH, clampElementToPage, createSectionElement, CSS_PIXELS_PER_LAYOUT_UNIT, findNextFreeBlockPosition, snapToGrid } from "../domain/planLayout";
+import {
+  A0_LANDSCAPE_HEIGHT, A0_LANDSCAPE_WIDTH, clampElementToPage, createBlockAreaElement,
+  createSectionElement, CSS_PIXELS_PER_LAYOUT_UNIT, findNextFreeBlockPosition, findNextFreeNonBlockPosition,
+  fitBlocksInArea, getBlockArea, snapToGrid,
+} from "../domain/planLayout";
 import { createPlanValidationIssues, type PlanValidationIssue } from "../domain/planValidation";
 import { readValidatedImageDataUrl } from "../domain/projectAssets";
-import type { BuildingBlock, BuildingBlockCategory, Plan, PlanBlockElement, PlanElement, PlanItem, PlanSection, Project, SupportingDocumentType } from "../domain/types";
+import type { BlockLayoutMode, BuildingBlock, BuildingBlockCategory, Plan, PlanBlockElement, PlanElement, PlanItem, PlanSection, Project, SupportingDocumentType } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
 import { translate } from "../i18n/translations";
 import { newId, useApp } from "../state/AppProvider";
@@ -64,6 +68,7 @@ export function PlanEditorPage() {
   const [libraryOpen, setLibraryOpen] = useState(true);
   const [propertiesOpen, setPropertiesOpen] = useState(false);
   const [validationOpen, setValidationOpen] = useState(false);
+  const [blockFitMessage, setBlockFitMessage] = useState("");
   const [editing, setEditing] = useState<InlineEditingState | null>(null);
   const [focusedIssueElementId, setFocusedIssueElementId] = useState<string | null>(null);
   const [moveableRevision, setMoveableRevision] = useState(0);
@@ -76,6 +81,8 @@ export function PlanEditorPage() {
   const moveableRef = useRef<{ updateRect: () => void } | null>(null);
   const propertiesTriggerRef = useRef<HTMLButtonElement | null>(null);
   const validationTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const propertiesOpenRef = useRef(propertiesOpen);
+  const validationOpenRef = useRef(validationOpen);
   const elementRefs = useRef(new Map<string, HTMLElement>());
   const transformSnapshot = useRef<Plan | null>(null);
   const groupTransform = useRef(new Map<string, { dx: number; dy: number; width?: number; height?: number }>());
@@ -85,6 +92,8 @@ export function PlanEditorPage() {
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
     useSensor(KeyboardSensor),
   );
+  propertiesOpenRef.current = propertiesOpen;
+  validationOpenRef.current = validationOpen;
 
   const recalculateFit = useCallback(() => {
     const viewport = canvasShellRef.current;
@@ -146,15 +155,8 @@ export function PlanEditorPage() {
         setValidationOpen(false);
       }
     };
-    const dismissWithEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        const trigger = propertiesOpen ? propertiesTriggerRef.current : validationOpen ? validationTriggerRef.current : null;
-        setPropertiesOpen(false); setValidationOpen(false); trigger?.focus();
-      }
-    };
     document.addEventListener("pointerdown", dismiss);
-    document.addEventListener("keydown", dismissWithEscape);
-    return () => { document.removeEventListener("pointerdown", dismiss); document.removeEventListener("keydown", dismissWithEscape); };
+    return () => document.removeEventListener("pointerdown", dismiss);
   }, [propertiesOpen, validationOpen]);
 
   useEffect(() => {
@@ -164,6 +166,7 @@ export function PlanEditorPage() {
 
   const blockMap = useMemo(() => new Map(database.blocks.map((block) => [block.id, block])), [database.blocks]);
   const categoryMap = useMemo(() => new Map(database.categories.map((category) => [category.id, category])), [database.categories]);
+  const blockArea = plan ? getBlockArea(plan.layout) : undefined;
   const selectedData = plan ? findItem(plan, selected) : null;
   const selectedBlock = selectedData ? blockMap.get(selectedData.item.blockId) : undefined;
 
@@ -187,6 +190,24 @@ export function PlanEditorPage() {
       const target = event.target as HTMLElement | null;
       if (target?.matches("input, textarea, select, [contenteditable='true']")) return;
       const key = event.key.toLowerCase();
+      if (event.key === "Escape") {
+        if (propertiesOpenRef.current) {
+          event.preventDefault();
+          setPropertiesOpen(false);
+          window.requestAnimationFrame(() => propertiesTriggerRef.current?.focus());
+          return;
+        }
+        if (validationOpenRef.current) {
+          event.preventDefault();
+          setValidationOpen(false);
+          window.requestAnimationFrame(() => validationTriggerRef.current?.focus());
+          return;
+        }
+        if (publishOpen) return;
+        if (selectedElementIds.length || editing) event.preventDefault();
+        setEditing(null); setSelected(null); setSelectedElementId(null); setSelectedElementIds([]);
+        return;
+      }
       if (command && (key === "z" || key === "y")) {
         event.preventDefault(); if (key === "y" || event.shiftKey) redo(); else undo(); return;
       }
@@ -202,7 +223,7 @@ export function PlanEditorPage() {
         applyPlan({
           ...plan,
           sections: plan.sections.map((section) => ({ ...section, items: section.items.filter((item) => !removedItemIds.has(item.id)) })),
-          layout: { ...plan.layout, elements: plan.layout.elements.filter((element) => !selectedIds.has(element.id) || element.kind === "header" || element.kind === "title_block") },
+          layout: { ...plan.layout, elements: plan.layout.elements.filter((element) => !selectedIds.has(element.id) || element.kind === "title_block") },
         });
         setSelected(null); setSelectedElementId(null); setSelectedElementIds([]); return;
       }
@@ -279,37 +300,40 @@ export function PlanEditorPage() {
   const blockingValidationIssues = validationIssues.filter((issue) => issue.severity === "error");
   const warningValidationIssues = validationIssues.filter((issue) => issue.severity === "warning");
 
-  const addBlock = (blockId: string, requestedPosition?: { x: number; y: number }) => {
+  const addBlock = (blockId: string) => {
     const block = blockMap.get(blockId); if (!block) return;
     const item: PlanItem = { id: newId("item"), blockId };
     let targetSection = plan.sections.find((section) => section.categoryId === block.primaryCategoryId);
-    const sectionWasCreated = !targetSection;
     const sections = targetSection ? plan.sections.map((section) => section.id === targetSection?.id ? { ...section, items: [...section.items, item] } : section) : [...plan.sections, { id: newId("section"), categoryId: block.primaryCategoryId, items: [item] }];
     targetSection = sections.find((section) => section.items.some((candidate) => candidate.id === item.id));
     if (!targetSection) return;
     const free = findNextFreeBlockPosition(plan.layout);
-    const element: PlanBlockElement = clampElementToPage({ id: newId("layout-block"), kind: "block", sectionId: targetSection.id, itemId: item.id, blockId, x: requestedPosition?.x ?? free.x, y: requestedPosition?.y ?? free.y, width: free.width, height: free.height, zIndex: 500 + plan.layout.elements.length, semanticOrder: Math.max(0, ...plan.layout.elements.map((candidate) => candidate.semanticOrder ?? 0)) + 1 }, plan.layout) as PlanBlockElement;
-    const sectionElement = sectionWasCreated ? createSectionElement(targetSection.id, plan.layout, element.y) : undefined;
-    applyPlan({ ...plan, sections, layout: { ...plan.layout, elements: [...plan.layout.elements, ...(sectionElement ? [sectionElement] : []), element] } });
+    const element: PlanBlockElement = clampElementToPage({ id: newId("layout-block"), kind: "block", sectionId: targetSection.id, itemId: item.id, blockId, x: free.x, y: free.y, width: free.width, height: free.height, zIndex: 500 + plan.layout.elements.length, semanticOrder: Math.max(0, ...plan.layout.elements.map((candidate) => candidate.semanticOrder ?? 0)) + 1 }, plan.layout) as PlanBlockElement;
+    const hasSectionElement = plan.layout.elements.some((candidate) => candidate.kind === "section" && candidate.sectionId === targetSection?.id);
+    const sectionElement = hasSectionElement ? undefined : createSectionElement(targetSection.id, plan.layout, element.y);
+    const draftLayout = { ...plan.layout, elements: [...plan.layout.elements, ...(sectionElement ? [sectionElement] : []), element] };
+    const fitted = fitBlocksInArea(draftLayout, sections, database.categories, database.blocks);
+    setBlockFitMessage(fitted.fits ? "" : t("editor.fitBlocksTooSmall"));
+    applyPlan({ ...plan, sections, layout: fitted.layout });
     setSelected({ sectionId: targetSection.id, itemId: item.id, elementId: element.id });
     setSelectedElementId(element.id);
     setSelectedElementIds([element.id]);
   };
   const addAsset = (assetId: string, requestedPosition?: { x: number; y: number }) => {
     const asset = project.assets.find((candidate) => candidate.id === assetId); if (!asset) return;
-    const free = findNextFreeBlockPosition(plan.layout, 2_500, 1_600);
+    const free = findNextFreeNonBlockPosition(plan.layout, 2_500, 1_600);
     const element = clampElementToPage({ id: newId("layout-asset"), kind: asset.mimeType === "application/pdf" ? "pdf_page" : "image", assetId, pageNumber: asset.mimeType === "application/pdf" ? 1 : undefined, x: requestedPosition?.x ?? free.x, y: requestedPosition?.y ?? free.y, width: free.width, height: free.height, zIndex: 700 + plan.layout.elements.length, semanticOrder: Math.max(0, ...plan.layout.elements.map((candidate) => candidate.semanticOrder ?? 0)) + 1 }, plan.layout);
     applyPlan({ ...plan, includedAssetIds: [...new Set([...plan.includedAssetIds, assetId])], layout: { ...plan.layout, elements: [...plan.layout.elements, element] } });
     setSelectedElementId(element.id); setSelectedElementIds([element.id]); setSelected(null);
   };
   const addDocument = (documentType: SupportingDocumentType, requestedPosition?: { x: number; y: number }) => {
-    const free = findNextFreeBlockPosition(plan.layout, 2_300, 700);
+    const free = findNextFreeNonBlockPosition(plan.layout, 2_300, 700);
     const element = clampElementToPage({ id: newId("layout-document"), kind: "document", documentType, displayVariant: documentType === "participants" ? "participant_list" : ["alarm_plan", "first_aid", "fire_safety"].includes(documentType) ? "emergency_card" : "compact", x: requestedPosition?.x ?? free.x, y: requestedPosition?.y ?? free.y, width: free.width, height: free.height, zIndex: 650 + plan.layout.elements.length, semanticOrder: Math.max(0, ...plan.layout.elements.map((candidate) => candidate.semanticOrder ?? 0)) + 1 }, plan.layout);
     applyPlan({ ...plan, layout: { ...plan.layout, elements: [...plan.layout.elements, element] } });
     setSelectedElementId(element.id); setSelectedElementIds([element.id]); setSelected(null);
   };
   const addText = (requestedPosition?: { x: number; y: number }) => {
-    const free = findNextFreeBlockPosition(plan.layout, 2_300, 520);
+    const free = findNextFreeNonBlockPosition(plan.layout, 2_300, 520);
     const element = clampElementToPage({
       id: newId("layout-text"), kind: "text", text: { de: "Hinweis", en: "Note" },
       x: requestedPosition?.x ?? free.x, y: requestedPosition?.y ?? free.y,
@@ -321,7 +345,7 @@ export function PlanEditorPage() {
   };
   const addLibraryItem = (id: string, position?: { x: number; y: number }) => {
     const [kind, value] = id.split(":", 2);
-    if (kind === "block") addBlock(value, position);
+    if (kind === "block") addBlock(value);
     else if (kind === "asset") addAsset(value, position);
     else if (kind === "document") addDocument(value as SupportingDocumentType, position);
     else if (kind === "text") addText(position);
@@ -340,6 +364,27 @@ export function PlanEditorPage() {
   };
   const updateElement = (elementId: string, patch: Partial<PlanElement>) => {
     applyPlan({ ...plan, layout: { ...plan.layout, elements: plan.layout.elements.map((element) => element.id === elementId ? { ...element, ...patch } as PlanElement : element) } });
+  };
+  const selectOrCreateBlockArea = () => {
+    const existingArea = getBlockArea(plan.layout);
+    if (existingArea) {
+      setSelected(null); setSelectedElementId(existingArea.id); setSelectedElementIds([existingArea.id]);
+      return;
+    }
+    const newArea = createBlockAreaElement();
+    applyPlan({ ...plan, layout: { ...plan.layout, elements: [newArea, ...plan.layout.elements] } });
+    setSelected(null); setSelectedElementId(newArea.id); setSelectedElementIds([newArea.id]); setBlockFitMessage("");
+  };
+  const updateBlockLayoutMode = (layoutMode: BlockLayoutMode) => {
+    if (!blockArea) return;
+    updateElement(blockArea.id, { layoutMode } as Partial<PlanElement>);
+    setBlockFitMessage("");
+  };
+  const fitBlocks = () => {
+    if (!blockArea) return;
+    const fitted = fitBlocksInArea(plan.layout, plan.sections, database.categories, database.blocks, blockArea.layoutMode);
+    setBlockFitMessage(fitted.fits ? "" : t("editor.fitBlocksTooSmall"));
+    if (fitted.fits) applyPlan({ ...plan, layout: fitted.layout });
   };
   const updateSection = (sectionId: string, patch: Partial<PlanSection>) => {
     applyPlan({ ...plan, sections: plan.sections.map((section) => section.id === sectionId ? { ...section, ...patch } : section) });
@@ -389,7 +434,7 @@ export function PlanEditorPage() {
   };
   const removeElement = (elementId: string) => {
     const element = plan.layout.elements.find((candidate) => candidate.id === elementId); if (!element) return;
-    if (element.kind === "header" || element.kind === "title_block") return;
+    if (element.kind === "title_block") return;
     const sections = element.kind === "block" ? plan.sections.map((section) => ({ ...section, items: section.items.filter((item) => item.id !== element.itemId) })) : plan.sections;
     applyPlan({ ...plan, sections, layout: { ...plan.layout, elements: plan.layout.elements.filter((candidate) => candidate.id !== elementId) } }); setSelected(null); setSelectedElementId(null); setSelectedElementIds([]);
   };
@@ -400,7 +445,7 @@ export function PlanEditorPage() {
     applyPlan({
       ...plan,
       sections: plan.sections.map((section) => ({ ...section, items: section.items.filter((item) => !removedItemIds.has(item.id)) })),
-      layout: { ...plan.layout, elements: plan.layout.elements.filter((element) => !ids.has(element.id) || element.kind === "header" || element.kind === "title_block") },
+      layout: { ...plan.layout, elements: plan.layout.elements.filter((element) => !ids.has(element.id) || element.kind === "title_block") },
     });
     setSelected(null); setSelectedElementId(null); setSelectedElementIds([]);
   };
@@ -465,7 +510,7 @@ export function PlanEditorPage() {
         const duplicateItem = { ...structuredClone(item), id: newId("item") };
         sections = sections.map((section) => section.id === element.sectionId ? { ...section, items: [...section.items, duplicateItem] } : section);
         duplicates.push(clampElementToPage({ ...element, id: newId("layout-block"), itemId: duplicateItem.id, x: element.x + plan.layout.gridSize * 4, y: element.y + plan.layout.gridSize * 4, zIndex: element.zIndex + 1 }, plan.layout));
-      } else if (element.kind !== "title_block" && element.kind !== "header") {
+      } else if (element.kind !== "title_block" && element.kind !== "header" && element.kind !== "block_area") {
         duplicates.push(clampElementToPage({ ...structuredClone(element), id: newId(`layout-${element.kind}`), x: element.x + plan.layout.gridSize * 4, y: element.y + plan.layout.gridSize * 4, zIndex: element.zIndex + 1 }, plan.layout));
       }
     });
@@ -511,12 +556,19 @@ export function PlanEditorPage() {
         <button className="icon-button" onClick={() => updateSelectedElements((element) => ({ ...element, zIndex: Math.max(0, element.zIndex - 1) }))} aria-label={t("editor.sendBackward")}><ArrowDown size={16} /></button>
         <button className="icon-button" onClick={() => updateSelectedElements((element) => ({ ...element, locked: !element.locked }))} aria-label={selectedElement?.locked ? t("editor.unlock") : t("editor.lock")}>{selectedElement?.locked ? <Unlock size={16} /> : <Lock size={16} />}</button>
         <button className="icon-button" onClick={duplicateSelectedElements} aria-label={t("common.duplicate")}><Copy size={16} /></button>
-        <button className="icon-button" onClick={removeSelectedElements} disabled={selectedElementIds.every((id) => { const element = plan.layout.elements.find((candidate) => candidate.id === id); return element?.kind === "header" || element?.kind === "title_block"; })} aria-label={t("editor.remove")}><Trash2 size={16} /></button>
+        <button className="icon-button" onClick={removeSelectedElements} disabled={selectedElementIds.every((id) => plan.layout.elements.find((candidate) => candidate.id === id)?.kind === "title_block")} aria-label={t("editor.remove")}><Trash2 size={16} /></button>
         {selectedElementIds.length === 1 && selectedElement && <div className="toolbar-popover-wrap" data-toolbar-popover>
           <button ref={propertiesTriggerRef} className={`icon-button ${propertiesOpen ? "is-active" : ""}`} onClick={() => { setPropertiesOpen((open) => !open); setValidationOpen(false); }} aria-expanded={propertiesOpen} aria-label={t("editor.elementOptions")}><SlidersHorizontal size={16} /></button>
           {propertiesOpen && <div className="toolbar-popover element-properties-popover" role="dialog" aria-label={t("editor.elementOptions")}><ElementInspector element={selectedElement} plan={plan} project={project} block={selectedBlock} categories={database.categories} selectedData={selectedData} onUpdateElement={(patch) => updateElement(selectedElement.id, patch)} onUpdateSection={updateSection} onUpdateItem={updateSelectedItem} onRemove={() => removeElement(selectedElement.id)} t={t} /></div>}
         </div>}
       </div>}
+      <div className="editor-toolbar-group block-layout-tools">
+        <Button variant="ghost" size="small" onClick={selectOrCreateBlockArea} aria-label={blockArea ? t("editor.editBlockArea") : t("editor.defineBlockArea")}><Scan size={15} /><span className="toolbar-action-label">{blockArea ? t("editor.blockArea") : t("editor.defineBlockArea")}</span></Button>
+        <select className="block-layout-mode-select" aria-label={t("editor.blockLayoutMode")} value={blockArea?.layoutMode ?? "best_fit"} onChange={(event) => updateBlockLayoutMode(event.target.value as BlockLayoutMode)} disabled={!blockArea}>
+          <option value="vertical">{t("editor.layoutVertical")}</option><option value="horizontal">{t("editor.layoutHorizontal")}</option><option value="best_fit">{t("editor.layoutBestFit")}</option>
+        </select>
+        <Button aria-label={t("editor.fitBlocks")} title={t("editor.fitBlocks")} variant="secondary" size="small" onClick={fitBlocks} disabled={!blockArea || presentBlockIds.size === 0}><LayoutGrid size={15} /><span className="toolbar-action-label">{t("editor.fitBlocks")}</span></Button>
+      </div>
       <div className="editor-toolbar-group"><Button className="fit-plan-action" variant="ghost" size="small" onClick={fitPlan} title={`${t("editor.fitPlan")} · ⇧1`} aria-label={t("editor.fitPlan")}><Maximize2 size={15} /><span className="toolbar-action-label">{t("editor.fitPlan")}</span></Button><button className="icon-button" onClick={() => setZoomAroundPoint(stepCanvasZoom(zoom, "out"))} disabled={zoom <= MIN_CANVAS_ZOOM} aria-label={t("editor.zoomOut")}><ZoomOut size={17} /></button><Badge>{Math.round(zoom * 100)}%</Badge><button className="icon-button" onClick={() => setZoomAroundPoint(stepCanvasZoom(zoom, "in"))} disabled={zoom >= MAX_CANVAS_ZOOM} aria-label={t("editor.zoomIn")}><ZoomIn size={17} /></button></div>
       <div className="toolbar-popover-wrap" data-toolbar-popover>
         <button ref={validationTriggerRef} className="button button-secondary button-small" onClick={() => { setValidationOpen((open) => !open); setPropertiesOpen(false); }} aria-expanded={validationOpen} aria-label={t("editor.validation")}><TriangleAlert size={14} /><span className="toolbar-action-label">{t("editor.validation")}</span><Badge tone={blockingValidationIssues.length ? "danger" : warningValidationIssues.length ? "warning" : "success"}>{validationIssues.filter((issue) => issue.severity !== "information").length}</Badge></button>
@@ -530,8 +582,9 @@ export function PlanEditorPage() {
     <div className="editor-workspace">
       {libraryOpen && <aside className="editor-sidebar"><div className="editor-pane-header"><h2>{t("editor.catalog")}</h2><div className="search-shell"><Search size={15} /><input className="search-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("editor.searchBlocks")} aria-label={t("editor.searchBlocks")} /></div></div><div className="editor-library"><CategoryLibrary categories={database.categories.filter((category) => category.lifecycle === "active")} blocks={activeBlocks} expanded={expandedCategories} locale={plan.documentLocale} usageCounts={blockUsageCounts} onToggle={(id) => setExpandedCategories((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; })} onAdd={(id) => addBlock(id)} t={t} /><LibraryGroup title={t("editor.projectFiles")} defaultOpen>{project.assets.map((asset) => <DraggableLibraryItem key={asset.id} id={`asset:${asset.id}`} title={asset.filename} subtitle={asset.mimeType === "application/pdf" ? t("editor.pdfPageOne") : t("editor.imageFile")} icon={asset.mimeType === "application/pdf" ? <FileOutput size={16} /> : <Image size={16} />} onAdd={() => addAsset(asset.id)} addLabel={t("common.add")} />)}</LibraryGroup><LibraryGroup title={t("editor.documentElements")}>{documentTypes.map((type) => <DraggableLibraryItem key={type} id={`document:${type}`} title={t(`documents.${type}`)} subtitle={t("editor.placeDocument")} icon={<FileOutput size={16} />} onAdd={() => addDocument(type)} addLabel={t("common.add")} />)}</LibraryGroup><LibraryGroup title={t("editor.annotations")}><DraggableLibraryItem id="text:note" title={t("editor.textNote")} subtitle={t("editor.placeText")} icon={<Type size={16} />} onAdd={() => addText()} addLabel={t("common.add")} /></LibraryGroup></div></aside>}
       <main ref={canvasShellRef} className="editor-canvas-shell">
+        {blockFitMessage && <div className="block-fit-message" role="status"><TriangleAlert size={14} />{blockFitMessage}</div>}
         <div className="canvas-stage" style={{ width: A0_LANDSCAPE_WIDTH * CSS_PIXELS_PER_LAYOUT_UNIT * zoom, height: A0_LANDSCAPE_HEIGHT * CSS_PIXELS_PER_LAYOUT_UNIT * zoom }}>
-          <PlanCanvas ref={canvasRef} plan={plan} project={project} zoom={zoom} blockMap={blockMap} categoryMap={categoryMap} selectedIds={selectedElementIds} editing={editing} focusedIssueElementId={focusedIssueElementId} setElementRef={(id, element) => { if (element) elementRefs.current.set(id, element); else elementRefs.current.delete(id); }} onSelect={(element) => { setSelectedElementId(element.id); setSelectedElementIds([element.id]); if (element.kind === "block") setSelected({ sectionId: element.sectionId, itemId: element.itemId, elementId: element.id }); else setSelected(null); }} onEditStart={(elementId, field) => setEditing({ elementId, field })} onEditCommit={commitInlineEdit} onEditCancel={() => setEditing(null)} t={t} />
+          <PlanCanvas ref={canvasRef} plan={plan} project={project} zoom={zoom} blockMap={blockMap} categoryMap={categoryMap} selectedIds={selectedElementIds} editing={editing} focusedIssueElementId={focusedIssueElementId} setElementRef={(id, element) => { if (element) elementRefs.current.set(id, element); else elementRefs.current.delete(id); }} onSelect={(element) => { setSelectedElementId(element.id); setSelectedElementIds([element.id]); if (element.kind === "block") setSelected({ sectionId: element.sectionId, itemId: element.itemId, elementId: element.id }); else setSelected(null); }} onClearSelection={() => { setEditing(null); setSelected(null); setSelectedElementId(null); setSelectedElementIds([]); }} onEditStart={(elementId, field) => setEditing({ elementId, field })} onEditCommit={commitInlineEdit} onEditCancel={() => setEditing(null)} t={t} />
         </div>
         <Selecto
           dragContainer=".editor-canvas-shell"
@@ -578,7 +631,7 @@ export function PlanEditorPage() {
           onDragEnd={({ target }) => { const bounds = readElementBounds(target); target.style.transform = ""; if (!bounds) return; flushSync(() => finishTransform(clampElementToPage({ ...selectedElement, x: bounds.x, y: bounds.y }, plan.layout))); setMoveableRevision((revision) => revision + 1); }}
           onResizeStart={() => { transformSnapshot.current = structuredClone(plan); }}
           onResize={({ target, width, height, drag }) => { target.style.width = `${width}px`; target.style.height = `${height}px`; target.style.transform = drag.transform; }}
-          onResizeEnd={({ target, lastEvent }) => { if (!lastEvent) return; const bounds = readElementBounds(target); target.style.transform = ""; target.style.width = ""; target.style.height = ""; if (!bounds) return; flushSync(() => finishTransform(clampElementToPage({ ...selectedElement, x: bounds.x, y: bounds.y, width: Math.max(600, bounds.width), height: Math.max(240, bounds.height) }, plan.layout))); setMoveableRevision((revision) => revision + 1); }}
+          onResizeEnd={({ target, lastEvent }) => { if (!lastEvent) return; const bounds = readElementBounds(target); target.style.transform = ""; target.style.width = ""; target.style.height = ""; if (!bounds) return; const minimumWidth = selectedElement.kind === "block_area" ? 2_400 : 600; const minimumHeight = selectedElement.kind === "block_area" ? 1_600 : 240; flushSync(() => finishTransform(clampElementToPage({ ...selectedElement, x: bounds.x, y: bounds.y, width: Math.max(minimumWidth, bounds.width), height: Math.max(minimumHeight, bounds.height) }, plan.layout))); setBlockFitMessage(""); setMoveableRevision((revision) => revision + 1); }}
         />}
         {unlockedSelectedTargets.length > 1 && !editing && <Moveable
           key={`group-${selectedElementIds.join("-")}-${moveableRevision}`}
@@ -648,6 +701,7 @@ function ElementInspector({ element, plan, project, block, categories, selectedD
       <div className="inspector-section"><label>{t("editor.expertNote")}</label><textarea aria-label={t("editor.expertNote")} value={selectedData.item.expertNote ?? ""} onChange={(event) => onUpdateItem({ expertNote: event.target.value })} /></div>
       <Link className="text-link" to="/catalog">{t("editor.editCatalogDefault")}</Link>
     </>}
+    {element.kind === "block_area" && <><p className="field-help">{t("editor.blockAreaHelp")}</p><div className="inspector-section"><label>{t("editor.blockLayoutMode")}</label><select aria-label={t("editor.blockLayoutMode")} value={element.layoutMode} onChange={(event) => onUpdateElement({ layoutMode: event.target.value as BlockLayoutMode } as Partial<PlanElement>)}><option value="vertical">{t("editor.layoutVertical")}</option><option value="horizontal">{t("editor.layoutHorizontal")}</option><option value="best_fit">{t("editor.layoutBestFit")}</option></select></div></>}
     {element.kind === "section" && section && <div className="inspector-section"><label>{t("editor.sectionTitle")}</label><input aria-label={t("editor.sectionTitle")} value={section.titleOverrides?.[plan.documentLocale] ?? ""} placeholder={t("editor.defaultCategoryTitle")} onChange={(event) => onUpdateSection(section.id, { titleOverrides: { ...section.titleOverrides, [plan.documentLocale]: event.target.value } })} /></div>}
     {element.kind === "text" && <div className="inspector-section"><label>{t("editor.textContent")}</label><textarea aria-label={t("editor.textContent")} value={element.text[plan.documentLocale] ?? ""} onChange={(event) => onUpdateElement({ text: { ...element.text, [plan.documentLocale]: event.target.value } })} /></div>}
     {element.kind === "header" && <><p className="field-help">{t("editor.inlineEditHint")}</p><div className="inspector-section"><label>{t("editor.headerTitle")}</label><input aria-label={t("editor.headerTitle")} value={element.titleText?.[plan.documentLocale] ?? plan.title} onChange={(event) => onUpdateElement({ titleText: { ...element.titleText, [plan.documentLocale]: event.target.value } })} /></div><Button variant="secondary" size="small" onClick={() => onUpdateElement({ brandText: undefined, titleText: undefined, projectNameText: undefined, projectDetailsText: undefined, statusText: undefined })}>{t("editor.restoreAutomaticContent")}</Button></>}
@@ -658,7 +712,7 @@ function ElementInspector({ element, plan, project, block, categories, selectedD
       {element.kind === "pdf_page" && <div className="inspector-section"><label>{t("editor.pageNumber")}</label><input aria-label={t("editor.pageNumber")} type="number" min="1" max={asset?.pageCount ?? 1} value={element.pageNumber ?? 1} onChange={(event) => onUpdateElement({ pageNumber: Math.max(1, Math.min(asset?.pageCount ?? 1, Number(event.target.value))) })} /><small>{t("editor.pageCount", { count: asset?.pageCount ?? 1 })}</small></div>}
     </>}
     {element.kind === "document" && <div className="inspector-section"><label>{t("editor.displayVariant")}</label><select aria-label={t("editor.displayVariant")} value={element.displayVariant ?? "compact"} onChange={(event) => onUpdateElement({ displayVariant: event.target.value as typeof element.displayVariant })}><option value="compact">{t("editor.variantCompact")}</option><option value="emergency_card">{t("editor.variantEmergency")}</option><option value="participant_list">{t("editor.variantParticipants")}</option><option value="qr_link">{t("editor.variantQr")}</option></select></div>}
-    <div className="inspector-actions"><Button variant="secondary" size="small" onClick={() => onUpdateElement({ locked: !element.locked })}>{element.locked ? <Unlock size={14} /> : <Lock size={14} />}{element.locked ? t("editor.unlock") : t("editor.lock")}</Button>{element.kind !== "title_block" && element.kind !== "header" && <Button variant="danger" size="small" onClick={onRemove}><Trash2 size={14} />{t("editor.remove")}</Button>}</div>
+    <div className="inspector-actions"><Button variant="secondary" size="small" onClick={() => onUpdateElement({ locked: !element.locked })}>{element.locked ? <Unlock size={14} /> : <Lock size={14} />}{element.locked ? t("editor.unlock") : t("editor.lock")}</Button>{element.kind !== "title_block" && <Button variant="danger" size="small" onClick={onRemove}><Trash2 size={14} />{t("editor.remove")}</Button>}</div>
   </>;
 }
 
@@ -685,7 +739,7 @@ function DraggableLibraryItem({ id, title, subtitle, icon, onAdd, addLabel }: { 
   </article>;
 }
 
-const PlanCanvas = function PlanCanvas({ ref, plan, project, zoom, blockMap, categoryMap, selectedIds, editing, focusedIssueElementId, setElementRef, onSelect, onEditStart, onEditCommit, onEditCancel, t }: {
+const PlanCanvas = function PlanCanvas({ ref, plan, project, zoom, blockMap, categoryMap, selectedIds, editing, focusedIssueElementId, setElementRef, onSelect, onClearSelection, onEditStart, onEditCommit, onEditCancel, t }: {
   ref: React.Ref<HTMLDivElement>;
   plan: Plan;
   project: NonNullable<ReturnType<typeof useApp>["database"]["projects"][number]>;
@@ -697,6 +751,7 @@ const PlanCanvas = function PlanCanvas({ ref, plan, project, zoom, blockMap, cat
   focusedIssueElementId: string | null;
   setElementRef: (id: string, element: HTMLElement | null) => void;
   onSelect: (element: PlanElement) => void;
+  onClearSelection: () => void;
   onEditStart: (elementId: string, field: InlineField) => void;
   onEditCommit: (elementId: string, field: InlineField, value: string) => void;
   onEditCancel: () => void;
@@ -707,7 +762,7 @@ const PlanCanvas = function PlanCanvas({ ref, plan, project, zoom, blockMap, cat
     setNodeRef(node);
     if (typeof ref === "function") ref(node); else if (ref) ref.current = node;
   };
-  return <div ref={combinedRef} className="wysiwyg-page" style={{ transform: `scale(${zoom})` }} onPointerDown={(event) => { if (event.target === event.currentTarget) onEditCancel(); }}>
+  return <div ref={combinedRef} className="wysiwyg-page" style={{ transform: `scale(${zoom})` }} onPointerDown={(event) => { if (event.target === event.currentTarget) onClearSelection(); }}>
     {plan.layout.elements.filter((element) => !element.hidden).map((element) => <PlanElementView
       key={element.id}
       element={element}
@@ -755,6 +810,9 @@ function PlanElementView({ element, plan, project, blockMap, categoryMap, select
     onClick: (event: React.MouseEvent) => { event.stopPropagation(); onSelect(); },
   };
   const isEditing = (field: InlineField) => editing?.elementId === element.id && editing.field === field;
+  if (element.kind === "block_area") {
+    return <div {...interactiveProps} role="button" aria-pressed={selected} aria-label={t("editor.blockArea")} className={`${interactiveProps.className} canvas-block-area`}><span>{t("editor.blockArea")}</span></div>;
+  }
   if (element.kind === "header") {
     const status = plan.status === "published" ? translate(plan.documentLocale, "status.published") : translate(plan.documentLocale, "editor.workingDraft");
     return <header {...interactiveProps} className={`${interactiveProps.className} plan-header canvas-plan-header`}>

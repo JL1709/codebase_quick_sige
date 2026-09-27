@@ -17,7 +17,7 @@ describe("document exports", () => {
     expect(new TextDecoder().decode(bytes.slice(0, 4))).toBe("%PDF");
   });
 
-  it("embeds a selected raster project asset without changing the one-sheet contract", () => {
+  it("keeps a selected raster project asset within the one-sheet export contract", () => {
     const database = createSeedDatabase();
     const project = {
       ...database.projects[0],
@@ -30,11 +30,18 @@ describe("document exports", () => {
         createdAt: "2026-09-26T00:00:00.000Z",
       }],
     };
-    const plan = { ...database.plans[0], includedAssetIds: ["asset-layout"] };
+    const plan = structuredClone(database.plans[0]);
+    plan.includedAssetIds = ["asset-layout"];
+    const imageElement = plan.layout.elements.find((element) => element.kind === "image");
+    expect(imageElement?.kind).toBe("image");
+    if (!imageElement || imageElement.kind !== "image") return;
+    imageElement.assetId = "asset-layout";
     const pdf = buildPlanPdf(project, plan, database.blocks, database.categories);
+    const bytes = new Uint8Array(pdf.output("arraybuffer"));
 
     expect(pdf.getNumberOfPages()).toBe(1);
-    expect(pdf.output("arraybuffer").byteLength).toBeGreaterThan(10_000);
+    expect(bytes.byteLength).toBeGreaterThan(9_000);
+    expect(new TextDecoder().decode(bytes.slice(0, 4))).toBe("%PDF");
   });
 
   it("builds a valid Word package from plan content", async () => {

@@ -52,7 +52,7 @@ export function createPlanValidationIssues({ plan, project, blocks, documentConf
     });
   };
 
-  for (const element of plan.layout.elements.filter((candidate) => !candidate.hidden)) {
+  for (const element of plan.layout.elements.filter((candidate) => !candidate.hidden && candidate.kind !== "block_area")) {
     const outsideSafeArea = element.x < plan.layout.safeMargin || element.y < plan.layout.safeMargin
       || element.x + element.width > plan.layout.width - plan.layout.safeMargin
       || element.y + element.height > plan.layout.height - plan.layout.safeMargin;

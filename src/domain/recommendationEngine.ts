@@ -142,7 +142,7 @@ export function createPlanFromAssessment(
     documentLocale: project.documentLocale,
     status: "draft",
     sections,
-    layout: createLayoutFromSections(sections),
+    layout: createLayoutFromSections(sections, categories, blocks),
     recommendations,
     requirementAssessment: assessRequirements(project, answers),
     supportingDocuments: DEFAULT_SUPPORTING_DOCUMENTS.map((document) => ({ ...document })),

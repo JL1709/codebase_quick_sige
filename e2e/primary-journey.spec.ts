@@ -397,23 +397,43 @@ test("Templates is separate from Settings and retains complete template manageme
   await expect(page.getByText("Word templates")).toBeVisible();
   await expect(page.getByText("Placeholder reference")).toBeVisible();
   await page.getByRole("button", { name: "Add template" }).click();
+  await expect(page.getByText("Enter a template name.")).toBeVisible();
+  await page.getByRole("button", { name: "Explain field types" }).click();
+  const fieldTypeHelp = page.getByRole("dialog").filter({ hasText: "Understanding field types" });
+  await expect(fieldTypeHelp.getByText("Address", { exact: true })).toBeVisible();
+  await expect(fieldTypeHelp.getByText("Project participants", { exact: true })).toBeVisible();
+  await expect(fieldTypeHelp.getByText("+ Add another participant", { exact: true })).toBeVisible();
+  await fieldTypeHelp.locator(".modal-footer").getByRole("button", { name: "Close", exact: true }).click();
   await page.getByLabel("Template name").fill("E2E project details");
   await page.getByRole("button", { name: "Add entry" }).click();
-  await page.getByPlaceholder("Label").fill("Permit number");
+  await expect(page.getByText("Enter a label.")).toBeVisible();
+  await page.getByPlaceholder("Label").first().fill("Permit number");
+  await page.getByRole("button", { name: "Add entry" }).click();
+  await page.getByPlaceholder("Label").last().fill("Permit number");
+  await expect(page.getByText("This label is already used in this template.")).toHaveCount(2);
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+  await page.getByPlaceholder("Label").last().fill("Site owner");
+  await expect(page.getByText("This label is already used in this template.")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
   await expect(page.getByText("Template type")).toHaveCount(0);
   await expect(page.locator(".form-error")).toHaveCount(0);
-  await page.locator(".template-entry-menu summary").click();
-  await expect(page.getByText("{{INS qs.overview.e2e_project_details.permit_number}}", { exact: true })).toBeVisible();
+  const firstEntryMenu = page.locator(".template-entry-menu").first();
+  await firstEntryMenu.locator("summary").click();
+  await expect(firstEntryMenu.getByText("{{INS qs.overview.e2e_project_details.permit_number}}", { exact: true })).toBeVisible();
+  await page.getByLabel("Template name").click();
+  await expect(firstEntryMenu.locator(".template-entry-menu-popover")).not.toBeVisible();
+  await firstEntryMenu.locator("summary").click();
+  await expect(firstEntryMenu.getByRole("button", { name: "Delete", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("E2E project details")).toBeVisible();
   await page.reload();
   await expect(page.getByText("E2E project details")).toBeVisible();
   const templateRow = page.locator(".template-row").filter({ hasText: "E2E project details" });
-  await expect(templateRow.getByRole("button", { name: /delete permanently/i })).toHaveCount(1);
+  await expect(templateRow.getByRole("button", { name: /^delete:/i })).toHaveCount(1);
   await expect(templateRow.getByRole("button", { name: /Duplicate/ })).toHaveCount(0);
-  await templateRow.getByRole("button", { name: /delete permanently/i }).click();
+  await templateRow.getByRole("button", { name: /^delete:/i }).click();
   await expect(page.getByRole("heading", { name: "Delete template" })).toBeVisible();
-  await page.getByRole("button", { name: "Delete permanently", exact: true }).click();
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(page.getByText("E2E project details")).toHaveCount(0);
 });
 
@@ -500,26 +520,22 @@ test("A0 canvas fits, zooms deeply, edits structural content, and navigates vali
   await expect.poll(async () => Number((await zoomBadge.textContent())?.replace("%", "") ?? 0)).toBeGreaterThan(125);
 
   await page.getByRole("button", { name: "Fit plan" }).click();
-  await page.locator(".plan-header-brand").dblclick({ force: true });
-  await page.getByLabel("Brand label").fill("QS Safety");
-  await page.getByLabel("Brand label").press("Enter");
-  await expect(page.locator(".plan-header-brand")).toHaveText("QS Safety");
-  await page.keyboard.press(browserName === "webkit" ? "Meta+z" : "Control+z");
-  await expect(page.locator(".plan-header-brand")).toHaveText("QUICKSiGe");
-  await page.keyboard.press(browserName === "webkit" ? "Meta+Shift+z" : "Control+y");
-  await expect(page.locator(".plan-header-brand")).toHaveText("QS Safety");
-
   const firstSectionTitle = page.locator('.canvas-section [data-inline-field="sectionTitle"]').first();
+  const originalSectionTitle = await firstSectionTitle.textContent();
   await firstSectionTitle.dblclick({ force: true });
   await page.getByLabel("Section heading").fill("Custom coordination");
   await page.getByLabel("Section heading").press("Enter");
+  await expect(firstSectionTitle).toHaveText("Custom coordination");
+  await page.keyboard.press(browserName === "webkit" ? "Meta+z" : "Control+z");
+  await expect(firstSectionTitle).toHaveText(originalSectionTitle ?? "");
+  await page.keyboard.press(browserName === "webkit" ? "Meta+Shift+z" : "Control+y");
   await expect(firstSectionTitle).toHaveText("Custom coordination");
   await expect.poll(() => page.evaluate(() => {
     const database = JSON.parse(window.localStorage.getItem("quicksige.database.v3") ?? "{}") as { plans?: Array<{ projectId: string; sections: Array<{ titleOverrides?: Record<string, string> }> }> };
     return database.plans?.find((candidate) => candidate.projectId === "project-logistics-center")?.sections[0]?.titleOverrides?.de;
   })).toBe("Custom coordination");
   await page.reload();
-  await expect(page.locator(".plan-header-brand")).toHaveText("QS Safety");
+  await expect(page.locator(".canvas-plan-header")).toHaveCount(0);
   await expect(page.locator('.canvas-section [data-inline-field="sectionTitle"]').first()).toHaveText("Custom coordination");
 
   await page.getByRole("button", { name: "Validation" }).click();
@@ -535,15 +551,69 @@ test("A0 canvas fits, zooms deeply, edits structural content, and navigates vali
   await expect(page.getByText(/Revision B was published/)).toBeVisible();
   const revisionContent = await page.evaluate(() => {
     const database = JSON.parse(window.localStorage.getItem("quicksige.database.v3") ?? "{}") as {
-      revisions?: Array<{ changeSummary: string; snapshot: { plan: { sections: Array<{ titleOverrides?: Record<string, string> }>; layout: { elements: Array<{ kind: string; brandText?: Record<string, string> }> } } } }>;
+      revisions?: Array<{ changeSummary: string; snapshot: { plan: { sections: Array<{ titleOverrides?: Record<string, string> }> } } }>;
     };
     const revision = database.revisions?.find((candidate) => candidate.changeSummary === "Structural canvas edits");
-    return {
-      brand: revision?.snapshot.plan.layout.elements.find((element) => element.kind === "header")?.brandText?.de,
-      sectionTitle: revision?.snapshot.plan.sections[0]?.titleOverrides?.de,
-    };
+    return revision?.snapshot.plan.sections[0]?.titleOverrides?.de;
   });
-  expect(revisionContent).toEqual({ brand: "QS Safety", sectionTitle: "Custom coordination" });
+  expect(revisionContent).toBe("Custom coordination");
+});
+
+test("block fitting preserves free elements and canvas selection follows desktop conventions", async ({ page }) => {
+  await useEnglishInterface(page);
+  await page.goto("/projects/project-logistics-center/plan");
+  await expect(page.locator(".canvas-plan-header")).toHaveCount(0);
+  await expect(page.locator(".canvas-block-area")).toBeVisible();
+
+  const originalAssetGeometry = await page.evaluate(() => {
+    const database = JSON.parse(window.localStorage.getItem("quicksige.database.v3") ?? "{}") as { plans?: Array<{ projectId: string; layout: { elements: Array<{ id: string; kind: string; x: number; y: number; width: number; height: number }> } }> };
+    const plan = database.plans?.find((candidate) => candidate.projectId === "project-logistics-center");
+    return plan?.layout.elements.filter((element) => ["image", "pdf_page", "document"].includes(element.kind)).map(({ id, x, y, width, height }) => ({ id, x, y, width, height }));
+  });
+
+  for (const option of ["Vertical", "Horizontal", "Best space usage"]) {
+    await page.getByLabel("Block arrangement").selectOption({ label: option });
+    await page.getByRole("button", { name: "Fit blocks" }).click();
+    await expect.poll(() => page.evaluate(() => {
+      const database = JSON.parse(window.localStorage.getItem("quicksige.database.v3") ?? "{}") as { plans?: Array<{ projectId: string; layout: { elements: Array<{ kind: string; x: number; y: number; width: number; height: number; layoutMode?: string }> } }> };
+      const elements = database.plans?.find((candidate) => candidate.projectId === "project-logistics-center")?.layout.elements ?? [];
+      const area = elements.find((element) => element.kind === "block_area");
+      const blocks = elements.filter((element) => element.kind === "block");
+      return Boolean(area && blocks.length && new Set(blocks.map((block) => `${block.width}x${block.height}`)).size === 1 && blocks.every((block) => block.x >= area.x && block.y >= area.y && block.x + block.width <= area.x + area.width && block.y + block.height <= area.y + area.height));
+    })).toBe(true);
+  }
+
+  const assetGeometryAfterFit = await page.evaluate(() => {
+    const database = JSON.parse(window.localStorage.getItem("quicksige.database.v3") ?? "{}") as { plans?: Array<{ projectId: string; layout: { elements: Array<{ id: string; kind: string; x: number; y: number; width: number; height: number }> } }> };
+    const plan = database.plans?.find((candidate) => candidate.projectId === "project-logistics-center");
+    return plan?.layout.elements.filter((element) => ["image", "pdf_page", "document"].includes(element.kind)).map(({ id, x, y, width, height }) => ({ id, x, y, width, height }));
+  });
+  expect(assetGeometryAfterFit).toEqual(originalAssetGeometry);
+
+  const firstBlock = page.locator(".canvas-block").first();
+  await firstBlock.click({ force: true });
+  await expect(firstBlock).toHaveClass(/is-selected/);
+  await page.keyboard.press("Escape");
+  await expect(firstBlock).not.toHaveClass(/is-selected/);
+
+  await page.evaluate(() => {
+    const storageKey = "quicksige.database.v3";
+    const database = JSON.parse(window.localStorage.getItem(storageKey) ?? "{}") as { plans?: Array<{ projectId: string; layout: { elements: unknown[] } }> };
+    const plan = database.plans?.find((candidate) => candidate.projectId === "project-logistics-center");
+    plan?.layout.elements.push({ id: "legacy-header", kind: "header", x: 180, y: 180, width: 11_530, height: 520, zIndex: 1_900, locked: false });
+    window.localStorage.setItem(storageKey, JSON.stringify(database));
+  });
+  await page.reload();
+  const legacyHeader = page.locator('[data-element-id="legacy-header"]');
+  await expect(legacyHeader).toBeVisible();
+  await legacyHeader.click({ force: true });
+  await page.getByRole("button", { name: "Remove from plan" }).click();
+  await expect(legacyHeader).toHaveCount(0);
+  await page.getByRole("button", { name: /Undo/ }).click();
+  await expect(legacyHeader).toBeVisible();
+  await legacyHeader.click({ force: true });
+  await page.keyboard.press("Delete");
+  await expect(legacyHeader).toHaveCount(0);
 });
 
 test("contextual toolbar covers every seeded canvas element family and drag selection stays synchronized", async ({ page }) => {
@@ -554,7 +624,7 @@ test("contextual toolbar covers every seeded canvas element family and drag sele
   await page.getByRole("button", { name: "Add: Text box" }).click();
   await expect(page.locator(".canvas-text")).toHaveCount(1);
   for (const selector of [
-    ".canvas-plan-header",
+    ".canvas-block-area",
     ".canvas-section",
     ".canvas-block",
     '[data-element-id="layout-demo-image"]',

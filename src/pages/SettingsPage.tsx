@@ -1,12 +1,13 @@
 import { DndContext, PointerSensor, pointerWithin, type DragEndEvent, type DragOverEvent, useDraggable, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
-import { ArchiveRestore, Copy, Database, Download, FilePlus2, GripVertical, Languages, MoreVertical, Pencil, Plus, RotateCcw, Search, ShieldCheck, Trash2 } from "lucide-react";
-import { type ChangeEvent, type CSSProperties, type FormEvent, useMemo, useState } from "react";
+import { ArchiveRestore, CircleHelp, Copy, Database, Download, FilePlus2, GripVertical, Languages, MoreVertical, Pencil, Plus, RotateCcw, Search, ShieldCheck, Trash2 } from "lucide-react";
+import { type ChangeEvent, type CSSProperties, type FormEvent, useEffect, useMemo, useState } from "react";
 import { Button, Modal, PageHeader } from "../components/Ui";
 import { getBlob, saveBlob } from "../data/blobRepository";
 import {
   countOverviewEntries,
   moveOverviewEntry,
+  normalizeOverviewKey,
   overviewEntryClipboardValue,
   overviewEntryPath,
   validateOverviewTemplate,
@@ -88,19 +89,19 @@ export function TemplatesPage() {
             <div><strong>{template.name}</strong><span>{countOverviewEntries(template.entries)} {t("overview.entries")}</span></div>
             <div className="row-actions">
               <Button size="small" variant="secondary" onClick={() => openOverview(template)}><Pencil size={14} />{t("common.edit")}</Button>
-              <button className="icon-button danger-icon" onClick={() => setOverviewToDelete(template)} aria-label={`${t("common.deletePermanently")}: ${template.name}`}><Trash2 size={14} /></button>
+              <button className="icon-button danger-icon" onClick={() => setOverviewToDelete(template)} aria-label={`${t("common.delete")}: ${template.name}`}><Trash2 size={14} /></button>
             </div>
           </article>
         ))}
       </div>
     </section>
 
-    <section className="settings-section"><div className="settings-section-header"><div><h2>{t("templates.wordTitle")}</h2><p>{t("templates.wordText")}</p></div><div className="row-actions"><Button variant="secondary" onClick={() => setShowArchived((value) => !value)}><ArchiveRestore size={15} />{t("templates.archived")}</Button><Button onClick={() => openDocument()}><FilePlus2 size={15} />{t("templates.uploadWord")}</Button></div></div><div className="template-list">{database.documentTemplates.filter((template) => showArchived || template.lifecycle !== "archived").map((template) => <article className="template-row" key={template.id}><div><strong>{template.name}</strong><span>{t(`documents.${template.documentType}`)} · {t(`common.language.${template.locale}`)} · {template.origin === "standard" ? t("templates.standard") : template.filename} · v{template.revision ?? 1}{template.lifecycle === "archived" ? ` · ${t("common.archived")}` : ""}</span></div><div className="row-actions"><Button size="small" variant="secondary" onClick={() => void import("../documents/templateEngine").then(async ({ createStandardTemplate, downloadBlob }) => { const blob = template.origin === "standard" ? await createStandardTemplate(template.documentType, template.locale) : template.blobId ? await getBlob(template.blobId) : undefined; if (blob) downloadBlob(blob, template.filename); })}><Download size={14} />{t("common.download")}</Button><button className="icon-button" onClick={() => void duplicateDocumentTemplate(template)} aria-label={t("common.duplicate")}><Copy size={14} /></button>{template.origin === "custom" && <><Button size="small" variant="secondary" onClick={() => openDocument(template)}><Pencil size={14} />{t("common.edit")}</Button>{template.lifecycle === "archived" ? <><button className="icon-button" onClick={() => saveDocumentTemplate({ ...template, lifecycle: "active", updatedAt: new Date().toISOString() })} aria-label={t("common.restore")}><ArchiveRestore size={14} /></button><button className="icon-button danger-icon" onClick={() => { if (window.confirm(t("common.confirmDelete"))) removeDocumentTemplate(template); }} aria-label={t("common.deletePermanently")}><Trash2 size={14} /></button></> : <button className="icon-button danger-icon" onClick={() => saveDocumentTemplate({ ...template, lifecycle: "archived", updatedAt: new Date().toISOString() })} aria-label={t("common.archive")}><Trash2 size={14} /></button>}</>}</div></article>)}</div></section>
+    <section className="settings-section"><div className="settings-section-header"><div><h2>{t("templates.wordTitle")}</h2><p>{t("templates.wordText")}</p></div><div className="row-actions"><Button variant="secondary" onClick={() => setShowArchived((value) => !value)}><ArchiveRestore size={15} />{t("templates.archived")}</Button><Button onClick={() => openDocument()}><FilePlus2 size={15} />{t("templates.uploadWord")}</Button></div></div><div className="template-list">{database.documentTemplates.filter((template) => showArchived || template.lifecycle !== "archived").map((template) => <article className="template-row" key={template.id}><div><strong>{template.name}</strong><span>{t(`documents.${template.documentType}`)} · {t(`common.language.${template.locale}`)} · {template.origin === "standard" ? t("templates.standard") : template.filename} · v{template.revision ?? 1}{template.lifecycle === "archived" ? ` · ${t("common.archived")}` : ""}</span></div><div className="row-actions"><Button size="small" variant="secondary" onClick={() => void import("../documents/templateEngine").then(async ({ createStandardTemplate, downloadBlob }) => { const blob = template.origin === "standard" ? await createStandardTemplate(template.documentType, template.locale) : template.blobId ? await getBlob(template.blobId) : undefined; if (blob) downloadBlob(blob, template.filename); })}><Download size={14} />{t("common.download")}</Button><button className="icon-button" onClick={() => void duplicateDocumentTemplate(template)} aria-label={t("common.duplicate")}><Copy size={14} /></button>{template.origin === "custom" && <><Button size="small" variant="secondary" onClick={() => openDocument(template)}><Pencil size={14} />{t("common.edit")}</Button>{template.lifecycle === "archived" ? <><button className="icon-button" onClick={() => saveDocumentTemplate({ ...template, lifecycle: "active", updatedAt: new Date().toISOString() })} aria-label={t("common.restore")}><ArchiveRestore size={14} /></button><button className="icon-button danger-icon" onClick={() => { if (window.confirm(t("common.confirmDelete"))) removeDocumentTemplate(template); }} aria-label={t("common.delete")}><Trash2 size={14} /></button></> : <button className="icon-button danger-icon" onClick={() => saveDocumentTemplate({ ...template, lifecycle: "archived", updatedAt: new Date().toISOString() })} aria-label={t("common.archive")}><Trash2 size={14} /></button>}</>}</div></article>)}</div></section>
 
     <section className="panel template-reference"><div><h2>{t("templates.placeholderTitle")}</h2><p>{t("templates.placeholderText")}</p><div className="search-shell"><Search size={15} /><input className="search-input" value={placeholderQuery} onChange={(event) => setPlaceholderQuery(event.target.value)} placeholder={t("templates.searchPlaceholders")} /></div></div><div className="placeholder-examples">{placeholderReference.filter((token) => token.toLowerCase().includes(placeholderQuery.toLowerCase())).map((token) => <button className="placeholder-copy" key={token} onClick={() => void navigator.clipboard.writeText(token)}><code>{token}</code><Copy size={13} /></button>)}</div><p className="field-help">{t("templates.placeholderLocations")}</p></section>
 
     <OverviewTemplateModal key={`overview-${editingOverview?.id ?? "new"}-${overviewOpen}`} open={overviewOpen} template={editingOverview} templates={database.overviewTemplates} organizationId={database.organization.id} onClose={() => setOverviewOpen(false)} onSave={(template) => { saveOverviewTemplate(template); setOverviewOpen(false); }} t={t} />
-    <Modal open={Boolean(overviewToDelete)} title={t("templates.deleteTitle")} onClose={() => setOverviewToDelete(null)}><div className="modal-body"><p>{t("templates.deleteText", { name: overviewToDelete?.name ?? "" })}</p></div><div className="modal-footer"><Button variant="secondary" onClick={() => setOverviewToDelete(null)}>{t("common.cancel")}</Button><Button variant="danger" onClick={() => { if (!overviewToDelete) return; deleteOverviewTemplate(overviewToDelete.id); setOverviewToDelete(null); }}>{t("common.deletePermanently")}</Button></div></Modal>
+    <Modal open={Boolean(overviewToDelete)} title={t("templates.deleteTitle")} onClose={() => setOverviewToDelete(null)}><div className="modal-body"><p>{t("templates.deleteText", { name: overviewToDelete?.name ?? "" })}</p></div><div className="modal-footer"><Button variant="secondary" onClick={() => setOverviewToDelete(null)}>{t("common.cancel")}</Button><Button variant="danger" onClick={() => { if (!overviewToDelete) return; deleteOverviewTemplate(overviewToDelete.id); setOverviewToDelete(null); }}>{t("common.delete")}</Button></div></Modal>
     <DocumentTemplateModal key={`document-${editingDocument?.id ?? "new"}-${documentOpen}`} open={documentOpen} template={editingDocument} organizationId={database.organization.id} onClose={() => setDocumentOpen(false)} onSave={(template) => { saveDocumentTemplate(template); setDocumentOpen(false); }} t={t} />
   </div>;
 }
@@ -141,11 +142,26 @@ function placeholderPaths(template: OverviewTemplate): Map<string, string> {
 function OverviewTemplateModal({ open, template, templates, organizationId, onClose, onSave, t }: { open: boolean; template: OverviewTemplate | null; templates: OverviewTemplate[]; organizationId: string; onClose: () => void; onSave: (template: OverviewTemplate) => void; t: Translate }) {
   const [draft, setDraft] = useState(() => template ? structuredClone(template) : blankOverviewTemplate(organizationId));
   const [entryType, setEntryType] = useState<OverviewEntryType>("text");
+  const [fieldTypeHelpOpen, setFieldTypeHelpOpen] = useState(false);
   const [copiedEntryId, setCopiedEntryId] = useState<string | null>(null);
   const [dropIndicator, setDropIndicator] = useState<{ entryId: string; position: OverviewDropPosition } | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const validation = useMemo(() => validateOverviewTemplate(draft, templates), [draft, templates]);
   const initialPaths = useMemo(() => template ? placeholderPaths(template) : new Map<string, string>(), [template]);
+  const templateNameMissing = normalizeOverviewKey(draft.name, "").length === 0;
+  const templateNameError = templateNameMissing ? t("templates.nameRequired") : validation.nameConflict ? t("templates.nameUnique") : "";
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const closeEntryMenus = (event: PointerEvent) => {
+      const target = event.target as Node;
+      document.querySelectorAll<HTMLDetailsElement>(".overview-template-modal .template-entry-menu[open]").forEach((menu) => {
+        if (!menu.contains(target)) menu.open = false;
+      });
+    };
+    document.addEventListener("pointerdown", closeEntryMenus);
+    return () => document.removeEventListener("pointerdown", closeEntryMenus);
+  }, [open]);
 
   const addEntry = (type: OverviewEntryType, parentId?: string) => {
     const entry = newOverviewEntry(type);
@@ -200,11 +216,12 @@ function OverviewTemplateModal({ open, template, templates, organizationId, onCl
     onSave({ ...draft, updatedAt: new Date().toISOString() });
   };
 
-  return <Modal className="overview-template-modal" open={open} title={template ? t("templates.editOverview") : t("templates.addOverview")} onClose={onClose}>
-    <form className="overview-template-form" onSubmit={handleSubmit}>
-      <div className="modal-body template-form">
-        <label className="field"><span>{t("templates.name")}</span><input required aria-invalid={Boolean(draft.name.trim()) && validation.nameConflict} value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} />{validation.nameConflict && draft.name.trim() && <small className="field-error">{t("templates.nameUnique")}</small>}</label>
-        <div className="template-builder-labels" aria-hidden="true"><span /><span>{t("templates.entryLabel")}</span><span>{t("templates.entryType")}</span><span>{t("templates.defaultValue")}</span><span /></div>
+  return <>
+    <Modal className="overview-template-modal" open={open} title={template ? t("templates.editOverview") : t("templates.addOverview")} onClose={onClose}>
+      <form className="overview-template-form" onSubmit={handleSubmit}>
+        <div className="modal-body template-form">
+          <label className="field"><span>{t("templates.name")}</span><input required aria-invalid={Boolean(templateNameError)} aria-describedby={templateNameError ? "template-name-error" : undefined} value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} />{templateNameError && <small id="template-name-error" className="field-error" role="alert">{templateNameError}</small>}</label>
+          <div className="template-builder-labels"><span /><span>{t("templates.entryLabel")}</span><span className="template-entry-type-heading">{t("templates.entryType")}<button type="button" className="template-help-button" aria-label={t("templates.fieldTypeHelp")} onClick={() => setFieldTypeHelpOpen(true)}><CircleHelp size={14} /></button></span><span>{t("templates.defaultValue")}</span><span /></div>
         <DndContext sensors={sensors} collisionDetection={pointerWithin} onDragOver={previewMove} onDragEnd={performMove} onDragCancel={() => setDropIndicator(null)}>
           <div className="template-entry-tree">
             {draft.entries.length === 0 && <p className="template-empty">{t("templates.noEntries")}</p>}
@@ -212,10 +229,29 @@ function OverviewTemplateModal({ open, template, templates, organizationId, onCl
           </div>
         </DndContext>
         <div className="template-add-entry"><select aria-label={t("templates.entryType")} value={entryType} onChange={(event) => setEntryType(event.target.value as OverviewEntryType)}>{overviewEntryTypes.map((type) => <option key={type} value={type}>{t(`templates.entryType.${type}`)}</option>)}</select><Button type="button" variant="secondary" onClick={() => addEntry(entryType)}><Plus size={14} />{t("templates.addEntry")}</Button></div>
+        </div>
+        <div className="modal-footer"><Button type="button" variant="secondary" onClick={onClose}>{t("common.cancel")}</Button><Button type="submit" disabled={!validation.valid}>{t("common.save")}</Button></div>
+      </form>
+    </Modal>
+    <Modal className="field-type-help-modal" open={fieldTypeHelpOpen} title={t("templates.fieldTypeHelpTitle")} onClose={() => setFieldTypeHelpOpen(false)}>
+      <div className="modal-body field-type-help-content">
+        <p>{t("templates.fieldTypeHelpIntro")}</p>
+        <div className="field-type-help-examples">
+          <article>
+            <strong>{t("templates.entryType.group")}</strong>
+            <p>{t("templates.groupHelpText")}</p>
+            <div className="field-type-example"><b>{t("templates.groupHelpExample")}</b><span>{t("templates.groupHelpFields")}</span></div>
+          </article>
+          <article>
+            <strong>{t("templates.entryType.repeating_group")}</strong>
+            <p>{t("templates.repeatingGroupHelpText")}</p>
+            <div className="field-type-example"><b>{t("templates.repeatingGroupHelpExample")}</b><span>{t("templates.repeatingGroupHelpFields")}</span><em>{t("templates.repeatingGroupHelpAction")}</em></div>
+          </article>
+        </div>
       </div>
-      <div className="modal-footer"><Button type="button" variant="secondary" onClick={onClose}>{t("common.cancel")}</Button><Button type="submit" disabled={!validation.valid}>{t("common.save")}</Button></div>
-    </form>
-  </Modal>;
+      <div className="modal-footer"><Button type="button" onClick={() => setFieldTypeHelpOpen(false)}>{t("common.close")}</Button></div>
+    </Modal>
+  </>;
 }
 
 function TemplateBuilderEntry({ entry, depth, template, invalidEntryIds, dropIndicator, copiedEntryId, onCopied, onUpdate, onTypeChange, onDelete, onAddChild, t }: {
@@ -237,6 +273,12 @@ function TemplateBuilderEntry({ entry, depth, template, invalidEntryIds, dropInd
   const inside = useDroppable({ id: `${entry.id}:inside`, data: { entryId: entry.id, position: "inside" satisfies OverviewDropPosition }, disabled: !["group", "repeating_group"].includes(entry.type) });
   const after = useDroppable({ id: `${entry.id}:after`, data: { entryId: entry.id, position: "after" satisfies OverviewDropPosition } });
   const isContainer = ["group", "repeating_group"].includes(entry.type);
+  const entryIsInvalid = invalidEntryIds.has(entry.id);
+  const entryLabelMissing = normalizeOverviewKey(entry.label, "").length === 0;
+  const entryError = entryIsInvalid
+    ? entryLabelMissing ? t("templates.entryLabelRequired") : t("templates.entryLabelUnique")
+    : "";
+  const entryErrorId = `template-entry-error-${entry.id}`;
   const rowStyle = { "--template-depth": depth, transform: CSS.Translate.toString(transform) } as CSSProperties;
   const copyPlaceholder = () => {
     void navigator.clipboard.writeText(overviewEntryClipboardValue(template, entry.id));
@@ -247,10 +289,10 @@ function TemplateBuilderEntry({ entry, depth, template, invalidEntryIds, dropInd
     <div ref={before.setNodeRef} className={`template-drop-zone drop-before ${dropIndicator?.entryId === entry.id && dropIndicator.position === "before" ? "is-active" : ""}`} />
     <div ref={inside.setNodeRef} className={`template-builder-row ${dropIndicator?.entryId === entry.id && dropIndicator.position === "inside" ? "drop-inside-active" : ""}`}>
       <button type="button" className="template-drag-handle" aria-label={t("templates.dragEntry")} {...attributes} {...listeners}><GripVertical size={16} /></button>
-      <input className="template-entry-label" required aria-invalid={invalidEntryIds.has(entry.id)} aria-label={t("templates.entryLabel")} placeholder={t("templates.entryLabel")} value={entry.label} onChange={(event) => onUpdate(entry.id, (candidate) => ({ ...candidate, label: event.target.value }))} />
+      <div className="template-entry-label-field"><input className="template-entry-label" required aria-invalid={entryIsInvalid} aria-describedby={entryError ? entryErrorId : undefined} aria-label={t("templates.entryLabel")} placeholder={t("templates.entryLabel")} value={entry.label} onChange={(event) => onUpdate(entry.id, (candidate) => ({ ...candidate, label: event.target.value }))} />{entryError && <small id={entryErrorId} className="template-entry-inline-error" role="alert">{entryError}</small>}</div>
       <select className="template-entry-type" aria-label={t("templates.entryType")} value={entry.type} onChange={(event) => onTypeChange(entry, event.target.value as OverviewEntryType)}>{overviewEntryTypes.map((type) => <option key={type} value={type}>{t(`templates.entryType.${type}`)}</option>)}</select>
       {isContainer ? <button type="button" className="template-entry-value template-add-child" onClick={() => onAddChild(entry.id)}><Plus size={13} />{t("templates.addNestedEntry")}</button> : <input className="template-entry-value" type={entry.type === "date" ? "date" : "text"} aria-label={t("templates.defaultValue")} placeholder={t("templates.defaultValue")} value={entry.defaultValue} onChange={(event) => onUpdate(entry.id, (candidate) => ({ ...candidate, defaultValue: event.target.value }))} />}
-      <details className="template-entry-menu"><summary aria-label={t("common.moreActions")}><MoreVertical size={16} /></summary><div className="template-entry-menu-popover"><button type="button" onClick={copyPlaceholder}><Copy size={14} /><span><small>{copiedEntryId === entry.id ? t("templates.copied") : t("templates.copyPlaceholder")}</small><code>{overviewEntryClipboardValue(template, entry.id)}</code></span></button><button type="button" className="danger" onClick={() => onDelete(entry)}><Trash2 size={14} />{t("common.deletePermanently")}</button></div></details>
+      <details className="template-entry-menu"><summary aria-label={t("common.moreActions")}><MoreVertical size={16} /></summary><div className="template-entry-menu-popover"><button type="button" onClick={copyPlaceholder}><Copy size={14} /><span><small>{copiedEntryId === entry.id ? t("templates.copied") : t("templates.copyPlaceholder")}</small><code>{overviewEntryClipboardValue(template, entry.id)}</code></span></button><button type="button" className="danger" onClick={() => onDelete(entry)}><Trash2 size={14} />{t("common.delete")}</button></div></details>
     </div>
     {entry.children.length > 0 && <div className="template-builder-children">{entry.children.map((child) => <TemplateBuilderEntry key={child.id} entry={child} depth={depth + 1} template={template} invalidEntryIds={invalidEntryIds} dropIndicator={dropIndicator} copiedEntryId={copiedEntryId} onCopied={onCopied} onUpdate={onUpdate} onTypeChange={onTypeChange} onDelete={onDelete} onAddChild={onAddChild} t={t} />)}</div>}
     <div ref={after.setNodeRef} className={`template-drop-zone drop-after ${dropIndicator?.entryId === entry.id && dropIndicator.position === "after" ? "is-active" : ""}`} />

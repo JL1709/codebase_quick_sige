@@ -146,7 +146,8 @@ export interface PlanSection { id: string; categoryId: string; titleOverrides?: 
 export type SupportingDocumentType = "site_rules" | "alarm_plan" | "fire_safety" | "first_aid" | "participants" | "advance_notice";
 export interface PlanSupportingDocument { id: string; type: SupportingDocumentType; included: boolean }
 
-export type PlanElementKind = "header" | "section" | "block" | "image" | "pdf_page" | "document" | "text" | "title_block";
+export type BlockLayoutMode = "vertical" | "horizontal" | "best_fit";
+export type PlanElementKind = "block_area" | "header" | "section" | "block" | "image" | "pdf_page" | "document" | "text" | "title_block";
 export interface PlanElementBase {
   id: string;
   kind: PlanElementKind;
@@ -161,6 +162,7 @@ export interface PlanElementBase {
 }
 export interface PlanSectionElement extends PlanElementBase { kind: "section"; sectionId: string }
 export interface PlanBlockElement extends PlanElementBase { kind: "block"; sectionId: string; itemId: string; blockId: string }
+export interface PlanBlockAreaElement extends PlanElementBase { kind: "block_area"; layoutMode: BlockLayoutMode }
 export interface PlanAssetElement extends PlanElementBase {
   kind: "image" | "pdf_page";
   assetId: string;
@@ -188,11 +190,11 @@ export interface PlanTitleBlockElement extends PlanElementBase {
   coordinatorText?: Partial<Record<Locale, string>>;
   referenceText?: Partial<Record<Locale, string>>;
 }
-export type PlanElement = PlanHeaderElement | PlanSectionElement | PlanBlockElement | PlanAssetElement | PlanDocumentElement | PlanTextElement | PlanTitleBlockElement;
+export type PlanElement = PlanBlockAreaElement | PlanHeaderElement | PlanSectionElement | PlanBlockElement | PlanAssetElement | PlanDocumentElement | PlanTextElement | PlanTitleBlockElement;
 
 /** Coordinates are integer tenths of a millimetre to avoid floating-point drift. */
 export interface PlanLayout {
-  layoutVersion: 3;
+  layoutVersion: 4;
   format: "A0";
   orientation: "landscape";
   width: number;

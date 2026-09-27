@@ -3,8 +3,8 @@ import { createSeedDatabase } from "../data/seed";
 import type { Plan } from "./types";
 import {
   A0_LANDSCAPE_HEIGHT, A0_LANDSCAPE_WIDTH, clampElementToPage, createSectionElement,
-  cssPixelsToLayoutUnits, ensurePlanLayout, findNextFreeBlockPosition, layoutUnitsToCssPixels, layoutUnitsToMillimetres,
-  PLAN_UNITS_PER_MILLIMETRE, snapToGrid,
+  cssPixelsToLayoutUnits, ensurePlanLayout, findNextFreeBlockPosition, findNextFreeNonBlockPosition,
+  fitBlocksInArea, getBlockArea, layoutUnitsToCssPixels, layoutUnitsToMillimetres, PLAN_UNITS_PER_MILLIMETRE, snapToGrid,
 } from "./planLayout";
 
 describe("physical A0 layout", () => {
@@ -33,22 +33,55 @@ describe("physical A0 layout", () => {
     expect(section.y + section.height).toBeLessThanOrEqual(layout.height - layout.safeMargin);
   });
 
-  it("creates selectable structural header and title-block elements", () => {
+  it("creates a selectable block area without forcing a plan header", () => {
     const layout = createSeedDatabase().plans[0].layout;
-    expect(layout.layoutVersion).toBe(3);
-    expect(layout.elements.find((element) => element.kind === "header")?.locked).toBe(false);
+    expect(layout.layoutVersion).toBe(4);
+    expect(layout.elements.find((element) => element.kind === "block_area")?.locked).toBe(false);
+    expect(layout.elements.some((element) => element.kind === "header")).toBe(false);
     expect(layout.elements.find((element) => element.kind === "title_block")?.locked).toBe(false);
   });
 
-  it("migrates a version-two layout without changing existing element geometry", () => {
+  it("migrates a legacy layout without changing or recreating existing content", () => {
     const plan = structuredClone(createSeedDatabase().plans[0]);
-    const before = plan.layout.elements.filter((element) => element.kind !== "header");
-    const legacyPlan = { ...plan, layout: { ...plan.layout, layoutVersion: 2, elements: before } };
+    const before = plan.layout.elements.filter((element) => element.kind !== "block_area");
+    const legacyHeader = { id: "legacy-header", kind: "header" as const, x: 180, y: 180, width: 11_530, height: 520, zIndex: 900 };
+    const legacyPlan = { ...plan, layout: { ...plan.layout, layoutVersion: 3, elements: [legacyHeader, ...before] } };
     const migrated = ensurePlanLayout(legacyPlan as unknown as Plan);
-    expect(migrated.layout.layoutVersion).toBe(3);
-    expect(migrated.layout.elements[0].kind).toBe("header");
-    expect(migrated.layout.elements.filter((element) => element.kind !== "header").map(({ x, y, width, height }) => ({ x, y, width, height })))
+    expect(migrated.layout.layoutVersion).toBe(4);
+    expect(migrated.layout.elements[0].kind).toBe("block_area");
+    expect(migrated.layout.elements.some((element) => element.id === legacyHeader.id)).toBe(true);
+    expect(migrated.layout.elements.filter((element) => element.kind !== "block_area" && element.kind !== "header").map(({ x, y, width, height }) => ({ x, y, width, height })))
       .toEqual(before.map(({ x, y, width, height }) => ({ x, y, width, height })));
+  });
+
+  it.each(["vertical", "horizontal", "best_fit"] as const)("fits blocks uniformly inside the block area in %s mode", (mode) => {
+    const database = createSeedDatabase();
+    const plan = structuredClone(database.plans[0]);
+    const result = fitBlocksInArea(plan.layout, plan.sections, database.categories, database.blocks, mode);
+    const area = getBlockArea(result.layout);
+    const blocks = result.layout.elements.filter((element) => element.kind === "block");
+
+    expect(result.fits).toBe(true);
+    expect(area?.layoutMode).toBe(mode);
+    expect(new Set(blocks.map((element) => `${element.width}x${element.height}`)).size).toBe(1);
+    expect(blocks.every((element) => area && element.x >= area.x && element.y >= area.y && element.x + element.width <= area.x + area.width && element.y + element.height <= area.y + area.height)).toBe(true);
+  });
+
+  it("keeps user-placed files unchanged while fitting blocks", () => {
+    const database = createSeedDatabase();
+    const plan = structuredClone(database.plans[0]);
+    const assetBefore = structuredClone(plan.layout.elements.find((element) => element.kind === "image"));
+    const result = fitBlocksInArea(plan.layout, plan.sections, database.categories, database.blocks, "best_fit");
+    expect(result.layout.elements.find((element) => element.id === assetBefore?.id)).toEqual(assetBefore);
+  });
+
+  it("places new non-block content in the free area to the right without resizing it", () => {
+    const layout = createSeedDatabase().plans[1].layout;
+    const area = getBlockArea(layout);
+    const free = findNextFreeNonBlockPosition(layout, 2_500, 1_600);
+    expect(free.width).toBe(2_500);
+    expect(free.height).toBe(1_600);
+    expect(area && free.x >= area.x + area.width).toBe(true);
   });
 
   it.each([0.55, 0.78, 1, 1.1])("round-trips exact physical coordinates at %s zoom", (zoom) => {

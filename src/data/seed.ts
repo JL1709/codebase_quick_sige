@@ -558,9 +558,9 @@ export function createSeedDatabase(): AppDatabase {
   plan.updatedAt = "2026-09-26T18:00:00.000Z";
   plan.includedAssetIds = ["asset-site-image", "asset-multipage-plan"];
   plan.layout.elements.push(
-    { id: "layout-demo-image", kind: "image", assetId: "asset-site-image", fitMode: "cover", crop: { x: 50, y: 50, width: 100, height: 100 }, x: 6_900, y: 6_500, width: 1_300, height: 850, zIndex: 800, semanticOrder: 1_000 },
-    { id: "layout-demo-pdf", kind: "pdf_page", assetId: "asset-multipage-plan", pageNumber: 2, fitMode: "contain", x: 8_350, y: 6_500, width: 1_300, height: 850, zIndex: 801, semanticOrder: 1_001 },
-    { id: "layout-demo-document", kind: "document", documentType: "alarm_plan", displayVariant: "emergency_card", x: 9_800, y: 6_500, width: 1_350, height: 700, zIndex: 802, semanticOrder: 1_002 },
+    { id: "layout-demo-image", kind: "image", assetId: "asset-site-image", fitMode: "cover", crop: { x: 50, y: 50, width: 100, height: 100 }, x: 8_500, y: 180, width: 3_000, height: 1_800, zIndex: 800, semanticOrder: 10_000 },
+    { id: "layout-demo-pdf", kind: "pdf_page", assetId: "asset-multipage-plan", pageNumber: 2, fitMode: "contain", x: 8_500, y: 2_080, width: 3_000, height: 2_800, zIndex: 801, semanticOrder: 10_001 },
+    { id: "layout-demo-document", kind: "document", documentType: "alarm_plan", displayVariant: "emergency_card", x: 8_500, y: 4_980, width: 3_000, height: 700, zIndex: 802, semanticOrder: 10_002 },
   );
   const englishPlan = createPlanFromAssessment(englishProject, englishAssessment, seedBlocks, seedCategories);
   const documentTemplates = (["site_rules", "alarm_plan", "fire_safety", "first_aid", "participants", "advance_notice", "a4_plan"] as const).flatMap((documentType) => (["de", "en"] as const).map((locale) => ({
@@ -578,7 +578,7 @@ export function createSeedDatabase(): AppDatabase {
     updatedAt: createdAt,
   })));
   return {
-    schemaVersion: 6,
+    schemaVersion: 13,
     organization: {
       id: "organization-demo",
       name: "Sicher Planen Ingenieure",
