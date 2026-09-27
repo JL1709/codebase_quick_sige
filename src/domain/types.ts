@@ -1,0 +1,245 @@
+export type Locale = "de" | "en";
+
+export type ProjectStatus = "draft" | "in_review" | "published" | "archived";
+export type ConstructionType = "new_build" | "renovation" | "demolition";
+export type Season = "spring" | "summer" | "autumn" | "winter" | "year_round";
+export type RecommendationStrength = "required_review" | "strong" | "optional";
+export type RecordLifecycle = "active" | "archived";
+
+export interface Organization { id: string; name: string; defaultLocale: Locale; accentColor: string }
+export interface AppUser { id: string; organizationId: string; name: string; email: string; role: "owner" | "admin" | "editor" | "viewer"; preferredLocale: Locale }
+
+export interface Participant {
+  id: string;
+  role: "client" | "owner" | "coordinator" | "architect" | "planner" | "site_manager" | "contractor";
+  company: string;
+  name: string;
+  email: string;
+  phone: string;
+}
+
+export interface EmergencyContact { id: string; label: string; name: string; phone: string }
+export interface CustomField { id: string; key: string; value: string; placeholderKey: string }
+export interface CustomSection { id: string; title: string; placeholderKey: string; fields: CustomField[] }
+
+export interface ProjectAsset {
+  id: string;
+  filename: string;
+  mimeType: "image/png" | "image/jpeg" | "application/pdf";
+  byteSize: number;
+  /** Binary content lives in IndexedDB. These data URLs are migration-only. */
+  blobId?: string;
+  previewBlobId?: string;
+  dataUrl?: string;
+  previewDataUrl?: string;
+  pageCount?: number;
+  width?: number;
+  height?: number;
+  createdAt: string;
+}
+
+export interface Project {
+  id: string;
+  organizationId: string;
+  projectNumber: string;
+  name: string;
+  description: string;
+  address: string;
+  city: string;
+  constructionType: ConstructionType;
+  startDate: string;
+  endDate: string;
+  status: ProjectStatus;
+  documentLocale: Locale;
+  participants: Participant[];
+  emergencyContacts: EmergencyContact[];
+  customFields: CustomField[];
+  customSections: CustomSection[];
+  assets: ProjectAsset[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AssessmentAnswers {
+  employerCount: number; maxWorkers: number; workDays: number; estimatedPersonDays: number;
+  liveOperations: boolean; publicTraffic: boolean; existingUtilities: boolean; excavationDepth: number;
+  maxWorkHeight: number; cranesOrLifting: boolean; scaffolding: boolean; temporaryPower: boolean;
+  hotWorks: boolean; hazardousSubstances: boolean; waterOrDrowningRisk: boolean; confinedSpaces: boolean;
+  season: Season; notes: string;
+}
+
+export interface LocalizedBuildingBlockContent {
+  title: string;
+  shortDescription: string;
+  longDescription: string;
+  searchTerms: string[];
+  /** Migration-only legacy review flag; not displayed as product truth. */
+  status?: "draft" | "reviewed" | "approved";
+}
+
+export interface BuildingBlockProvenance {
+  kind: "starter_content" | "organization" | "imported";
+  label: string;
+  sourceReference?: string;
+  verifiedAt?: string;
+}
+
+export interface BuildingBlock {
+  id: string;
+  code: string;
+  primaryCategoryId: string;
+  categoryIds: string[];
+  /** Retained while existing version-two data is migrated. */
+  categoryId?: string;
+  visualKey: string;
+  imageDataUrl?: string;
+  color: string;
+  regulations: string[];
+  tags: string[];
+  lifecycle: RecordLifecycle;
+  provenance: BuildingBlockProvenance;
+  translations: Record<Locale, LocalizedBuildingBlockContent>;
+  contentRevision?: number;
+  reviewedAt?: string;
+  source?: "system" | "organization";
+}
+
+export interface BuildingBlockCategory {
+  id: string;
+  parentId?: string;
+  color: string;
+  sortOrder: number;
+  lifecycle: RecordLifecycle;
+  translations: Record<Locale, { name: string; description: string }>;
+}
+
+export interface Recommendation {
+  id: string; blockId: string; strength: RecommendationStrength; reasonKey: string;
+  reasonParams?: Record<string, string | number>; included: boolean; excludedReason?: string;
+}
+export interface RequirementAssessment { advanceNoticeLikelyRequired: boolean; sigePlanLikelyRequired: boolean; particularlyHazardousWork: boolean; reasons: string[] }
+
+export interface PlanItem {
+  id: string;
+  blockId: string;
+  customTitle?: Partial<Record<Locale, string>>;
+  customShortDescription?: Partial<Record<Locale, string>>;
+  /** Optional plan-local raster image. Catalog imagery remains unchanged. */
+  imageDataUrl?: string;
+  expertNote?: string;
+}
+export interface PlanSection { id: string; categoryId: string; titleOverrides?: Partial<Record<Locale, string>>; items: PlanItem[] }
+
+export type SupportingDocumentType = "site_rules" | "alarm_plan" | "fire_safety" | "first_aid" | "participants" | "advance_notice";
+export interface PlanSupportingDocument { id: string; type: SupportingDocumentType; included: boolean }
+
+export type PlanElementKind = "section" | "block" | "image" | "pdf_page" | "document" | "text" | "title_block";
+export interface PlanElementBase {
+  id: string;
+  kind: PlanElementKind;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  zIndex: number;
+  semanticOrder?: number;
+  locked?: boolean;
+  hidden?: boolean;
+}
+export interface PlanSectionElement extends PlanElementBase { kind: "section"; sectionId: string }
+export interface PlanBlockElement extends PlanElementBase { kind: "block"; sectionId: string; itemId: string; blockId: string }
+export interface PlanAssetElement extends PlanElementBase {
+  kind: "image" | "pdf_page";
+  assetId: string;
+  pageNumber?: number;
+  fitMode?: "contain" | "cover";
+  crop?: { x: number; y: number; width: number; height: number };
+}
+export interface PlanDocumentElement extends PlanElementBase {
+  kind: "document";
+  documentType: SupportingDocumentType;
+  displayVariant?: "compact" | "emergency_card" | "participant_list" | "qr_link";
+}
+export interface PlanTextElement extends PlanElementBase { kind: "text"; text: Partial<Record<Locale, string>> }
+export interface PlanTitleBlockElement extends PlanElementBase { kind: "title_block" }
+export type PlanElement = PlanSectionElement | PlanBlockElement | PlanAssetElement | PlanDocumentElement | PlanTextElement | PlanTitleBlockElement;
+
+/** Coordinates are integer tenths of a millimetre to avoid floating-point drift. */
+export interface PlanLayout {
+  layoutVersion: 2;
+  format: "A0";
+  orientation: "landscape";
+  width: number;
+  height: number;
+  safeMargin: number;
+  gridSize: number;
+  elements: PlanElement[];
+}
+
+export interface Plan {
+  id: string; projectId: string; title: string; documentLocale: Locale; status: "draft" | "published";
+  sections: PlanSection[]; layout: PlanLayout; recommendations: Recommendation[]; requirementAssessment: RequirementAssessment;
+  supportingDocuments: PlanSupportingDocument[]; includedAssetIds: string[]; createdAt: string; updatedAt: string;
+}
+
+export type OverviewTemplateKind = "project_details" | "emergency_contacts" | "participants" | "custom_section";
+export interface OverviewTemplate {
+  id: string; organizationId: string; name: string; kind: OverviewTemplateKind; title?: string;
+  fields: CustomField[]; emergencyContacts: EmergencyContact[]; participants: Participant[];
+  lifecycle?: RecordLifecycle; createdAt: string; updatedAt: string;
+}
+
+export type DocumentType = SupportingDocumentType | "a4_plan";
+export interface DocumentTemplate {
+  id: string; organizationId: string; name: string; documentType: DocumentType; locale: Locale;
+  origin: "standard" | "custom"; blobId?: string; filename: string; description: string;
+  lifecycle?: RecordLifecycle;
+  revision?: number;
+  validation?: {
+    status: "valid" | "invalid";
+    checkedAt: string;
+    placeholders: string[];
+    messages: string[];
+  };
+  createdAt: string; updatedAt: string;
+}
+export interface ProjectDocumentConfiguration { id: string; projectId: string; documentType: DocumentType; templateId: string }
+export interface GeneratedDocument {
+  id: string;
+  projectId: string;
+  documentType: DocumentType;
+  templateId: string;
+  templateRevision: number;
+  filename: string;
+  blobId: string;
+  projectSnapshot: Project;
+  planSnapshot?: Plan;
+  language: Locale;
+  generatedAt: string;
+  dependencyFingerprint: string;
+  stale?: boolean;
+}
+
+export interface RevisionSnapshot {
+  project: Project;
+  plan: Plan;
+  blocks: BuildingBlock[];
+  categories: BuildingBlockCategory[];
+  documentTemplates: DocumentTemplate[];
+  documentConfigurations: ProjectDocumentConfiguration[];
+  generatedDocuments: GeneratedDocument[];
+}
+export interface PlanRevision { id: string; projectId: string; planId: string; index: string; changeSummary: string; approvedBy: string; publishedAt: string; snapshot: RevisionSnapshot }
+export interface AuditEvent { id: string; projectId?: string; action: string; actorName: string; createdAt: string; details: string }
+
+export interface AppDatabase {
+  schemaVersion: number; organization: Organization; user: AppUser; projects: Project[];
+  assessments: Record<string, AssessmentAnswers>; blocks: BuildingBlock[]; categories: BuildingBlockCategory[];
+  plans: Plan[]; revisions: PlanRevision[]; overviewTemplates: OverviewTemplate[]; documentTemplates: DocumentTemplate[];
+  documentConfigurations: ProjectDocumentConfiguration[]; generatedDocuments: GeneratedDocument[]; auditEvents: AuditEvent[];
+}
+
+export interface ProjectFormValues {
+  projectNumber: string; name: string; description: string; address: string; city: string;
+  constructionType: ConstructionType; startDate: string; endDate: string; documentLocale: Locale; templateIds?: string[];
+}

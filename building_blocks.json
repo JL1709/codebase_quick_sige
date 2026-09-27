@@ -1,0 +1,41 @@
+[    {
+        "image": "path/to/sicherer_umgang_mit_bestandsleitungen.jpg",
+        "heading": "Sicherer Umgang mit Bestandsleitungen",
+        "description_a0":"Berücksichtigung der Lage von Leitungen, Kabeln, Kanälen o.ä. im bereich der Baugruben oder Gräben",
+        "description_a4":"Beschreibung A4 Sicherer Umgang mit Bestandsleitungen",
+        "category_0": "Baustellenvorbereitung",
+        "category_1": "Bestehende erdverlegte Versorgungsleitungen",
+        "regulation": ["Vorschrift xyz"],
+        "tags": ["Baustromverteiler", "Baustrom", "Verteiler", "Stromversorgung"]
+    },
+    {
+        "image": "path/to/baustromverteiler.jpg",
+        "heading": "Baustromverteiler",
+        "description_a0":"Verwendung eines Baustromverteilers, Prüfintervalle beachten",
+        "description_a4":"Beschreibung A4 Baustromverteiler",
+        "category_0": "Baustelleneinrichtung",
+        "category_1": "Versorgung Baustrom, Bauwasser, mobile Tankanlagen",
+        "regulation": ["DGUV Information 203-070", "DGUV Vorschrift 4", "DGUV Information 203-005"],
+        "tags": ["Baustromverteiler", "Baustrom", "Verteiler", "Stromversorgung"]
+    },
+    {
+        "image": "path/to/elektrokleinverteiler.jpg",
+        "heading": "Elektrokleinverteiler",
+        "description_a0":"Nutzung von spritzwassergeschützten und für den Baustellenbetrieb geeigneten Elektrokleinverteilern",
+        "description_a4":"Beschreibung A4 Elektrokleinverteiler",
+        "category_0": "Baustelleneinrichtung",
+        "category_1": "Versorgung Baustrom, Bauwasser, mobile Tankanlagen",
+        "regulation": ["DGUV Information 203-070", "DGUV Vorschrift 4", "DGUV Information 203-005"],
+        "tags": ["Elektrokleinverteiler", "Baustrom", "Verteiler", "Stromversorgung"]
+    },
+    {
+        "image": "path/to/bauzaun_transportabel.jpg",
+        "heading": "Bauzaun, transportabel",
+        "description_a0":"Schutzzaun aus Einzelelementen mit verzinktem Stahlrohrrahmen und Drahtgitterfüllung, mit Standfüßen, transportabel",
+        "description_a4":"Beschreibung A4 Bauzaun transportabel",
+        "category_0": "Baustelleneinrichtung",
+        "category_1": "Baustellensicherung",
+        "regulation": ["Vorschrift xyz"],
+        "tags": ["Bauzaun transportabel", "Baustrom", "Verteiler", "Stromversorgung"]
+    }
+]
