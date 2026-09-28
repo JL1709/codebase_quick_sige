@@ -8,7 +8,7 @@ describe("UI translations", () => {
   });
 
   it("replaces named parameters", () => {
-    expect(translate("de", "dashboard.title", { name: "Mara" })).toContain("Mara");
+    expect(translate("de", "assessment.progress", { current: 2, total: 4 })).toContain("2");
     expect(translate("en", "recommendations.subtitle", { count: 7 })).toContain("7");
   });
 

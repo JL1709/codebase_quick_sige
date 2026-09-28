@@ -24,6 +24,7 @@ import { normalizedPdfPageNumbers, pdfPageMetadata, projectAssetPlacementDimensi
 import { blockHierarchyColor, categoryDescendantIds, categoryHierarchyColor } from "../domain/categoryTree";
 import { annotationBoundsFromDrag, createAnnotationElement, isMeaningfulAnnotationDrag, type AnnotationBounds, type AnnotationInsertTool, type AnnotationPoint } from "../domain/planAnnotations";
 import { getPaperRasterSpec, PAPER_RASTER_SPECS } from "../domain/paperRaster";
+import { formatProjectDetails, joinProvidedProjectValues, projectDocumentStem } from "../domain/projectMetadata";
 import {
   A0_LANDSCAPE_HEIGHT, A0_LANDSCAPE_WIDTH, clampElementToPage, constrainLayoutToMargins, createBlockAreaElement,
   createSectionElement, CSS_PIXELS_PER_LAYOUT_UNIT, findNextFreeBlockPosition, findNextFreeNonBlockPosition,
@@ -423,13 +424,12 @@ export function PlanEditorPage() {
     plan,
     project,
     blocks: database.blocks,
-    documentConfigurations: database.documentConfigurations,
-    documentTemplates: database.documentTemplates,
     locale,
     t,
   });
-  const blockingValidationIssues = validationIssues.filter((issue) => issue.severity === "error");
+  const errorValidationIssues = validationIssues.filter((issue) => issue.severity === "error");
   const warningValidationIssues = validationIssues.filter((issue) => issue.severity === "warning");
+  const publishingValidationIssues = validationIssues.filter((issue) => issue.severity !== "information");
   const usableCanvasBounds = getUsableCanvasBounds(plan.layout);
 
   const projectDocumentConfigurations = database.documentConfigurations.filter(
@@ -465,8 +465,7 @@ export function PlanEditorPage() {
       templateBuffer,
       buildTemplateData(project, plan, locale, blocksWithImages, database.categories, projectDocumentConfigurations),
     );
-    const safeProjectNumber = project.projectNumber.replace(/[^a-z0-9-]+/gi, "-").toLowerCase();
-    const filename = `${safeProjectNumber}-a4-plan-${new Date().toISOString().slice(0, 10)}.docx`;
+    const filename = `${projectDocumentStem(project)}-a4-plan-${new Date().toISOString().slice(0, 10)}.docx`;
     const generatedAt = new Date().toISOString();
     const blobId = newId("generated-blob");
     await saveBlob(blobId, generatedDocument);
@@ -664,8 +663,6 @@ export function PlanEditorPage() {
       plan: fittedPlan,
       project,
       blocks: database.blocks,
-      documentConfigurations: database.documentConfigurations,
-      documentTemplates: database.documentTemplates,
       locale,
       t,
     }).filter((issue) => issue.elementId && managedElementIds.has(issue.elementId) && BLOCK_LAYOUT_VALIDATION_RULE_CODES.has(issue.ruleCode));
@@ -870,12 +867,12 @@ export function PlanEditorPage() {
         <Button className="toolbar-new-draft-action" variant="secondary" size="small" onClick={() => setPlanCreationOpen(true)} aria-label={t("planCreation.newDraft")} title={t("planCreation.newDraft")}><FilePlus2 size={14} /><span className="toolbar-action-label">{t("planCreation.newDraft")}</span></Button>
         <div className="editor-toolbar-group toolbar-history"><button className="icon-button" onClick={undo} disabled={!past.length} aria-label={`${t("editor.undo")} (⌘Z / Ctrl+Z)`} title={`${t("editor.undo")} (⌘Z / Ctrl+Z)`}><Undo2 size={16} /></button><button className="icon-button" onClick={redo} disabled={!future.length} aria-label={`${t("editor.redo")} (⇧⌘Z / Ctrl+Y)`} title={`${t("editor.redo")} (⇧⌘Z / Ctrl+Y)`}><Redo2 size={16} /></button></div>
         <div className="toolbar-popover-wrap" data-toolbar-popover>
-          <button ref={validationTriggerRef} className="button button-secondary button-small" onClick={() => { setValidationOpen((open) => !open); setInsertOpen(false); setStyleOpen(false); setCanvasSettingsOpen(false); }} aria-expanded={validationOpen} aria-label={t("editor.validation")} title={t("editor.validation")}><TriangleAlert size={14} /><span className="toolbar-action-label">{t("editor.validation")}</span><Badge tone={blockingValidationIssues.length ? "danger" : warningValidationIssues.length ? "warning" : "success"}>{validationIssues.filter((issue) => issue.severity !== "information").length}</Badge></button>
+          <button ref={validationTriggerRef} className="button button-secondary button-small" onClick={() => { setValidationOpen((open) => !open); setInsertOpen(false); setStyleOpen(false); setCanvasSettingsOpen(false); }} aria-expanded={validationOpen} aria-label={t("editor.validation")} title={t("editor.validation")}><TriangleAlert size={14} /><span className="toolbar-action-label">{t("editor.validation")}</span><Badge tone={errorValidationIssues.length ? "danger" : warningValidationIssues.length ? "warning" : "success"}>{validationIssues.filter((issue) => issue.severity !== "information").length}</Badge></button>
           {validationOpen && <ValidationPopover issues={validationIssues} onNavigate={navigateToIssue} t={t} />}
         </div>
         <Button className="toolbar-export-action" variant="secondary" size="small" aria-label="A0 PDF" title="A0 PDF" onClick={() => void import("../export/exports").then(({ exportPlanPdf }) => exportPlanPdf(project, plan, database.blocks, database.categories, locale, latestRevision))}>A0</Button>
         <Button className="toolbar-export-action" variant="secondary" size="small" aria-label={t("editor.wordDocuments")} title={t("editor.wordDocuments")} disabled={wordPlanGenerating} onClick={() => void createWordPlan()}>A4</Button>
-        <Button size="small" aria-label={t("editor.publish")} title={t("editor.publish")} onClick={() => { setPublishInput((current) => ({ ...current, approvedBy: project.participants.find((participant) => participant.role === "coordinator")?.name ?? "" })); setPublishOpen(true); }} disabled={blockingValidationIssues.length > 0}><ShieldCheck size={14} /><span className="toolbar-action-label">{t("editor.publish")}</span></Button>
+        <Button size="small" aria-label={t("editor.publish")} title={t("editor.publish")} onClick={() => { setPublishInput((current) => ({ ...current, approvedBy: project.participants.find((participant) => participant.role === "coordinator")?.name ?? "" })); setPublishOpen(true); }}><ShieldCheck size={14} /><span className="toolbar-action-label">{t("editor.publish")}</span></Button>
       </div>
     </header>
     {publishedIndex && <span className="save-indicator is-published"><CheckCircle2 size={13} />{t("publish.success", { index: publishedIndex })}</span>}
@@ -1024,7 +1021,7 @@ export function PlanEditorPage() {
         />}
       </main>
     </div>
-    <Modal open={publishOpen} title={t("publish.title")} onClose={() => setPublishOpen(false)}><form onSubmit={handlePublish}><div className="modal-body"><p className="page-description">{t("publish.subtitle")}</p>{warningValidationIssues.length > 0 && <div className="publish-warning-list">{warningValidationIssues.map((issue) => <p key={issue.id}><TriangleAlert size={14} /><span><strong>{issue.title}</strong>{issue.description}</span></p>)}</div>}<div className="form-grid"><label className="field"><span>{t("publish.index")}</span><input required value={publishInput.index} onChange={(event) => setPublishInput((current) => ({ ...current, index: event.target.value }))} /></label><label className="field"><span>{t("publish.approver")}</span><input required value={publishInput.approvedBy} onChange={(event) => setPublishInput((current) => ({ ...current, approvedBy: event.target.value }))} /></label><label className="field span-two"><span>{t("publish.summary")}</span><textarea required value={publishInput.changeSummary} onChange={(event) => setPublishInput((current) => ({ ...current, changeSummary: event.target.value }))} /></label></div></div><div className="modal-footer"><Button type="button" variant="secondary" onClick={() => setPublishOpen(false)}>{t("common.cancel")}</Button><Button type="submit">{t("publish.confirm")}</Button></div></form></Modal>
+    <Modal open={publishOpen} title={t("publish.title")} onClose={() => setPublishOpen(false)}><form onSubmit={handlePublish}><div className="modal-body"><p className="page-description">{t("publish.subtitle")}</p>{publishingValidationIssues.length > 0 && <div className="publish-validation-list">{publishingValidationIssues.map((issue) => <p className={`is-${issue.severity}`} key={issue.id}><TriangleAlert size={14} /><span><strong>{issue.title}</strong>{issue.description}</span></p>)}</div>}<div className="form-grid"><label className="field"><span>{t("publish.index")}</span><input required value={publishInput.index} onChange={(event) => setPublishInput((current) => ({ ...current, index: event.target.value }))} /></label><label className="field"><span>{t("publish.approver")}</span><input required value={publishInput.approvedBy} onChange={(event) => setPublishInput((current) => ({ ...current, approvedBy: event.target.value }))} /></label><label className="field span-two"><span>{t("publish.summary")}</span><textarea required value={publishInput.changeSummary} onChange={(event) => setPublishInput((current) => ({ ...current, changeSummary: event.target.value }))} /></label></div></div><div className="modal-footer"><Button type="button" variant="secondary" onClick={() => setPublishOpen(false)}>{t("common.cancel")}</Button><Button type="submit">{t("publish.confirm")}</Button></div></form></Modal>
     <Modal open={Boolean(pendingWordPlan)} title={t("documents.missingTitle")} onClose={() => setPendingWordPlan(null)}><div className="modal-body"><p>{t("documents.missingText")}</p><ul className="missing-placeholder-list">{pendingWordPlan?.missingPlaceholders.map((placeholder) => <li key={placeholder}><code>{`{{${placeholder}}}`}</code></li>)}</ul><p>{t("documents.missingChoice")}</p></div><div className="modal-footer"><Button variant="secondary" onClick={() => setPendingWordPlan(null)}>{t("documents.returnToProject")}</Button><Button disabled={wordPlanGenerating} onClick={() => void proceedWithMissingWordPlaceholders()}>{wordPlanGenerating ? t("documents.generating") : t("documents.proceedEmpty")}</Button></div></Modal>
     {planCreationDialog}
   </div></DndContext>;
@@ -1412,7 +1409,7 @@ function PlanElementView({ element, plan, project, locale, blockMap, categoryMap
       </div>
       <div className="plan-header-meta">
         <InlineText field="projectNameText" className="plan-header-project" value={element.projectNameText?.[locale] ?? project.name} editing={isEditing("projectNameText")} onCommit={(value) => onEditCommit("projectNameText", value)} onCancel={onEditCancel} label={t("editor.headerProject")} />
-        <InlineText field="projectDetailsText" value={element.projectDetailsText?.[locale] ?? `${project.projectNumber} · ${project.address}, ${project.city}`} editing={isEditing("projectDetailsText")} onCommit={(value) => onEditCommit("projectDetailsText", value)} onCancel={onEditCancel} label={t("editor.headerDetails")} />
+        <InlineText field="projectDetailsText" value={element.projectDetailsText?.[locale] ?? formatProjectDetails(project)} editing={isEditing("projectDetailsText")} onCommit={(value) => onEditCommit("projectDetailsText", value)} onCancel={onEditCancel} label={t("editor.headerDetails")} />
         <InlineText field="statusText" value={element.statusText?.[locale] ?? status} editing={isEditing("statusText")} onCommit={(value) => onEditCommit("statusText", value)} onCancel={onEditCancel} label={t("editor.headerStatus")} />
       </div>
     </header>;
@@ -1433,7 +1430,7 @@ function PlanElementView({ element, plan, project, locale, blockMap, categoryMap
       {element.shape === "callout" && <InlineText field="text" value={element.text?.[locale] ?? ""} editing={isEditing("text")} multiline onCommit={(value) => onEditCommit("text", value)} onCancel={onEditCancel} label={t("editor.textContent")} />}
     </div>;
   }
-  if (element.kind === "title_block") { const coordinator = project.participants.find((participant) => participant.role === "coordinator")?.name ?? "—"; return <div {...interactiveProps} className={`${interactiveProps.className} canvas-title-block`}><InlineText field="projectNameText" className="title-block-project" value={element.projectNameText?.[locale] ?? project.name} editing={isEditing("projectNameText")} onCommit={(value) => onEditCommit("projectNameText", value)} onCancel={onEditCancel} label={t("editor.titleBlockProject")} /><InlineText field="coordinatorText" value={element.coordinatorText?.[locale] ?? coordinator} editing={isEditing("coordinatorText")} onCommit={(value) => onEditCommit("coordinatorText", value)} onCancel={onEditCancel} label={t("editor.titleBlockCoordinator")} /><InlineText field="referenceText" value={element.referenceText?.[locale] ?? `${project.projectNumber} · A0`} editing={isEditing("referenceText")} onCommit={(value) => onEditCommit("referenceText", value)} onCancel={onEditCancel} label={t("editor.titleBlockReference")} /></div>; }
+  if (element.kind === "title_block") { const coordinator = project.participants.find((participant) => participant.role === "coordinator")?.name ?? "—"; return <div {...interactiveProps} className={`${interactiveProps.className} canvas-title-block`}><InlineText field="projectNameText" className="title-block-project" value={element.projectNameText?.[locale] ?? project.name} editing={isEditing("projectNameText")} onCommit={(value) => onEditCommit("projectNameText", value)} onCancel={onEditCancel} label={t("editor.titleBlockProject")} /><InlineText field="coordinatorText" value={element.coordinatorText?.[locale] ?? coordinator} editing={isEditing("coordinatorText")} onCommit={(value) => onEditCommit("coordinatorText", value)} onCancel={onEditCancel} label={t("editor.titleBlockCoordinator")} /><InlineText field="referenceText" value={element.referenceText?.[locale] ?? joinProvidedProjectValues([project.projectNumber, "A0"])} editing={isEditing("referenceText")} onCommit={(value) => onEditCommit("referenceText", value)} onCancel={onEditCancel} label={t("editor.titleBlockReference")} /></div>; }
   if (element.kind === "text") return <div {...interactiveProps} className={`${interactiveProps.className} canvas-text`} style={{ ...interactiveProps.style, ...annotationVisualStyle(element) }}><InlineText field="text" value={element.text[locale] ?? ""} editing={isEditing("text")} multiline onCommit={(value) => onEditCommit("text", value)} onCancel={onEditCancel} label={t("editor.textContent")} /></div>;
   return null;
 }

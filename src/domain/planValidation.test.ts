@@ -20,7 +20,7 @@ describe("plan validation", () => {
       ...item!.customShortDescription,
       [database.user.preferredLocale]: "Overflow ".repeat(50_000),
     };
-    const issues = createPlanValidationIssues({ plan, project: database.projects[0], blocks: database.blocks, documentConfigurations: database.documentConfigurations, documentTemplates: database.documentTemplates, locale: database.user.preferredLocale, t });
+    const issues = createPlanValidationIssues({ plan, project: database.projects[0], blocks: database.blocks, locale: database.user.preferredLocale, t });
     const overflow = issues.find((issue) => issue.ruleCode === "TEXT_OVERFLOW" && issue.elementId === element.id);
     expect(overflow?.id).toBe(`TEXT_OVERFLOW:${element.id}`);
     expect(overflow?.title).toContain(database.blocks.find((block) => block.id === element.blockId)?.translations[database.user.preferredLocale].title);
@@ -39,8 +39,6 @@ describe("plan validation", () => {
       plan: fittedPlan,
       project: database.projects[0],
       blocks: database.blocks,
-      documentConfigurations: database.documentConfigurations,
-      documentTemplates: database.documentTemplates,
       locale: "en",
       t,
     }).filter((issue) => issue.elementId && managedElementIds.has(issue.elementId) && BLOCK_LAYOUT_VALIDATION_RULE_CODES.has(issue.ruleCode));
@@ -49,19 +47,34 @@ describe("plan validation", () => {
     expect(issues).toEqual([]);
   });
 
-  it("removes resolved element issues without disturbing stable global issue IDs", () => {
+  it("removes resolved element issues", () => {
     const database = createSeedDatabase();
     const plan = structuredClone(database.plans[0]);
     const element = plan.layout.elements.find((candidate) => candidate.kind === "text" || candidate.kind === "block");
     expect(element).toBeDefined();
     if (!element) return;
     element.x = -100;
-    const before = createPlanValidationIssues({ plan, project: database.projects[0], blocks: database.blocks, documentConfigurations: database.documentConfigurations, documentTemplates: database.documentTemplates, locale: database.user.preferredLocale, t });
+    const before = createPlanValidationIssues({ plan, project: database.projects[0], blocks: database.blocks, locale: database.user.preferredLocale, t });
     expect(before.some((issue) => issue.id === `LAYOUT_OUTSIDE_SAFE_AREA:${element.id}`)).toBe(true);
     element.x = getUsableCanvasBounds(plan.layout).x;
-    const after = createPlanValidationIssues({ plan, project: database.projects[0], blocks: database.blocks, documentConfigurations: database.documentConfigurations, documentTemplates: database.documentTemplates, locale: database.user.preferredLocale, t });
+    const after = createPlanValidationIssues({ plan, project: database.projects[0], blocks: database.blocks, locale: database.user.preferredLocale, t });
     expect(after.some((issue) => issue.id === `LAYOUT_OUTSIDE_SAFE_AREA:${element.id}`)).toBe(false);
-    expect(after.some((issue) => issue.id === "PLAN_REVIEW_REQUIRED")).toBe(true);
+  });
+
+  it("does not impose hardcoded project staffing or contact requirements", () => {
+    const database = createSeedDatabase();
+    const project = { ...database.projects[0], participants: [], emergencyContacts: [] };
+    const issues = createPlanValidationIssues({
+      plan: database.plans[0],
+      project,
+      blocks: database.blocks,
+      locale: database.user.preferredLocale,
+      t,
+    });
+
+    expect(issues.some((issue) => issue.ruleCode === "PROJECT_NO_COORDINATOR")).toBe(false);
+    expect(issues.some((issue) => issue.ruleCode === "PROJECT_NO_EMERGENCY_CONTACTS")).toBe(false);
+    expect(issues.some((issue) => issue.ruleCode === "PLAN_REVIEW_REQUIRED")).toBe(false);
   });
 
   it("drops stale element issues after deletion and preserves severity order", () => {
@@ -71,11 +84,11 @@ describe("plan validation", () => {
     expect(element).toBeDefined();
     if (!element) return;
     element.x = -100;
-    const before = createPlanValidationIssues({ plan, project: database.projects[0], blocks: database.blocks, documentConfigurations: database.documentConfigurations, documentTemplates: database.documentTemplates, locale: database.user.preferredLocale, t });
+    const before = createPlanValidationIssues({ plan, project: database.projects[0], blocks: database.blocks, locale: database.user.preferredLocale, t });
     expect(before.some((issue) => issue.elementId === element.id)).toBe(true);
 
     plan.layout.elements = plan.layout.elements.filter((candidate) => candidate.id !== element.id);
-    const after = createPlanValidationIssues({ plan, project: database.projects[0], blocks: database.blocks, documentConfigurations: database.documentConfigurations, documentTemplates: database.documentTemplates, locale: database.user.preferredLocale, t });
+    const after = createPlanValidationIssues({ plan, project: database.projects[0], blocks: database.blocks, locale: database.user.preferredLocale, t });
     const liveElementIds = new Set(plan.layout.elements.map((candidate) => candidate.id));
     expect(after.every((issue) => !issue.elementId || liveElementIds.has(issue.elementId))).toBe(true);
     const severityRanks = after.map((issue) => ({ error: 0, warning: 1, information: 2 })[issue.severity]);

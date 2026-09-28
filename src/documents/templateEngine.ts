@@ -5,7 +5,7 @@ import {
 } from "docx";
 import JSZip from "jszip";
 import type {
-  BuildingBlock, BuildingBlockCategory, DocumentType, Locale, Plan, Project,
+  BuildingBlock, BuildingBlockCategory, ConstructionType, DocumentType, Locale, Plan, Project,
   ProjectDocumentConfiguration,
 } from "../domain/types";
 import { categoryHierarchyColor, categoryIdsInHierarchyOrder, categoryTrail } from "../domain/categoryTree";
@@ -497,7 +497,7 @@ export function buildTemplateData(
   categories: BuildingBlockCategory[] = [],
   documentConfigurations: ProjectDocumentConfiguration[] = [],
 ): TemplateData {
-  const constructionTypeLabels: Record<Locale, Record<Project["constructionType"], string>> = {
+  const constructionTypeLabels: Record<Locale, Record<ConstructionType, string>> = {
     de: { new_build: "Neubau", renovation: "Sanierung / Umbau", demolition: "Abbruch" },
     en: { new_build: "New build", renovation: "Renovation", demolition: "Demolition" },
   };
@@ -506,9 +506,9 @@ export function buildTemplateData(
     en: { client: "Client", owner: "Owner", coordinator: "Safety coordination", architect: "Architecture", planner: "Specialist planning", site_manager: "Site management", contractor: "Contractor" },
   };
   const projectFields: Record<string, unknown> = {
-    number: project.projectNumber, name: project.name, description: project.description, address: project.address,
-    city: project.city, construction_type: project.constructionType, start_date: project.startDate, end_date: project.endDate,
-    construction_type_label: constructionTypeLabels[locale][project.constructionType], language: locale,
+    number: project.projectNumber ?? "", name: project.name, description: project.description ?? "", address: project.address ?? "",
+    city: project.city ?? "", construction_type: project.constructionType ?? "", start_date: project.startDate ?? "", end_date: project.endDate ?? "",
+    construction_type_label: project.constructionType ? constructionTypeLabels[locale][project.constructionType] : "", language: locale,
   };
   project.customFields.forEach((field, index) => { projectFields[field.placeholderKey || normalizePlaceholderKey(field.key, `field_${index + 1}`)] = field.value; });
   const customSections: Record<string, unknown> = {};

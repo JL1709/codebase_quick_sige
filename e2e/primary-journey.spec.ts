@@ -52,10 +52,19 @@ test.beforeEach(async ({ page }) => {
   await page.reload();
 });
 
+test("project command center uses a neutral heading", async ({ page }) => {
+  await useEnglishInterface(page);
+  await page.goto("/");
+
+  await expect(page.getByRole("heading", { name: "Project command center", exact: true })).toBeVisible();
+  await expect(page.getByText(/Good morning,?\s+Max/i)).toHaveCount(0);
+});
+
 test("complete project workflow remains localized and revision-safe", async ({ page, browserName }) => {
   await useEnglishInterface(page);
   await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Projects" }).click();
-  await expect(page.getByRole("heading", { name: /Good morning/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Project command center", exact: true })).toBeVisible();
+  await expect(page.getByText(/Good morning,?\s+Max/i)).toHaveCount(0);
   await expect(page.getByText("Riverside Office Renovation", { exact: true })).toHaveCount(0);
   await expect(page.locator("body")).not.toContainText(/local prototype|\bmvp\b|multilingual catalog/i);
 
@@ -193,6 +202,18 @@ test("project creation applies templates and guided assessment creates a plan", 
   await page.getByRole("button", { name: "Create project" }).click();
   await expect(page).toHaveURL(/\/projects\/[^/]+\/plan$/);
   await expect(page.getByRole("button", { name: "Create safety plan" })).toBeVisible();
+  await expect(page.locator(".project-workspace-title span")).toHaveCount(0);
+  const minimalProjectState = await page.evaluate(() => {
+    const database = JSON.parse(window.localStorage.getItem("quicksige.database.v3") ?? "{}") as {
+      projects?: Array<Record<string, unknown> & { name?: string }>;
+    };
+    const project = database.projects?.find((candidate) => candidate.name === "Minimal project");
+    const generatedInformationFields = [
+      "projectNumber", "description", "address", "city", "constructionType", "startDate", "endDate",
+    ].filter((field) => project && Object.hasOwn(project, field));
+    return { generatedInformationFields, name: project?.name };
+  });
+  expect(minimalProjectState).toEqual({ generatedInformationFields: [], name: "Minimal project" });
   await page.getByRole("navigation", { name: "Project navigation" }).getByRole("link", { name: "Overview" }).click();
   await expect(page.getByText("Minimal project", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Internal reference", { exact: true })).toBeVisible();
@@ -243,6 +264,7 @@ test("project creation applies templates and guided assessment creates a plan", 
   await page.getByRole("button", { name: "Create draft" }).click();
   await expect(page.locator(".wysiwyg-page")).toBeVisible();
   await expect.poll(() => page.locator(".canvas-block").count()).toBeGreaterThan(0);
+  await expect(page.locator(".canvas-title-block")).toHaveCount(0);
 
   await page.getByRole("navigation", { name: "Project navigation" }).getByRole("link", { name: "Documents" }).click();
   const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+X0YV5wAAAABJRU5ErkJggg==", "base64");
@@ -1245,9 +1267,15 @@ test("primary navigation collapses to a persistent icon rail", async ({ page }) 
 test("responsive plan toolbar stays contained and selection keeps the canvas stationary", async ({ page }) => {
   await useEnglishInterface(page);
   for (const viewport of [
+    { width: 2484, height: 1522 },
+    { width: 1920, height: 1080 },
     { width: 1728, height: 1117 },
     { width: 1440, height: 900 },
     { width: 1180, height: 820 },
+    { width: 900, height: 800 },
+    { width: 720, height: 800 },
+    { width: 520, height: 780 },
+    { width: 390, height: 760 },
   ]) {
     await page.setViewportSize(viewport);
     await page.goto("/projects/project-logistics-center/plan");
@@ -1255,6 +1283,14 @@ test("responsive plan toolbar stays contained and selection keeps the canvas sta
 
     const toolbarOverflow = await page.locator(".editor-toolbar").evaluate((toolbar) => toolbar.scrollWidth - toolbar.clientWidth);
     expect(toolbarOverflow).toBeLessThanOrEqual(1);
+    const toolbarBounds = await page.locator(".editor-toolbar").boundingBox();
+    expect(toolbarBounds).not.toBeNull();
+    for (const group of [".editor-toolbar-leading", ".editor-toolbar-primary", ".editor-toolbar-trailing"]) {
+      const groupBounds = await page.locator(group).boundingBox();
+      expect(groupBounds).not.toBeNull();
+      expect(groupBounds!.x).toBeGreaterThanOrEqual(toolbarBounds!.x - 1);
+      expect(groupBounds!.x + groupBounds!.width).toBeLessThanOrEqual(toolbarBounds!.x + toolbarBounds!.width + 1);
+    }
   }
 
   await page.setViewportSize({ width: 1728, height: 1117 });
@@ -1296,6 +1332,39 @@ test("responsive plan toolbar stays contained and selection keeps the canvas sta
   expect(secondSelection.stageTop).toBeCloseTo(firstSelection.stageTop, 2);
   expect(secondSelection.scrollLeft).toBe(firstSelection.scrollLeft);
   expect(secondSelection.scrollTop).toBe(firstSelection.scrollTop);
+});
+
+test("safety-plan validation is advisory and never blocks revision publishing", async ({ page }) => {
+  await useEnglishInterface(page);
+  await page.goto("/projects/project-logistics-center/plan");
+  await expect(page.locator(".wysiwyg-page")).toBeVisible();
+  await page.evaluate(() => {
+    const storageKey = "quicksige.database.v3";
+    const database = JSON.parse(window.localStorage.getItem(storageKey) ?? "{}") as {
+      plans?: Array<{
+        projectId: string;
+        sections: Array<{ items: unknown[] }>;
+        layout: { elements: Array<{ kind: string }> };
+      }>;
+    };
+    const plan = database.plans?.find((candidate) => candidate.projectId === "project-logistics-center");
+    if (!plan) throw new Error("Demo plan was not found");
+    plan.sections = plan.sections.map((section) => ({ ...section, items: [] }));
+    plan.layout.elements = plan.layout.elements.filter((element) => element.kind !== "block" && element.kind !== "section");
+    window.localStorage.setItem(storageKey, JSON.stringify(database));
+  });
+  await page.reload();
+
+  const publishButton = page.getByRole("button", { name: "Publish revision" });
+  await expect(page.getByRole("button", { name: "Validation" })).toContainText(/[1-9]/);
+  await expect(publishButton).toBeEnabled();
+  await publishButton.click();
+  const publishDialog = page.getByRole("dialog", { name: "Publish revision" });
+  await expect(publishDialog.getByText("The plan does not contain any blocks.")).toBeVisible();
+  await publishDialog.getByLabel("Professionally reviewed by").fill("Test Reviewer");
+  await publishDialog.getByLabel("Change summary").fill("Published with an advisory validation finding");
+  await publishDialog.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(page.getByText(/Revision B was published/)).toBeVisible();
 });
 
 test("contextual toolbar covers every seeded canvas element family and drag selection stays synchronized", async ({ page }) => {

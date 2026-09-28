@@ -158,8 +158,8 @@ export function legacyProjectOverviewSections(project: Project, createId: Create
   const generalEntries: ProjectOverviewEntry[] = [];
   if (project.description) generalEntries.push(textEntry(createId, german ? "Kurzbeschreibung" : "Short description", project.description));
   if (project.address || project.city) generalEntries.push(groupEntry(createId, german ? "Projektadresse" : "Project address", [
-    textEntry(createId, german ? "Straße" : "Street", project.address),
-    textEntry(createId, german ? "Ort" : "City", project.city),
+    textEntry(createId, german ? "Straße" : "Street", project.address ?? ""),
+    textEntry(createId, german ? "Ort" : "City", project.city ?? ""),
   ]));
   if (project.startDate) generalEntries.push(dateEntry(createId, german ? "Geplanter Beginn" : "Planned start", project.startDate));
   if (project.endDate) generalEntries.push(dateEntry(createId, german ? "Geplantes Ende" : "Planned end", project.endDate));

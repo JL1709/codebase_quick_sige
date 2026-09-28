@@ -77,9 +77,9 @@ describe("local database migration", () => {
     expect(migrated?.plans.every((plan) => Boolean(plan.provenance.sourceAssessmentRunId))).toBe(true);
   });
 
-  it("removes the legacy title box from the example project canvas", () => {
+  it("removes automatically generated title boxes from every project and revision", () => {
     const source = structuredClone(createSeedDatabase());
-    source.schemaVersion = 25;
+    source.schemaVersion = 29;
     const legacyTitleBlock = {
       id: "layout-title-block",
       kind: "title_block" as const,
@@ -89,14 +89,51 @@ describe("local database migration", () => {
       height: 1_200,
       zIndex: 1_000,
     };
+    const additionalProject = { ...structuredClone(source.projects[0]), id: "project-created-by-user", name: "User project" };
+    const additionalPlan = { ...structuredClone(source.plans[0]), id: "plan-created-by-user", projectId: additionalProject.id };
+    source.projects.push(additionalProject);
+    source.plans.push(additionalPlan);
     source.plans.forEach((plan) => plan.layout.elements.push({ ...legacyTitleBlock }));
     source.revisions[0].snapshot.plan.layout.elements.push({ ...legacyTitleBlock });
 
     const migrated = migrateDatabase(source);
 
-    expect(migrated?.plans.filter((plan) => plan.projectId === "project-logistics-center")).toHaveLength(1);
+    expect(migrated?.plans.find((plan) => plan.projectId === additionalProject.id)).toBeDefined();
     expect(migrated?.plans.every((plan) => plan.layout.elements.every((element) => element.kind !== "title_block"))).toBe(true);
     expect(migrated?.revisions[0].snapshot.plan.layout.elements.every((element) => element.kind !== "title_block")).toBe(true);
+  });
+
+  it("removes synthetic project information created by the legacy project form", () => {
+    const source = structuredClone(createSeedDatabase());
+    source.schemaVersion = 30;
+    const createdAt = "2026-09-28T12:00:00.000Z";
+    const userProject = {
+      ...structuredClone(source.projects[0]),
+      id: "project-created-by-user",
+      name: "test",
+      projectNumber: "QS-2026-166",
+      description: "",
+      address: "",
+      city: "",
+      constructionType: "new_build" as const,
+      startDate: "2026-09-28",
+      endDate: "2026-09-28",
+      createdAt,
+      updatedAt: createdAt,
+    };
+    source.projects.push(userProject);
+
+    const migrated = migrateDatabase(source);
+    const migratedUserProject = migrated?.projects.find((project) => project.id === userProject.id);
+
+    expect(migratedUserProject).not.toHaveProperty("projectNumber");
+    expect(migratedUserProject).not.toHaveProperty("description");
+    expect(migratedUserProject).not.toHaveProperty("address");
+    expect(migratedUserProject).not.toHaveProperty("city");
+    expect(migratedUserProject).not.toHaveProperty("constructionType");
+    expect(migratedUserProject).not.toHaveProperty("startDate");
+    expect(migratedUserProject).not.toHaveProperty("endDate");
+    expect(migrated?.projects.find((project) => project.id === "project-logistics-center")?.projectNumber).toBe("QS-2026-014");
   });
 
   it("removes Riverside and replaces only the bundled logistics documents", () => {

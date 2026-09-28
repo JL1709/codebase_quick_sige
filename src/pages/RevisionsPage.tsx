@@ -5,6 +5,7 @@ import { Button, EmptyState } from "../components/Ui";
 import { useI18n } from "../i18n/I18nProvider";
 import { useApp } from "../state/AppProvider";
 import { getBlob } from "../data/blobRepository";
+import { projectDocumentStem } from "../domain/projectMetadata";
 import { NotFoundPage } from "./NotFoundPage";
 
 export function RevisionsPage() {
@@ -42,7 +43,7 @@ export function RevisionsPage() {
         revision.snapshot.documentConfigurations,
       );
       const document = await renderTemplate(await blobToArrayBuffer(templateBlob), data);
-      downloadBlob(document, `${revision.snapshot.project.projectNumber.toLowerCase()}-sige-plan-${revision.index}.docx`);
+      downloadBlob(document, `${projectDocumentStem(revision.snapshot.project)}-sige-plan-${revision.index}.docx`);
     } catch (error) {
       setExportError(error instanceof Error ? error.message : t("revision.exportFailed"));
     }

@@ -597,7 +597,6 @@ export function createSeedDatabase(): AppDatabase {
     createdByName: "Max",
     sourceAssessmentRunId: demoAssessmentRunId,
   });
-  generatedPlan.layout.elements = generatedPlan.layout.elements.filter((element) => element.kind !== "title_block");
   const publishedPlan = structuredClone(generatedPlan);
   publishedPlan.status = "published";
   publishedPlan.updatedAt = "2026-09-20T09:00:00.000Z";
@@ -619,7 +618,7 @@ export function createSeedDatabase(): AppDatabase {
     updatedAt: createdAt,
   }));
   return {
-    schemaVersion: 29,
+    schemaVersion: 31,
     organization: {
       id: "organization-demo",
       name: "Sicher Planen Ingenieure",

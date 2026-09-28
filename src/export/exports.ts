@@ -18,9 +18,17 @@ import { blockHierarchyColor, categoryHierarchyColor } from "../domain/categoryT
 import { calculateBlockPresentationMetrics, calculateSectionPresentationMetrics } from "../domain/planLayout";
 import { PLAN_MILLIMETRES_PER_CANVAS_PIXEL, PLAN_PRESENTATION } from "../domain/planPresentation";
 import { containDimensions } from "../domain/projectAssetPlacement";
+import {
+  formatProjectDetails,
+  formatProjectIdentity,
+  formatProjectLocation,
+  joinProvidedProjectValues,
+  projectDocumentStem,
+} from "../domain/projectMetadata";
 import type {
   BuildingBlock,
   BuildingBlockCategory,
+  ConstructionType,
   Locale,
   Plan,
   PlanAssetElement,
@@ -49,15 +57,6 @@ function downloadBlob(blob: Blob, filename: string): void {
   anchor.click();
   anchor.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
-}
-
-function safeFilename(value: string): string {
-  return value
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-zA-Z0-9-_]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .toLowerCase();
 }
 
 function hexToRgb(hex: string): [number, number, number] {
@@ -123,7 +122,7 @@ export function buildPlanPdf(
     const x = unit(element.x); const y = unit(element.y); const width = unit(element.width); const height = unit(element.height);
     if (element.kind === "header") {
       const { header } = PLAN_PRESENTATION;
-      const projectDetails = `${project.projectNumber} · ${project.address}, ${project.city}`;
+      const projectDetails = formatProjectDetails(project);
       const status = revision
         ? `Revision ${revision.index} · ${new Date(revision.publishedAt).toLocaleDateString(locale === "de" ? "de-DE" : "en-GB")}`
         : locale === "de" ? "Arbeitsstand" : "Working draft";
@@ -337,7 +336,7 @@ export function buildPlanPdf(
       }
     } else if (element.kind === "title_block") {
       const { titleBlock } = PLAN_PRESENTATION;
-      pdf.setDrawColor(18, 36, 31); pdf.roundedRect(x, y, width, height, 3, 3, "S"); pdf.setTextColor(18, 36, 31); pdf.setFont("helvetica", "bold"); pdf.setFontSize(planCanvasFontSizeToPdfPoints(titleBlock.titleFontSize)); pdf.text(element.projectNameText?.[locale] ?? project.name, x + 8, y + 14); pdf.setFont("helvetica", "normal"); pdf.setFontSize(planCanvasFontSizeToPdfPoints(titleBlock.bodyFontSize)); pdf.text(element.coordinatorText?.[locale] ?? project.participants.find((participant) => participant.role === "coordinator")?.name ?? "—", x + 8, y + 28); pdf.text(element.referenceText?.[locale] ?? `${project.projectNumber} · A0`, x + 8, y + 41);
+      pdf.setDrawColor(18, 36, 31); pdf.roundedRect(x, y, width, height, 3, 3, "S"); pdf.setTextColor(18, 36, 31); pdf.setFont("helvetica", "bold"); pdf.setFontSize(planCanvasFontSizeToPdfPoints(titleBlock.titleFontSize)); pdf.text(element.projectNameText?.[locale] ?? project.name, x + 8, y + 14); pdf.setFont("helvetica", "normal"); pdf.setFontSize(planCanvasFontSizeToPdfPoints(titleBlock.bodyFontSize)); pdf.text(element.coordinatorText?.[locale] ?? project.participants.find((participant) => participant.role === "coordinator")?.name ?? "—", x + 8, y + 28); pdf.text(element.referenceText?.[locale] ?? joinProvidedProjectValues([project.projectNumber, "A0"]), x + 8, y + 41);
     }
   }
 
@@ -409,7 +408,7 @@ export async function exportPlanPdf(
     }
   }));
   buildPlanPdf({ ...project, assets }, plan, blocksWithImages, categories, locale, revision, assetPreviewByElement, pdfPageAspectRatioByElement)
-    .save(`${safeFilename(project.projectNumber)}-sige-plan-${revision?.index ?? "draft"}.pdf`);
+    .save(`${projectDocumentStem(project)}-sige-plan-${revision?.index ?? "draft"}.pdf`);
 }
 
 function blockDetailsCell(description: string, regulationLabel: string, regulations: string): TableCell {
@@ -443,10 +442,10 @@ export function buildPlanDocxDocument(
       children: [new TextRun({ text: locale === "de" ? "Sicherheits- und Gesundheitsschutzplan" : "Safety and Health Plan", bold: true, color: "12241F" })],
     }),
     new Paragraph({
-      children: [new TextRun({ text: `${project.projectNumber} · ${project.name}`, bold: true, color: "12241F" })],
+      children: [new TextRun({ text: formatProjectIdentity(project, true), bold: true, color: "12241F" })],
       spacing: { after: 80 },
     }),
-    new Paragraph({ children: [new TextRun({ text: `${project.address}, ${project.city}` })], spacing: { after: 80 } }),
+    new Paragraph({ children: [new TextRun({ text: formatProjectLocation(project) })], spacing: { after: 80 } }),
     new Paragraph({
       children: [new TextRun({
         text: `${locale === "de" ? "Dokumentsprache" : "Document language"}: ${locale.toUpperCase()} · ${revision ? `Revision ${revision.index} · ${new Date(revision.publishedAt).toLocaleDateString(locale === "de" ? "de-DE" : "en-GB")}` : locale === "de" ? "Arbeitsstand" : "Working draft"}`,
@@ -511,7 +510,7 @@ export function buildPlanDocxDocument(
 
   return new Document({
     creator: "QuickSiGe",
-    title: `${project.projectNumber} ${locale === "de" ? "Sicherheits- und Gesundheitsschutzplan" : "Safety and Health Plan"}`,
+    title: joinProvidedProjectValues([project.projectNumber, locale === "de" ? "Sicherheits- und Gesundheitsschutzplan" : "Safety and Health Plan"], " "),
     description: "Generated from a QuickSiGe plan revision",
     styles: {
       default: { document: { run: { font: "Aptos", size: 21 }, paragraph: { spacing: { line: 280 } } } },
@@ -534,7 +533,7 @@ export async function exportPlanDocx(
   revision?: PlanRevision,
 ): Promise<void> {
   const blob = await Packer.toBlob(buildPlanDocxDocument(project, plan, blocks, categories, locale, revision));
-  downloadBlob(blob, `${safeFilename(project.projectNumber)}-sige-plan-${revision?.index ?? "draft"}.docx`);
+  downloadBlob(blob, `${projectDocumentStem(project)}-sige-plan-${revision?.index ?? "draft"}.docx`);
 }
 
 interface SupportingCopy {
@@ -582,7 +581,7 @@ const participantRoleCopy: Record<Locale, Record<Project["participants"][number]
   },
 };
 
-const constructionTypeCopy: Record<Locale, Record<Project["constructionType"], string>> = {
+const constructionTypeCopy: Record<Locale, Record<ConstructionType, string>> = {
   de: { new_build: "Neubau", renovation: "Sanierung", demolition: "Abbruch" },
   en: { new_build: "New build", renovation: "Renovation", demolition: "Demolition" },
 };
@@ -600,8 +599,8 @@ function drawA4Header(pdf: jsPDF, project: Project, copy: SupportingCopy, locale
   pdf.setFont("helvetica", "normal");
   pdf.setFontSize(9);
   pdf.text(copy.subtitle, 16, 38);
-  pdf.text(`${project.projectNumber} · ${project.name}`, 194, 17, { align: "right" });
-  pdf.text(`${project.address}, ${project.city}`, 194, 28, { align: "right" });
+  pdf.text(formatProjectIdentity(project, true), 194, 17, { align: "right" });
+  pdf.text(formatProjectLocation(project), 194, 28, { align: "right" });
   pdf.text(new Date().toLocaleDateString(locale === "de" ? "de-DE" : "en-GB"), 194, 38, { align: "right" });
   pdf.setTextColor(28, 43, 38);
   return 58;
@@ -647,11 +646,11 @@ export function buildSupportingDocumentPdf(project: Project, type: Plan["support
     const coordinator = project.participants.find((participant) => participant.role === "coordinator");
     const owner = project.participants.find((participant) => participant.role === "owner");
     drawRows(pdf, [
-      [locale === "de" ? "Baustelle" : "Construction site", `${project.address}, ${project.city}`],
+      [locale === "de" ? "Baustelle" : "Construction site", formatProjectLocation(project)],
       [locale === "de" ? "Bauherr" : "Client", owner ? `${owner.name}, ${owner.company}` : "—"],
-      [locale === "de" ? "Art" : "Type", constructionTypeCopy[locale][project.constructionType]],
+      [locale === "de" ? "Art" : "Type", project.constructionType ? constructionTypeCopy[locale][project.constructionType] : ""],
       [locale === "de" ? "Koordinator" : "Coordinator", coordinator ? `${coordinator.name}, ${coordinator.company}` : "—"],
-      [locale === "de" ? "Zeitraum" : "Period", `${project.startDate} – ${project.endDate}`],
+      [locale === "de" ? "Zeitraum" : "Period", joinProvidedProjectValues([project.startDate, project.endDate], " – ")],
     ], y);
   } else {
     const items = type === "site_rules"
@@ -683,5 +682,5 @@ export function buildSupportingDocumentPdf(project: Project, type: Plan["support
 
 export function exportSupportingDocumentPdf(project: Project, type: Plan["supportingDocuments"][number]["type"], locale: Locale): void {
   buildSupportingDocumentPdf(project, type, locale)
-    .save(`${safeFilename(project.projectNumber)}-${type.replaceAll("_", "-")}.pdf`);
+    .save(`${projectDocumentStem(project)}-${type.replaceAll("_", "-")}.pdf`);
 }

@@ -22,7 +22,6 @@ export const PLAN_GRID_SIZE = 20;
 export const CSS_PIXELS_PER_LAYOUT_UNIT = 0.1;
 export const DEFAULT_PLAN_MARGINS: PlanMargins = { top: 0, right: 0, bottom: 0, left: 0 };
 
-const TITLE_BLOCK_HEIGHT = 520;
 const BASE_SECTION_HEADER_HEIGHT = PLAN_PRESENTATION.section.headerHeight / CSS_PIXELS_PER_LAYOUT_UNIT;
 const BASE_SECTION_PADDING = 60;
 const BASE_SECTION_GAP = 80;
@@ -41,7 +40,6 @@ export const MINIMUM_BLOCK_AREA_HEIGHT = 1_600;
 
 export const PLAN_BLOCK_AREA_ELEMENT_ID = "layout-block-area";
 export const PLAN_HEADER_ELEMENT_ID = "layout-header";
-export const PLAN_TITLE_BLOCK_ELEMENT_ID = "layout-title-block";
 
 interface SectionHierarchyNode {
   section: PlanSection;
@@ -827,7 +825,6 @@ export function createLayoutFromSections(
 ): PlanLayout {
   const margins = { ...DEFAULT_PLAN_MARGINS };
   const layoutBounds = { width: A0_LANDSCAPE_WIDTH, height: A0_LANDSCAPE_HEIGHT, margins };
-  const usableArea = getUsableCanvasBounds(layoutBounds);
   const blockArea = createBlockAreaElement("best_fit", layoutBounds);
   const elements: PlanElement[] = [blockArea];
   sections.filter((section) => section.items.length > 0).forEach((section, sectionIndex) => {
@@ -858,17 +855,6 @@ export function createLayoutFromSections(
         semanticOrder: sectionIndex * 1_000 + itemIndex + 1,
       });
     });
-  });
-  elements.push({
-    id: PLAN_TITLE_BLOCK_ELEMENT_ID,
-    kind: "title_block",
-    x: usableArea.right - 3_020,
-    y: usableArea.bottom - TITLE_BLOCK_HEIGHT,
-    width: 3_020,
-    height: TITLE_BLOCK_HEIGHT,
-    zIndex: 1_000,
-    semanticOrder: 10_000,
-    locked: false,
   });
   const layout: PlanLayout = {
     layoutVersion: 5,

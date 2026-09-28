@@ -87,17 +87,9 @@ export function AppProvider({ children, repository: providedRepository }: { chil
   })), [commit]);
   const createProject = useCallback((values: ProjectFormValues): Project => {
     const now = new Date().toISOString();
-    const today = now.slice(0, 10);
     const initialProject: Project = {
       id: newId("project"), organizationId: database.organization.id,
-      projectNumber: `QS-${new Date().getFullYear()}-${String(Math.floor(Math.random() * 900) + 100)}`,
       name: values.name,
-      description: "",
-      address: "",
-      city: "",
-      constructionType: "new_build",
-      startDate: today,
-      endDate: today,
       status: "draft",
       participants: [], emergencyContacts: [], customFields: [], customSections: [],
       overviewSections: values.overviewSections,

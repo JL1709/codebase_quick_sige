@@ -2,6 +2,7 @@ import { ArrowRight, CheckCircle2, ClipboardList, FileCheck2, FolderKanban, Plus
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Badge, Button, EmptyState, Modal, PageHeader } from "../components/Ui";
+import { joinProvidedProjectValues } from "../domain/projectMetadata";
 import type { Project, ProjectStatus } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
 import { useApp } from "../state/AppProvider";
@@ -15,7 +16,7 @@ export function DashboardPage() {
   const [status, setStatus] = useState<ProjectStatus | "all">("all");
   const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
   const filteredProjects = useMemo(() => database.projects.filter((project) => {
-    const matchesQuery = `${project.name} ${project.city} ${project.projectNumber}`.toLowerCase().includes(query.toLowerCase());
+    const matchesQuery = joinProvidedProjectValues([project.name, project.city, project.projectNumber], " ").toLowerCase().includes(query.toLowerCase());
     return matchesQuery && (status === "all" || project.status === status);
   }), [database.projects, query, status]);
 
@@ -30,8 +31,7 @@ export function DashboardPage() {
   return (
     <div className="page">
       <PageHeader
-        eyebrow={t("dashboard.eyebrow")}
-        title={t("dashboard.title", { name: database.user.name })}
+        title={t("dashboard.eyebrow")}
         description={t("dashboard.subtitle")}
         action={<Link to="/projects/new"><Button><Plus size={17} />{t("dashboard.newProject")}</Button></Link>}
       />
@@ -62,7 +62,7 @@ export function DashboardPage() {
                 <article className="project-row" key={project.id}>
                   <div className="project-identity">
                     <span className="project-icon"><FolderKanban size={21} /></span>
-                    <span><strong>{project.name}</strong><span>{project.projectNumber}</span></span>
+                    <span><strong>{project.name}</strong>{project.projectNumber?.trim() && <span>{project.projectNumber.trim()}</span>}</span>
                   </div>
                   <div><span className="project-meta-label">{t("project.informationSections")}</span><span className="project-meta-value">{project.overviewSections.length}</span></div>
                   <div><span className="project-meta-label">{t("project.updated")}</span><span className="project-meta-value">{formatDate(project.updatedAt)}</span></div>

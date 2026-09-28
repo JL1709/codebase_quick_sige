@@ -25,17 +25,18 @@ export const STORAGE_KEY = "quicksige.database.v3";
 const LEGACY_STORAGE_KEYS = ["quicksige.prototype.database.v2"];
 export const BACKUP_KEY = "quicksige.database.migration-backup.v2";
 export const MIGRATION_ERROR_KEY = "quicksige.database.migration-error";
-export const CURRENT_SCHEMA_VERSION = 29;
+export const CURRENT_SCHEMA_VERSION = 31;
 const CATEGORY_HIERARCHY_SCHEMA_VERSION = 24;
 const CATEGORY_ASSIGNMENT_CORRECTION_SCHEMA_VERSION = 20;
-const EXAMPLE_TITLE_BLOCK_CLEANUP_SCHEMA_VERSION = 26;
+const AUTOMATIC_TITLE_BLOCK_REMOVAL_SCHEMA_VERSION = 30;
+const SYNTHETIC_PROJECT_INFORMATION_REMOVAL_SCHEMA_VERSION = 31;
 const DEMO_CONTENT_REFRESH_SCHEMA_VERSION = 27;
 const CATALOG_TITLE_DEDUPLICATION_SCHEMA_VERSION = 28;
 const EXAMPLE_DOCUMENT_PLACEMENT_SCHEMA_VERSION = 29;
 const MIGRATION_FALLBACK_TIMESTAMP = new Date(0).toISOString();
 const LOGISTICS_DEMO_PROJECT_ID = "project-logistics-center";
+const GENERATED_PROJECT_NUMBER_PATTERN = /^QS-\d{4}-\d{3}$/;
 const REMOVED_DEMO_PROJECT_ID = "project-riverside-renovation";
-const EXAMPLE_PROJECT_IDS = new Set([LOGISTICS_DEMO_PROJECT_ID]);
 const REPLACED_DEMO_ASSET_IDS = new Set(["asset-site-image", "asset-multipage-plan"]);
 const REPLACED_DEMO_LAYOUT_ELEMENT_IDS = new Set(["layout-demo-image", "layout-demo-pdf", "layout-demo-document"]);
 const IMPORTED_UTILITIES_BLOCK_ID = "import-existing-utilities";
@@ -147,6 +148,28 @@ function migrateProject(project: PersistedProject, locale: Locale): Project {
   };
 }
 
+function removeSyntheticProjectInformation(project: Project, sourceSchemaVersion: number): Project {
+  if (sourceSchemaVersion >= SYNTHETIC_PROJECT_INFORMATION_REMOVAL_SCHEMA_VERSION
+    || project.id === LOGISTICS_DEMO_PROJECT_ID
+    || !GENERATED_PROJECT_NUMBER_PATTERN.test(project.projectNumber?.trim() ?? "")) return project;
+
+  const migratedProject = { ...project };
+  Reflect.deleteProperty(migratedProject, "projectNumber");
+  const createdDate = project.createdAt.slice(0, 10);
+  const hasLegacyCreationDefaults = project.startDate === createdDate
+    && project.endDate === createdDate
+    && project.constructionType === "new_build";
+  if (hasLegacyCreationDefaults) {
+    Reflect.deleteProperty(migratedProject, "constructionType");
+    Reflect.deleteProperty(migratedProject, "startDate");
+    Reflect.deleteProperty(migratedProject, "endDate");
+  }
+  (["description", "address", "city"] as const).forEach((field) => {
+    if (!project[field]?.trim()) Reflect.deleteProperty(migratedProject, field);
+  });
+  return migratedProject;
+}
+
 function migratePlan(plan: PersistedPlan, createdByName = "", sourceAssessmentRunId?: string): Plan {
   const planWithoutLegacyLocale = { ...plan };
   Reflect.deleteProperty(planWithoutLegacyLocale, "documentLocale");
@@ -179,8 +202,8 @@ function migratePlanCategoryHierarchy(
   };
 }
 
-function removeLegacyExampleTitleBlock(plan: Plan, sourceSchemaVersion: number): Plan {
-  if (sourceSchemaVersion >= EXAMPLE_TITLE_BLOCK_CLEANUP_SCHEMA_VERSION || !EXAMPLE_PROJECT_IDS.has(plan.projectId)) return plan;
+function removeAutomaticTitleBlock(plan: Plan, sourceSchemaVersion: number): Plan {
+  if (sourceSchemaVersion >= AUTOMATIC_TITLE_BLOCK_REMOVAL_SCHEMA_VERSION) return plan;
   return {
     ...plan,
     layout: {
@@ -410,6 +433,7 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
   const projects = source.projects
     .filter((project) => (source.schemaVersion ?? 0) >= DEMO_CONTENT_REFRESH_SCHEMA_VERSION || project.id !== REMOVED_DEMO_PROJECT_ID)
     .map((project) => migrateProject(project as PersistedProject, locale))
+    .map((project) => removeSyntheticProjectInformation(project, source.schemaVersion ?? 0))
     .map((project) => refreshLogisticsDemoDocuments(project, defaultLogisticsProject, source.schemaVersion ?? 0));
   const projectById = new Map(projects.map((project) => [project.id, project]));
   const legacyAssessments = source.assessments ?? {};
@@ -452,7 +476,7 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
       assessmentRuns.find((run) => run.projectId === plan.projectId && run.completedAt)?.id,
     ))
     .map((plan) => migratePlanCategoryHierarchy(plan, categories, blocks, source.schemaVersion ?? 0))
-    .map((plan) => removeLegacyExampleTitleBlock(plan, source.schemaVersion ?? 0))
+    .map((plan) => removeAutomaticTitleBlock(plan, source.schemaVersion ?? 0))
     .map((plan) => removeReplacedDemoCanvasElements(plan, source.schemaVersion ?? 0))
     .map((plan) => placeDefaultLogisticsDocuments(plan, defaultLogisticsPlan, source.schemaVersion ?? 0));
   const activeProjectIds = new Set<string>();
@@ -496,12 +520,15 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
         snapshot: {
           ...revision.snapshot,
           project: refreshLogisticsDemoDocuments(
-            migrateProject(revision.snapshot.project as PersistedProject, locale),
+            removeSyntheticProjectInformation(
+              migrateProject(revision.snapshot.project as PersistedProject, locale),
+              source.schemaVersion ?? 0,
+            ),
             defaultLogisticsProject,
             source.schemaVersion ?? 0,
           ),
           plan: removeReplacedDemoCanvasElements(
-            removeLegacyExampleTitleBlock(
+            removeAutomaticTitleBlock(
               migratePlanCategoryHierarchy(snapshotPlan, snapshotCategories, snapshotBlocks, source.schemaVersion ?? 0),
               source.schemaVersion ?? 0,
             ),
@@ -529,7 +556,10 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
       return {
         ...document,
         templateRevision: document.templateRevision ?? 1,
-        projectSnapshot: migrateProject((document.projectSnapshot ?? structuredClone(project)) as PersistedProject, locale),
+        projectSnapshot: removeSyntheticProjectInformation(
+          migrateProject((document.projectSnapshot ?? structuredClone(project)) as PersistedProject, locale),
+          source.schemaVersion ?? 0,
+        ),
         planSnapshot: document.planSnapshot ? migratePlan(document.planSnapshot as PersistedPlan, source.user?.name ?? defaults.user.name) : plan ? structuredClone(plan) : undefined,
         language: document.language ?? locale,
         dependencyFingerprint: document.dependencyFingerprint ?? "legacy",

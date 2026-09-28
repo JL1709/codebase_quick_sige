@@ -94,14 +94,14 @@ export interface ProjectDocumentFolder {
 export interface Project {
   id: string;
   organizationId: string;
-  projectNumber: string;
+  projectNumber?: string;
   name: string;
-  description: string;
-  address: string;
-  city: string;
-  constructionType: ConstructionType;
-  startDate: string;
-  endDate: string;
+  description?: string;
+  address?: string;
+  city?: string;
+  constructionType?: ConstructionType;
+  startDate?: string;
+  endDate?: string;
   status: ProjectStatus;
   participants: Participant[];
   emergencyContacts: EmergencyContact[];

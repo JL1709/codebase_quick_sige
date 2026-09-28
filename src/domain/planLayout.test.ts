@@ -6,7 +6,7 @@ import {
   cssPixelsToLayoutUnits, ensurePlanLayout, findNextFreeBlockPosition, findNextFreeNonBlockPosition,
   fitBlocksInArea, getBlockArea, getUsableCanvasBounds, layoutUnitsToCssPixels, layoutUnitsToMillimetres, PLAN_UNITS_PER_MILLIMETRE,
   reconcilePlanSectionsWithCatalog, resizeElementFromCssMeasurement, snapToGrid,
-  calculateBlockPresentationMetrics, calculateSectionPresentationMetrics,
+  calculateBlockPresentationMetrics, calculateSectionPresentationMetrics, createLayoutFromSections,
 } from "./planLayout";
 
 describe("physical A0 layout", () => {
@@ -58,6 +58,12 @@ describe("physical A0 layout", () => {
     expect(layout.paperRaster).toBe("none");
     expect(layout.elements.find((element) => element.kind === "block_area")?.locked).toBe(false);
     expect(layout.elements.some((element) => element.kind === "header")).toBe(false);
+    expect(layout.elements.some((element) => element.kind === "title_block")).toBe(false);
+  });
+
+  it("does not add a title box to a newly created plan layout", () => {
+    const layout = createLayoutFromSections([]);
+
     expect(layout.elements.some((element) => element.kind === "title_block")).toBe(false);
   });
 

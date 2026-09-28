@@ -5,6 +5,7 @@ import { Button, PageHeader } from "../components/Ui";
 import { defaultAssessmentAnswers } from "../data/seed";
 import type { AssessmentAnswers, Season } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
+import { formatProjectIdentity } from "../domain/projectMetadata";
 import { useApp } from "../state/AppProvider";
 import { NotFoundPage } from "./NotFoundPage";
 
@@ -50,7 +51,7 @@ export function AssessmentPage() {
         </aside>
 
         <section className="panel assessment-card">
-          <div className="assessment-card-header"><p className="eyebrow">{t("assessment.progress", { current: step + 1, total: steps.length })}</p><h2>{t(`assessment.step.${steps[step].key}`)}</h2><p>{project.name} · {project.projectNumber}</p></div>
+          <div className="assessment-card-header"><p className="eyebrow">{t("assessment.progress", { current: step + 1, total: steps.length })}</p><h2>{t(`assessment.step.${steps[step].key}`)}</h2><p>{formatProjectIdentity(project)}</p></div>
           <div className="assessment-fields">
             {step === 0 && <>
               <label className="question-card"><span>{t("assessment.employerCount")}</span><input type="number" min="1" value={answers.employerCount} onChange={(event) => update("employerCount", Number(event.target.value))} /></label>

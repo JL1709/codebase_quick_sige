@@ -1,4 +1,4 @@
-import type { BuildingBlock, DocumentTemplate, Locale, Plan, Project, ProjectDocumentConfiguration } from "./types";
+import type { BuildingBlock, Locale, Plan, Project } from "./types";
 import { calculateBlockPresentationMetrics, getBlockArea, getUsableCanvasBounds } from "./planLayout";
 
 export type PlanValidationSeverity = "error" | "warning" | "information";
@@ -11,7 +11,6 @@ export interface PlanValidationIssue {
   title: string;
   description: string;
   suggestedAction?: string;
-  professionalReview: boolean;
 }
 
 export const BLOCK_LAYOUT_VALIDATION_RULE_CODES = new Set([
@@ -26,8 +25,6 @@ interface ValidationInput {
   plan: Plan;
   project: Project;
   blocks: BuildingBlock[];
-  documentConfigurations: ProjectDocumentConfiguration[];
-  documentTemplates: DocumentTemplate[];
   locale: Locale;
   t: (key: string, params?: Record<string, string | number>) => string;
 }
@@ -46,7 +43,7 @@ function elementName(plan: Plan, project: Project, blocks: Map<string, BuildingB
   return t(`editor.element.${element.kind}`);
 }
 
-export function createPlanValidationIssues({ plan, project, blocks, documentConfigurations, documentTemplates, locale, t }: ValidationInput): PlanValidationIssue[] {
+export function createPlanValidationIssues({ plan, project, blocks, locale, t }: ValidationInput): PlanValidationIssue[] {
   const issues: PlanValidationIssue[] = [];
   const blockMap = new Map(blocks.map((block) => [block.id, block]));
   const blockArea = getBlockArea(plan.layout);
@@ -62,7 +59,6 @@ export function createPlanValidationIssues({ plan, project, blocks, documentConf
       title: t("editor.validation.elementIssue", { name }),
       description: t(descriptionKey, { name }),
       suggestedAction: t(suggestedActionKey),
-      professionalReview: false,
     });
   };
 
@@ -119,13 +115,6 @@ export function createPlanValidationIssues({ plan, project, blocks, documentConf
     if (overlapsAnotherBlock) addElementIssue("LAYOUT_BLOCK_OVERLAP", element.id, "editor.validation.overlapDescription", "editor.validation.fitBlocksAgain");
   });
 
-  if (!plan.sections.some((section) => section.items.length > 0)) issues.push({ id: "PLAN_NO_BLOCKS", severity: "error", ruleCode: "PLAN_NO_BLOCKS", title: t("editor.noBlocks"), description: t("editor.validation.noBlocksDescription"), suggestedAction: t("editor.validation.addBlock"), professionalReview: false });
-  if (!project.participants.some((participant) => participant.role === "coordinator")) issues.push({ id: "PROJECT_NO_COORDINATOR", severity: "error", ruleCode: "PROJECT_NO_COORDINATOR", title: t("editor.missingCoordinator"), description: t("editor.validation.coordinatorDescription"), suggestedAction: t("editor.validation.openOverview"), professionalReview: false });
-  for (const configuration of documentConfigurations.filter((candidate) => candidate.projectId === project.id)) {
-    const template = documentTemplates.find((candidate) => candidate.id === configuration.templateId);
-    if (!template || template.validation?.status === "invalid") issues.push({ id: `DOCUMENT_TEMPLATE_INVALID:${configuration.id}`, severity: "error", ruleCode: "DOCUMENT_TEMPLATE_INVALID", title: t("editor.invalidTemplate"), description: t("editor.validation.templateDescription"), suggestedAction: t("editor.validation.openTemplates"), professionalReview: false });
-  }
-  if (project.emergencyContacts.length === 0) issues.push({ id: "PROJECT_NO_EMERGENCY_CONTACTS", severity: "warning", ruleCode: "PROJECT_NO_EMERGENCY_CONTACTS", title: t("editor.missingEmergency"), description: t("editor.validation.emergencyDescription"), suggestedAction: t("editor.validation.openOverview"), professionalReview: true });
-  issues.push({ id: "PLAN_REVIEW_REQUIRED", severity: "information", ruleCode: "PLAN_REVIEW_REQUIRED", title: t("editor.validation.reviewTitle"), description: t("editor.validation.reviewDescription"), professionalReview: true });
+  if (!plan.sections.some((section) => section.items.length > 0)) issues.push({ id: "PLAN_NO_BLOCKS", severity: "error", ruleCode: "PLAN_NO_BLOCKS", title: t("editor.noBlocks"), description: t("editor.validation.noBlocksDescription"), suggestedAction: t("editor.validation.addBlock") });
   return issues.sort((left, right) => ({ error: 0, warning: 1, information: 2 })[left.severity] - ({ error: 0, warning: 1, information: 2 })[right.severity] || left.id.localeCompare(right.id));
 }
