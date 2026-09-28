@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { PlanAssetElement } from "../domain/types";
 import { createSeedDatabase } from "./seed";
 import {
   BACKUP_KEY, CURRENT_SCHEMA_VERSION, LocalStorageRepository, MIGRATION_ERROR_KEY,
@@ -74,6 +75,122 @@ describe("local database migration", () => {
     expect(migrated).not.toHaveProperty("assessments");
     expect(migrated?.plans.every((plan) => plan.provenance.method === "guided_assessment")).toBe(true);
     expect(migrated?.plans.every((plan) => Boolean(plan.provenance.sourceAssessmentRunId))).toBe(true);
+  });
+
+  it("removes the legacy title box from the example project canvas", () => {
+    const source = structuredClone(createSeedDatabase());
+    source.schemaVersion = 25;
+    const legacyTitleBlock = {
+      id: "layout-title-block",
+      kind: "title_block" as const,
+      x: 8_700,
+      y: 7_000,
+      width: 3_000,
+      height: 1_200,
+      zIndex: 1_000,
+    };
+    source.plans.forEach((plan) => plan.layout.elements.push({ ...legacyTitleBlock }));
+    source.revisions[0].snapshot.plan.layout.elements.push({ ...legacyTitleBlock });
+
+    const migrated = migrateDatabase(source);
+
+    expect(migrated?.plans.filter((plan) => plan.projectId === "project-logistics-center")).toHaveLength(1);
+    expect(migrated?.plans.every((plan) => plan.layout.elements.every((element) => element.kind !== "title_block"))).toBe(true);
+    expect(migrated?.revisions[0].snapshot.plan.layout.elements.every((element) => element.kind !== "title_block")).toBe(true);
+  });
+
+  it("removes Riverside and replaces only the bundled logistics documents", () => {
+    const source = structuredClone(createSeedDatabase());
+    source.schemaVersion = 26;
+    const logisticsProject = source.projects[0];
+    const logisticsPlan = source.plans[0];
+    const riversideProject = { ...structuredClone(logisticsProject), id: "project-riverside-renovation", name: "Riverside Office Renovation" };
+    const riversidePlan = { ...structuredClone(logisticsPlan), id: "plan-project-riverside-renovation", projectId: riversideProject.id };
+    source.projects.push(riversideProject);
+    source.plans.push(riversidePlan);
+    logisticsProject.assets = [
+      { id: "asset-site-image", filename: "baustellenlage.png", mimeType: "image/png", byteSize: 70, createdAt: logisticsProject.createdAt },
+      { id: "asset-multipage-plan", filename: "lageplan-zweiseitig.pdf", mimeType: "application/pdf", byteSize: 3_600, createdAt: logisticsProject.createdAt },
+      { id: "asset-user-upload", filename: "keep-me.jpg", mimeType: "image/jpeg", byteSize: 100, createdAt: logisticsProject.createdAt },
+    ];
+    logisticsPlan.includedAssetIds = ["asset-site-image", "asset-multipage-plan"];
+    logisticsPlan.layout.elements.push(
+      { id: "layout-demo-image", kind: "image", assetId: "asset-site-image", x: 100, y: 100, width: 500, height: 500, zIndex: 700 },
+      { id: "layout-demo-pdf", kind: "pdf_page", assetId: "asset-multipage-plan", pageNumber: 1, x: 700, y: 100, width: 500, height: 500, zIndex: 701 },
+    );
+
+    const migrated = migrateDatabase(source);
+
+    expect(migrated?.projects.map((project) => project.id)).toEqual(["project-logistics-center"]);
+    expect(migrated?.plans.map((plan) => plan.projectId)).toEqual(["project-logistics-center"]);
+    expect(migrated?.projects[0].assets.map((asset) => asset.filename)).toEqual(["keep-me.jpg", "lageplan.jpg", "Infos.pdf"]);
+    expect(migrated?.plans[0].includedAssetIds).toEqual(["asset-logistics-site-plan", "asset-logistics-info-pdf"]);
+    expect(migrated?.plans[0].layout.elements.some((element) => ["layout-demo-image", "layout-demo-pdf"].includes(element.id))).toBe(false);
+    expect(migrated?.plans[0].layout.elements.filter((element) => element.kind === "image" || element.kind === "pdf_page")).toHaveLength(5);
+  });
+
+  it("deduplicates only the legacy imported utilities title", () => {
+    const source = structuredClone(createSeedDatabase());
+    source.schemaVersion = 27;
+    const importedBlock = source.blocks.find((block) => block.id === "import-existing-utilities")!;
+    importedBlock.translations.de.title = "Sicherer Umgang mit Bestandsleitungen";
+    importedBlock.translations.en.title = "Safe handling of existing utilities";
+    const originalContent = {
+      imageDataUrl: importedBlock.imageDataUrl,
+      regulations: structuredClone(importedBlock.regulations),
+      shortDescription: importedBlock.translations.de.shortDescription,
+      longDescription: importedBlock.translations.de.longDescription,
+    };
+
+    const migratedBlock = migrateDatabase(source)?.blocks.find((block) => block.id === importedBlock.id);
+
+    expect(migratedBlock?.translations.de.title).toBe("Bestandsleitungen bei Erdarbeiten berücksichtigen");
+    expect(migratedBlock?.translations.en.title).toBe("Account for existing utilities during earthworks");
+    expect(migratedBlock?.imageDataUrl).toBe(originalContent.imageDataUrl);
+    expect(migratedBlock?.regulations).toEqual(originalContent.regulations);
+    expect(migratedBlock?.translations.de.shortDescription).toBe(originalContent.shortDescription);
+    expect(migratedBlock?.translations.de.longDescription).toBe(originalContent.longDescription);
+  });
+
+  it("preserves a user-customized utilities title while correcting an unchanged language layer", () => {
+    const source = structuredClone(createSeedDatabase());
+    source.schemaVersion = 27;
+    const importedBlock = source.blocks.find((block) => block.id === "import-existing-utilities")!;
+    importedBlock.translations.de.title = "Individueller Leitungstitel";
+    importedBlock.translations.en.title = "Safe handling of existing utilities";
+
+    const migratedBlock = migrateDatabase(source)?.blocks.find((block) => block.id === importedBlock.id);
+
+    expect(migratedBlock?.translations.de.title).toBe("Individueller Leitungstitel");
+    expect(migratedBlock?.translations.en.title).toBe("Account for existing utilities during earthworks");
+  });
+
+  it("places every example project document once while preserving existing placements", () => {
+    const source = structuredClone(createSeedDatabase());
+    source.schemaVersion = 28;
+    const plan = source.plans[0];
+    const existingPage = plan.layout.elements.find(
+      (element) => element.kind === "pdf_page" && element.assetId === "asset-logistics-info-pdf" && element.pageNumber === 2,
+    )!;
+    existingPage.x = 9_000;
+    existingPage.y = 3_000;
+    plan.layout.elements = plan.layout.elements.filter((element) => (
+      element.kind !== "image" && !(element.kind === "pdf_page" && element.pageNumber !== 2)
+    ));
+    plan.includedAssetIds = ["asset-logistics-info-pdf"];
+
+    const migratedPlan = migrateDatabase(source)?.plans[0];
+    const placedDocuments = migratedPlan?.layout.elements.filter(
+      (element): element is PlanAssetElement => element.kind === "image" || element.kind === "pdf_page",
+    ) ?? [];
+    const migratedPage = placedDocuments.find(
+      (element) => element.kind === "pdf_page" && element.assetId === "asset-logistics-info-pdf" && element.pageNumber === 2,
+    );
+
+    expect(migratedPlan?.includedAssetIds).toEqual(["asset-logistics-info-pdf", "asset-logistics-site-plan"]);
+    expect(placedDocuments).toHaveLength(5);
+    expect(migratedPage).toMatchObject({ id: existingPage.id, x: 9_000, y: 3_000 });
+    expect(placedDocuments.filter((element) => element.kind === "pdf_page").map((element) => element.pageNumber).sort()).toEqual([1, 2, 3, 4]);
   });
 
   it("keeps valid document folders and moves files from missing folders to Unsorted", () => {
@@ -167,6 +284,19 @@ describe("local database migration", () => {
     expect(migrated?.blocks.find((block) => block.id === "block-temporary-power")?.primaryCategoryId).toBe("site-power-water");
     expect(migrated?.blocks.find((block) => block.id === "organization-archived-infection-access")?.primaryCategoryId).toBe("site-access-emergency");
     expect(migrated?.blocks.find((block) => block.id === "block-first-aid")?.primaryCategoryId).toBe("earthworks");
+  });
+
+  it("does not reapply old category corrections during newer migrations", () => {
+    const source = createSeedDatabase();
+    source.schemaVersion = 28;
+    const deliberatelyMovedBlock = source.blocks.find((block) => block.id === "block-site-fencing")!;
+    deliberatelyMovedBlock.primaryCategoryId = "site-access-emergency";
+    deliberatelyMovedBlock.categoryIds = ["site-setup", "site-access-emergency"];
+
+    const migratedBlock = migrateDatabase(source)?.blocks.find((block) => block.id === deliberatelyMovedBlock.id);
+
+    expect(migratedBlock?.primaryCategoryId).toBe("site-access-emergency");
+    expect(migratedBlock?.categoryIds).toEqual(["site-setup", "site-access-emergency"]);
   });
 
   it("removes legacy block and descendant colors from live data and revision snapshots", () => {

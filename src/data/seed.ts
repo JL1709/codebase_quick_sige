@@ -9,6 +9,8 @@ import type {
   BuildingBlockCategory,
   Locale,
   LocalizedBuildingBlockContent,
+  Plan,
+  PlanAssetElement,
   Project,
 } from "../domain/types";
 
@@ -378,8 +380,8 @@ const importedBlocks: BuildingBlock[] = [
     categoryIds: ["preparation", "existing-underground-utilities"], visualKey: "utilities",
     regulations: [], lifecycle: "active",
     translations: localizedContent(
-      ["Sicherer Umgang mit Bestandsleitungen", "Berücksichtigung der Lage von Leitungen, Kabeln, Kanälen o. ä. im Bereich der Baugruben oder Gräben.", "Beschreibung A4 Sicherer Umgang mit Bestandsleitungen", ["Bestandsleitungen", "Kabel", "Kanäle"]],
-      ["Safe handling of existing utilities", "Consider the location of utilities, cables, ducts, and similar services near excavations or trenches.", "Detailed requirements for safely handling existing underground utilities.", ["utilities", "cables", "ducts"]],
+      ["Bestandsleitungen bei Erdarbeiten berücksichtigen", "Berücksichtigung der Lage von Leitungen, Kabeln, Kanälen o. ä. im Bereich der Baugruben oder Gräben.", "Beschreibung A4 Sicherer Umgang mit Bestandsleitungen", ["Bestandsleitungen", "Kabel", "Kanäle"]],
+      ["Account for existing utilities during earthworks", "Consider the location of utilities, cables, ducts, and similar services near excavations or trenches.", "Detailed requirements for safely handling existing underground utilities.", ["utilities", "cables", "ducts"]],
     ),
   },
   {
@@ -436,8 +438,60 @@ export const seedBlocks: BuildingBlock[] = [...starterBlocks, ...importedBlocks,
   imageDataUrl: defaultBlockImageSource(block.id),
 }));
 
-const demoImageDataUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
-const demoPdfDataUrl = "data:application/pdf;base64,JVBERi0xLjMKJbrfrOAKMyAwIG9iago8PC9UeXBlIC9QYWdlCi9QYXJlbnQgMSAwIFIKL1Jlc291cmNlcyAyIDAgUgovTWVkaWFCb3ggWzAgMCA1OTUuMjc5OTk5OTk5OTk5OTcyNyA4NDEuODg5OTk5OTk5OTk5OTg2NF0KL0NvbnRlbnRzIDQgMCBSCj4+CmVuZG9iago0IDAgb2JqCjw8Ci9MZW5ndGggMTUxCj4+CnN0cmVhbQowLjU2NzAwMDAwMDAwMDAwMDEgdwowIEcKQlQKL0YxIDE2IFRmCjE4LjM5OTk5OTk5OTk5OTk5ODYgVEwKMCBnCjU2LjY5MjkxMzM4NTgyNjc3NzUgNzg1LjE5NzA4NjYxNDE3MzI1ODYgVGQKKFF1aWNrU2lHZSBwbGFuIGF0dGFjaG1lbnQgLSBwYWdlIDEpIFRqCkVUCmVuZHN0cmVhbQplbmRvYmoKNSAwIG9iago8PC9UeXBlIC9QYWdlCi9QYXJlbnQgMSAwIFIKL1Jlc291cmNlcyAyIDAgUgovTWVkaWFCb3ggWzAgMCA1OTUuMjc5OTk5OTk5OTk5OTcyNyA4NDEuODg5OTk5OTk5OTk5OTg2NF0KL0NvbnRlbnRzIDYgMCBSCj4+CmVuZG9iago2IDAgb2JqCjw8Ci9MZW5ndGggMTUxCj4+CnN0cmVhbQowLjU2NzAwMDAwMDAwMDAwMDEgdwowIEcKQlQKL0YxIDE2IFRmCjE4LjM5OTk5OTk5OTk5OTk5ODYgVEwKMCBnCjU2LjY5MjkxMzM4NTgyNjc3NzUgNzg1LjE5NzA4NjYxNDE3MzI1ODYgVGQKKFF1aWNrU2lHZSBwbGFuIGF0dGFjaG1lbnQgLSBwYWdlIDIpIFRqCkVUCmVuZHN0cmVhbQplbmRvYmoKMSAwIG9iago8PC9UeXBlIC9QYWdlcwovS2lkcyBbMyAwIFIgNSAwIFIgXQovQ291bnQgMgo+PgplbmRvYmoKNyAwIG9iago8PAovVHlwZSAvRm9udAovQmFzZUZvbnQgL0hlbHZldGljYQovU3VidHlwZSAvVHlwZTEKL0VuY29kaW5nIC9XaW5BbnNpRW5jb2RpbmcKL0ZpcnN0Q2hhciAzMgovTGFzdENoYXIgMjU1Cj4+CmVuZG9iago4IDAgb2JqCjw8Ci9UeXBlIC9Gb250Ci9CYXNlRm9udCAvSGVsdmV0aWNhLUJvbGQKL1N1YnR5cGUgL1R5cGUxCi9FbmNvZGluZyAvV2luQW5zaUVuY29kaW5nCi9GaXJzdENoYXIgMzIKL0xhc3RDaGFyIDI1NQo+PgplbmRvYmoKOSAwIG9iago8PAovVHlwZSAvRm9udAovQmFzZUZvbnQgL0hlbHZldGljYS1PYmxpcXVlCi9TdWJ0eXBlIC9UeXBlMQovRW5jb2RpbmcgL1dpbkFuc2lFbmNvZGluZwovRmlyc3RDaGFyIDMyCi9MYXN0Q2hhciAyNTUKPj4KZW5kb2JqCjEwIDAgb2JqCjw8Ci9UeXBlIC9Gb250Ci9CYXNlRm9udCAvSGVsdmV0aWNhLUJvbGRPYmxpcXVlCi9TdWJ0eXBlIC9UeXBlMQovRW5jb2RpbmcgL1dpbkFuc2lFbmNvZGluZwovRmlyc3RDaGFyIDMyCi9MYXN0Q2hhciAyNTUKPj4KZW5kb2JqCjExIDAgb2JqCjw8Ci9UeXBlIC9Gb250Ci9CYXNlRm9udCAvQ291cmllcgovU3VidHlwZSAvVHlwZTEKL0VuY29kaW5nIC9XaW5BbnNpRW5jb2RpbmcKL0ZpcnN0Q2hhciAzMgovTGFzdENoYXIgMjU1Cj4+CmVuZG9iagoxMiAwIG9iago8PAovVHlwZSAvRm9udAovQmFzZUZvbnQgL0NvdXJpZXItQm9sZAovU3VidHlwZSAvVHlwZTEKL0VuY29kaW5nIC9XaW5BbnNpRW5jb2RpbmcKL0ZpcnN0Q2hhciAzMgovTGFzdENoYXIgMjU1Cj4+CmVuZG9iagoxMyAwIG9iago8PAovVHlwZSAvRm9udAovQmFzZUZvbnQgL0NvdXJpZXItT2JsaXF1ZQovU3VidHlwZSAvVHlwZTEKL0VuY29kaW5nIC9XaW5BbnNpRW5jb2RpbmcKL0ZpcnN0Q2hhciAzMgovTGFzdENoYXIgMjU1Cj4+CmVuZG9iagoxNCAwIG9iago8PAovVHlwZSAvRm9udAovQmFzZUZvbnQgL0NvdXJpZXItQm9sZE9ibGlxdWUKL1N1YnR5cGUgL1R5cGUxCi9FbmNvZGluZyAvV2luQW5zaUVuY29kaW5nCi9GaXJzdENoYXIgMzIKL0xhc3RDaGFyIDI1NQo+PgplbmRvYmoKMTUgMCBvYmoKPDwKL1R5cGUgL0ZvbnQKL0Jhc2VGb250IC9UaW1lcy1Sb21hbgovU3VidHlwZSAvVHlwZTEKL0VuY29kaW5nIC9XaW5BbnNpRW5jb2RpbmcKL0ZpcnN0Q2hhciAzMgovTGFzdENoYXIgMjU1Cj4+CmVuZG9iagoxNiAwIG9iago8PAovVHlwZSAvRm9udAovQmFzZUZvbnQgL0hlbHZldGljYS1Cb2xkCi9TdWJ0eXBlIC9UeXBlMQovRW5jb2RpbmcgL1dpbkFuc2lFbmNvZGluZwovRmlyc3RDaGFyIDMyCi9MYXN0Q2hhciAyNTUKPj4KZW5kb2JqCjE3IDAgb2JqCjw8Ci9UeXBlIC9Gb250Ci9CYXNlRm9udCAvVGltZXMtSXRhbGljCi9TdWJ0eXBlIC9UeXBlMQovRW5jb2RpbmcgL1dpbkFuc2lFbmNvZGluZwovRmlyc3RDaGFyIDMyCi9MYXN0Q2hhciAyNTUKPj4KZW5kb2JqCjE4IDAgb2JqCjw8Ci9UeXBlIC9Gb250Ci9CYXNlRm9udCAvVGltZXMtQm9sZEl0YWxpYwovU3VidHlwZSAvVHlwZTEKL0VuY29kaW5nIC9XaW5BbnNpRW5jb2RpbmcKL0ZpcnN0Q2hhciAzMgovTGFzdENoYXIgMjU1Cj4+CmVuZG9iagoxOSAwIG9iago8PAovVHlwZSAvRm9udAovQmFzZUZvbnQgL1phcGZEaW5nYmF0cwovU3VidHlwZSAvVHlwZTEKL0ZpcnN0Q2hhciAzMgovTGFzdENoYXIgMjU1Cj4+CmVuZG9iagoyMCAwIG9iago8PAovVHlwZSAvRm9udAovQmFzZUZvbnQgL1N5bWJvbAovU3VidHlwZSAvVHlwZTEKL0ZpcnN0Q2hhciAzMgovTGFzdENoYXIgMjU1Cj4+CmVuZG9iagoyIDAgb2JqCjw8Ci9Qcm9jU2V0IFsvUERGIC9UZXh0IC9JbWFnZUIgL0ltYWdlQyAvSW1hZ2VJXQovRm9udCA8PAovRjEgNyAwIFIKL0YyIDggMCBSCi9GMyA5IDAgUgovRjQgMTAgMCBSCi9GNSAxMSAwIFIKL0Y2IDEyIDAgUgovRjcgMTMgMCBSCi9GOCAxNCAwIFIKL0Y5IDE1IDAgUgovRjEwIDE2IDAgUgovRjExIDE3IDAgUgovRjEyIDE4IDAgUgovRjEzIDE5IDAgUgovRjE0IDIwIDAgUgo+PgovWE9iamVjdCA8PAo+Pgo+PgplbmRvYmoKMjEgMCBvYmoKPDwKL1Byb2R1Y2VyIChqc1BERiA0LjIuMSkKL0NyZWF0aW9uRGF0ZSAoRDoyMDI2MDkyNjIwNDkwMy0wNycwMCcpCj4+CmVuZG9iagoyMiAwIG9iago8PAovVHlwZSAvQ2F0YWxvZwovUGFnZXMgMSAwIFIKL09wZW5BY3Rpb24gWzMgMCBSIC9GaXRIIG51bGxdCi9QYWdlTGF5b3V0IC9PbmVDb2x1bW4KPj4KZW5kb2JqCnhyZWYKMCAyMwowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDA2OTMgMDAwMDAgbiAKMDAwMDAwMjUxOCAwMDAwMCBuIAowMDAwMDAwMDE1IDAwMDAwIG4gCjAwMDAwMDAxNTIgMDAwMDAgbiAKMDAwMDAwMDM1NCAwMDAwMCBuIAowMDAwMDAwNDkxIDAwMDAwIG4gCjAwMDAwMDA3NTYgMDAwMDAgbiAKMDAwMDAwMDg4MSAwMDAwMCBuIAowMDAwMDEwMTEgMDAwMDAgbiAKMDAwMDAwMTE0NCAwMDAwMCBuIAowMDAwMDAxMjgyIDAwMDAwIG4gCjAwMDAwMDE0MDYgMDAwMDAgbiAKMDAwMDAxNTM1IDAwMDAwIG4gCjAwMDAwMDE2NjcgMDAwMDAgbiAKMDAwMDAxODAzIDAwMDAwIG4gCjAwMDAwMDE5MzEgMDAwMDAgbiAKMDAwMDAyMDU4IDAwMDAwIG4gCjAwMDAwMDIxODcgMDAwMDAgbiAKMDAwMDAyMzIwIDAwMDAwIG4gCjAwMDAwMDI0MjIgMDAwMDAgbiAKMDAwMDAyNzY4IDAwMDAwIG4gCjAwMDAwMDI4NTQgMDAwMDAgbiAKdHJhaWxlcgo8PAovU2l6ZSAyMwovUm9vdCAyMiAwIFIKL0luZm8gMjEgMCBSCi9JRCBbPDExMkUyNTdBOTU2QzE1RjdERkY3M0U1Q0E5N0M4RTJBPiA8MTEyRTI1N0E5NTZDMUZENEZGNzNFNUNBOTdDOEUyQT4gXQo+PgpzdGFydHhyZWYKMjk1OAolJUVPRg==";
+const LOGISTICS_SITE_PLAN_ASSET_ID = "asset-logistics-site-plan";
+const LOGISTICS_INFORMATION_PDF_ASSET_ID = "asset-logistics-info-pdf";
+const EXAMPLE_DOCUMENT_Z_INDEX = 700;
+const EXAMPLE_DOCUMENT_SEMANTIC_ORDER = 20_000;
+const EXAMPLE_DOCUMENT_LEFT_COLUMN_X = 8_440;
+const EXAMPLE_DOCUMENT_RIGHT_COLUMN_X = 10_140;
+const EXAMPLE_SITE_PLAN_Y = 400;
+const EXAMPLE_SITE_PLAN_WIDTH = 3_300;
+const EXAMPLE_SITE_PLAN_HEIGHT = 2_040;
+const EXAMPLE_PDF_FIRST_ROW_Y = 2_700;
+const EXAMPLE_PDF_SECOND_ROW_Y = 5_200;
+const EXAMPLE_PDF_PAGE_WIDTH = 1_600;
+const EXAMPLE_PDF_PAGE_HEIGHT = 2_260;
+
+function placeExampleProjectDocuments(plan: Plan): Plan {
+  const pagePositions = [
+    { pageNumber: 1, x: EXAMPLE_DOCUMENT_LEFT_COLUMN_X, y: EXAMPLE_PDF_FIRST_ROW_Y },
+    { pageNumber: 2, x: EXAMPLE_DOCUMENT_RIGHT_COLUMN_X, y: EXAMPLE_PDF_FIRST_ROW_Y },
+    { pageNumber: 3, x: EXAMPLE_DOCUMENT_LEFT_COLUMN_X, y: EXAMPLE_PDF_SECOND_ROW_Y },
+    { pageNumber: 4, x: EXAMPLE_DOCUMENT_RIGHT_COLUMN_X, y: EXAMPLE_PDF_SECOND_ROW_Y },
+  ];
+  const documentElements: PlanAssetElement[] = [
+    {
+      id: "layout-logistics-site-plan",
+      kind: "image",
+      assetId: LOGISTICS_SITE_PLAN_ASSET_ID,
+      fitMode: "contain",
+      x: EXAMPLE_DOCUMENT_LEFT_COLUMN_X,
+      y: EXAMPLE_SITE_PLAN_Y,
+      width: EXAMPLE_SITE_PLAN_WIDTH,
+      height: EXAMPLE_SITE_PLAN_HEIGHT,
+      zIndex: EXAMPLE_DOCUMENT_Z_INDEX,
+      semanticOrder: EXAMPLE_DOCUMENT_SEMANTIC_ORDER,
+    },
+    ...pagePositions.map<PlanAssetElement>(({ pageNumber, x, y }, index) => ({
+      id: `layout-logistics-info-page-${pageNumber}`,
+      kind: "pdf_page",
+      assetId: LOGISTICS_INFORMATION_PDF_ASSET_ID,
+      pageNumber,
+      fitMode: "contain",
+      x,
+      y,
+      width: EXAMPLE_PDF_PAGE_WIDTH,
+      height: EXAMPLE_PDF_PAGE_HEIGHT,
+      zIndex: EXAMPLE_DOCUMENT_Z_INDEX + index + 1,
+      semanticOrder: EXAMPLE_DOCUMENT_SEMANTIC_ORDER + index + 1,
+    })),
+  ];
+  return {
+    ...plan,
+    includedAssetIds: [LOGISTICS_SITE_PLAN_ASSET_ID, LOGISTICS_INFORMATION_PDF_ASSET_ID],
+    layout: { ...plan.layout, elements: [...plan.layout.elements, ...documentElements] },
+  };
+}
 
 const demoProject: Project = {
   id: "project-logistics-center",
@@ -476,17 +530,29 @@ const demoProject: Project = {
   }],
   overviewSections: [],
   assets: [
-    { id: "asset-site-image", filename: "baustellenlage.png", mimeType: "image/png", byteSize: 70, dataUrl: demoImageDataUrl, width: 800, height: 450, createdAt },
     {
-      id: "asset-multipage-plan",
-      filename: "lageplan-zweiseitig.pdf",
+      id: LOGISTICS_SITE_PLAN_ASSET_ID,
+      filename: "lageplan.jpg",
+      mimeType: "image/jpeg",
+      byteSize: 154_509,
+      dataUrl: "/project-documents/logistikzentrum-west/lageplan.jpg",
+      width: 1_212,
+      height: 748,
+      createdAt,
+    },
+    {
+      id: LOGISTICS_INFORMATION_PDF_ASSET_ID,
+      filename: "Infos.pdf",
       mimeType: "application/pdf",
-      byteSize: 3_600,
-      dataUrl: demoPdfDataUrl,
-      pageCount: 2,
+      byteSize: 332_327,
+      dataUrl: "/project-documents/logistikzentrum-west/Infos.pdf",
+      previewDataUrl: "/project-documents/logistikzentrum-west/infos-page-1.png",
+      pageCount: 4,
       pdfPages: [
-        { pageNumber: 1, width: 595.28, height: 841.89 },
-        { pageNumber: 2, width: 595.28, height: 841.89 },
+        { pageNumber: 1, width: 595, height: 842 },
+        { pageNumber: 2, width: 595, height: 842 },
+        { pageNumber: 3, width: 595, height: 842 },
+        { pageNumber: 4, width: 595, height: 842 },
       ],
       createdAt,
     },
@@ -517,58 +583,27 @@ const demoAssessment: AssessmentAnswers = {
   notes: "Anlieferungen kreuzen zeitweise die Zufahrt des laufenden Nachbarbetriebs.",
 };
 
-const englishProject: Project = {
-  id: "project-riverside-renovation", organizationId: "organization-demo", projectNumber: "QS-2026-021",
-  name: "Riverside Office Renovation", description: "Phased refurbishment of an occupied office building with public access.",
-  address: "24 River Lane", city: "Bristol", constructionType: "renovation", startDate: "2027-01-18", endDate: "2027-08-27",
-  status: "draft",
-  participants: [
-    { id: "participant-en-owner", role: "owner", company: "Riverside Estates", name: "Emily Carter", email: "emily.carter@example.test", phone: "+44 117 555 0140" },
-    { id: "participant-en-coordinator", role: "coordinator", company: "SafeBuild Consulting", name: "James Wilson", email: "james.wilson@example.test", phone: "+44 117 555 0141" },
-  ],
-  emergencyContacts: [{ id: "emergency-en", label: "Emergency services", name: "Emergency call", phone: "999" }],
-  customFields: [{ id: "field-en-client", key: "Client reference", value: "RE-24", placeholderKey: "client_reference" }],
-  customSections: [], overviewSections: [], assets: [], documentFolders: [], createdAt, updatedAt: createdAt,
-};
-
 function seedOverviewSections(project: Project, locale: Locale) {
   let identifierIndex = 0;
   return legacyProjectOverviewSections(project, (prefix) => `${project.id}-${prefix}-${identifierIndex++}`, locale);
 }
 
 demoProject.overviewSections = seedOverviewSections(demoProject, "de");
-englishProject.overviewSections = seedOverviewSections(englishProject, "en");
-
-const englishAssessment: AssessmentAnswers = {
-  ...demoAssessment, employerCount: 6, maxWorkers: 24, workDays: 160, estimatedPersonDays: 2_100,
-  existingUtilities: false, excavationDepth: 0, maxWorkHeight: 8, hotWorks: false, notes: "Public access remains open during the first phase.",
-};
 
 export function createSeedDatabase(): AppDatabase {
   const demoAssessmentRunId = `assessment-${demoProject.id}-initial`;
-  const englishAssessmentRunId = `assessment-${englishProject.id}-initial`;
   const generatedPlan = createPlanFromAssessment(demoProject, demoAssessment, seedBlocks, seedCategories, undefined, {
     method: "guided_assessment",
     createdByName: "Max",
     sourceAssessmentRunId: demoAssessmentRunId,
   });
+  generatedPlan.layout.elements = generatedPlan.layout.elements.filter((element) => element.kind !== "title_block");
   const publishedPlan = structuredClone(generatedPlan);
   publishedPlan.status = "published";
   publishedPlan.updatedAt = "2026-09-20T09:00:00.000Z";
-  const plan = structuredClone(generatedPlan);
+  const plan = placeExampleProjectDocuments(structuredClone(generatedPlan));
   plan.status = "draft";
   plan.updatedAt = "2026-09-26T18:00:00.000Z";
-  plan.includedAssetIds = ["asset-site-image", "asset-multipage-plan"];
-  plan.layout.elements.push(
-    { id: "layout-demo-image", kind: "image", assetId: "asset-site-image", fitMode: "cover", crop: { x: 50, y: 50, width: 100, height: 100 }, x: 8_500, y: 180, width: 3_000, height: 1_800, zIndex: 800, semanticOrder: 10_000 },
-    { id: "layout-demo-pdf", kind: "pdf_page", assetId: "asset-multipage-plan", pageNumber: 2, fitMode: "contain", x: 8_500, y: 2_080, width: 3_000, height: 2_800, zIndex: 801, semanticOrder: 10_001 },
-    { id: "layout-demo-document", kind: "document", documentType: "alarm_plan", displayVariant: "emergency_card", x: 8_500, y: 4_980, width: 3_000, height: 700, zIndex: 802, semanticOrder: 10_002 },
-  );
-  const englishPlan = createPlanFromAssessment(englishProject, englishAssessment, seedBlocks, seedCategories, undefined, {
-    method: "guided_assessment",
-    createdByName: "Max",
-    sourceAssessmentRunId: englishAssessmentRunId,
-  });
   const documentTemplates = (["de", "en"] as const).map((locale) => ({
     id: `standard-a4_plan-${locale}`,
     organizationId: "organization-demo",
@@ -584,7 +619,7 @@ export function createSeedDatabase(): AppDatabase {
     updatedAt: createdAt,
   }));
   return {
-    schemaVersion: 25,
+    schemaVersion: 29,
     organization: {
       id: "organization-demo",
       name: "Sicher Planen Ingenieure",
@@ -598,7 +633,7 @@ export function createSeedDatabase(): AppDatabase {
       role: "owner",
       preferredLocale: "de",
     },
-    projects: [demoProject, englishProject],
+    projects: [demoProject],
     assessmentRuns: [
       {
         id: demoAssessmentRunId,
@@ -610,20 +645,10 @@ export function createSeedDatabase(): AppDatabase {
         updatedAt: createdAt,
         completedAt: createdAt,
       },
-      {
-        id: englishAssessmentRunId,
-        projectId: englishProject.id,
-        definitionVersion: 1,
-        answers: englishAssessment,
-        createdByName: "Max",
-        createdAt,
-        updatedAt: createdAt,
-        completedAt: createdAt,
-      },
     ],
     blocks: seedBlocks,
     categories: seedCategories,
-    plans: [plan, englishPlan],
+    plans: [plan],
     revisions: [{
       id: "revision-demo-a", projectId: demoProject.id, planId: plan.id, index: "A", changeSummary: "Erste fachlich geprüfte Ausgabe",
       approvedBy: "Max Mustermann", publishedAt: "2026-09-20T09:00:00.000Z",

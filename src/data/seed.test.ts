@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { categoryPlacementIds } from "../domain/categoryTree";
 import { flattenOverviewEntries, localizeOverviewTemplate } from "../domain/overviewTemplates";
+import type { PlanAssetElement } from "../domain/types";
 import { createSeedDatabase } from "./seed";
 
 describe("seed data", () => {
@@ -35,11 +37,24 @@ describe("seed data", () => {
     expect(project.participants.some((participant) => participant.role === "coordinator")).toBe(true);
     expect(project.emergencyContacts.length).toBeGreaterThanOrEqual(2);
     expect(database.plans.find((plan) => plan.projectId === project.id)).toBeDefined();
-    expect(database.projects.some((candidate) => candidate.constructionType === "renovation")).toBe(true);
+    expect(database.projects).toHaveLength(1);
     expect(database.projects.every((candidate) => !("documentLocale" in candidate))).toBe(true);
     expect(database.plans.every((candidate) => !("documentLocale" in candidate))).toBe(true);
+    expect(database.plans.every((candidate) => candidate.layout.elements.every((element) => element.kind !== "title_block"))).toBe(true);
     expect(database.revisions.some((revision) => revision.projectId === project.id)).toBe(true);
-    expect(project.assets.some((asset) => asset.mimeType === "application/pdf" && asset.pageCount === 2)).toBe(true);
+    expect(project.assets.map((asset) => asset.filename)).toEqual(["lageplan.jpg", "Infos.pdf"]);
+    expect(project.assets.some((asset) => asset.mimeType === "application/pdf" && asset.pageCount === 4)).toBe(true);
+    expect(project.assets.every((asset) => asset.dataUrl?.startsWith("/project-documents/logistikzentrum-west/"))).toBe(true);
+    const plan = database.plans.find((candidate) => candidate.projectId === project.id)!;
+    const placedDocuments = plan.layout.elements.filter(
+      (element): element is PlanAssetElement => element.kind === "image" || element.kind === "pdf_page",
+    );
+    const blockArea = plan.layout.elements.find((element) => element.kind === "block_area")!;
+    expect(plan.includedAssetIds).toEqual(["asset-logistics-site-plan", "asset-logistics-info-pdf"]);
+    expect(placedDocuments).toHaveLength(5);
+    expect(placedDocuments.filter((element) => element.kind === "image")).toHaveLength(1);
+    expect(placedDocuments.filter((element) => element.kind === "pdf_page").map((element) => element.pageNumber)).toEqual([1, 2, 3, 4]);
+    expect(placedDocuments.every((element) => element.x >= blockArea.x + blockArea.width)).toBe(true);
   });
 
   it("places catalog blocks in their most specific applicable category", () => {
@@ -55,6 +70,27 @@ describe("seed data", () => {
       const block = database.blocks.find((candidate) => candidate.id === blockId);
       expect(block?.primaryCategoryId).toBe(categoryId);
       expect(block?.categoryIds.at(-1)).toBe(categoryId);
+    }
+  });
+
+  it("keeps catalog identities, localized titles, and category paths unambiguous", () => {
+    const database = createSeedDatabase();
+    expect(new Set(database.blocks.map((block) => block.id)).size).toBe(database.blocks.length);
+
+    for (const locale of ["de", "en"] as const) {
+      const normalizedTitles = database.blocks.map((block) => block.translations[locale].title.trim().toLocaleLowerCase(locale));
+      expect(new Set(normalizedTitles).size).toBe(normalizedTitles.length);
+    }
+
+    const categoryIds = new Set(database.categories.map((category) => category.id));
+    for (const block of database.blocks) {
+      expect(categoryIds.has(block.primaryCategoryId)).toBe(true);
+      expect(block.categoryIds).toEqual(categoryPlacementIds(block.primaryCategoryId, database.categories));
+      for (const locale of ["de", "en"] as const) {
+        expect(block.translations[locale].title.trim()).not.toBe("");
+        expect(block.translations[locale].shortDescription.trim()).not.toBe("");
+        expect(block.translations[locale].longDescription.trim()).not.toBe("");
+      }
     }
   });
 
@@ -89,11 +125,9 @@ describe("seed data", () => {
         "categoryCount": 16,
         "planIds": [
           "plan-project-logistics-center",
-          "plan-project-riverside-renovation",
         ],
         "projectIds": [
           "project-logistics-center",
-          "project-riverside-renovation",
         ],
         "revisionIds": [
           "revision-demo-a",

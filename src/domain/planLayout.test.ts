@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createSeedDatabase } from "../data/seed";
-import type { Plan, PlanBlockElement } from "./types";
+import type { Plan, PlanAssetElement, PlanBlockElement } from "./types";
 import {
   A0_LANDSCAPE_HEIGHT, A0_LANDSCAPE_WIDTH, clampElementToPage, createSectionElement,
   cssPixelsToLayoutUnits, ensurePlanLayout, findNextFreeBlockPosition, findNextFreeNonBlockPosition,
@@ -58,7 +58,7 @@ describe("physical A0 layout", () => {
     expect(layout.paperRaster).toBe("none");
     expect(layout.elements.find((element) => element.kind === "block_area")?.locked).toBe(false);
     expect(layout.elements.some((element) => element.kind === "header")).toBe(false);
-    expect(layout.elements.find((element) => element.kind === "title_block")?.locked).toBe(false);
+    expect(layout.elements.some((element) => element.kind === "title_block")).toBe(false);
   });
 
   it("migrates a legacy layout without changing or recreating existing content", () => {
@@ -250,13 +250,27 @@ describe("physical A0 layout", () => {
   it("keeps user-placed files unchanged while fitting blocks", () => {
     const database = createSeedDatabase();
     const plan = structuredClone(database.plans[0]);
-    const assetBefore = structuredClone(plan.layout.elements.find((element) => element.kind === "image"));
+    const assetBefore: PlanAssetElement = {
+      id: "user-placed-image",
+      kind: "image",
+      assetId: "user-upload",
+      x: 8_500,
+      y: 1_200,
+      width: 2_000,
+      height: 1_500,
+      zIndex: 700,
+    };
+    plan.layout.elements.push(assetBefore);
     const result = fitBlocksInArea(plan.layout, plan.sections, database.categories, database.blocks, "best_fit");
-    expect(result.layout.elements.find((element) => element.id === assetBefore?.id)).toEqual(assetBefore);
+    expect(result.layout.elements.find((element) => element.id === assetBefore.id)).toEqual(assetBefore);
   });
 
   it("places new non-block content in the free area to the right without resizing it", () => {
-    const layout = createSeedDatabase().plans[1].layout;
+    const sourceLayout = createSeedDatabase().plans[0].layout;
+    const layout = {
+      ...sourceLayout,
+      elements: sourceLayout.elements.filter((element) => element.kind !== "image" && element.kind !== "pdf_page"),
+    };
     const area = getBlockArea(layout);
     const free = findNextFreeNonBlockPosition(layout, 2_500, 1_600);
     expect(free.width).toBe(2_500);

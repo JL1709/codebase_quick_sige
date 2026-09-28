@@ -2,6 +2,7 @@ import { Packer } from "docx";
 import { describe, expect, it } from "vitest";
 import { createSeedDatabase } from "../data/seed";
 import { annotationBoundsFromDrag, createAnnotationElement } from "../domain/planAnnotations";
+import type { PlanAssetElement } from "../domain/types";
 import { buildPlanDocxDocument, buildPlanPdf, buildSupportingDocumentPdf, planCanvasFontSizeToPdfPoints } from "./exports";
 
 describe("document exports", () => {
@@ -39,10 +40,17 @@ describe("document exports", () => {
     };
     const plan = structuredClone(database.plans[0]);
     plan.includedAssetIds = ["asset-layout"];
-    const imageElement = plan.layout.elements.find((element) => element.kind === "image");
-    expect(imageElement?.kind).toBe("image");
-    if (!imageElement || imageElement.kind !== "image") return;
-    imageElement.assetId = "asset-layout";
+    const imageElement: PlanAssetElement = {
+      id: "export-image",
+      kind: "image",
+      assetId: "asset-layout",
+      x: 8_500,
+      y: 1_200,
+      width: 2_000,
+      height: 1_500,
+      zIndex: 700,
+    };
+    plan.layout.elements.push(imageElement);
     const pdf = buildPlanPdf(project, plan, database.blocks, database.categories, database.user.preferredLocale);
     const bytes = new Uint8Array(pdf.output("arraybuffer"));
 

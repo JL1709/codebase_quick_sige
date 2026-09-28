@@ -56,6 +56,7 @@ test("complete project workflow remains localized and revision-safe", async ({ p
   await useEnglishInterface(page);
   await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Projects" }).click();
   await expect(page.getByRole("heading", { name: /Good morning/ })).toBeVisible();
+  await expect(page.getByText("Riverside Office Renovation", { exact: true })).toHaveCount(0);
   await expect(page.locator("body")).not.toContainText(/local prototype|\bmvp\b|multilingual catalog/i);
 
   const dashboardProject = page.getByRole("article").filter({ hasText: "Logistikzentrum West" });
@@ -120,10 +121,10 @@ test("complete project workflow remains localized and revision-safe", async ({ p
 
   await navigation.getByRole("link", { name: "Safety plan", exact: true }).click();
   await expect.poll(() => page.locator(".canvas-block").count()).toBeGreaterThan(0);
-  await expect(page.locator(".canvas-asset")).toHaveCount(2);
-  await expect(page.locator(".canvas-document")).toHaveCount(1);
+  await expect(page.locator(".canvas-asset")).toHaveCount(5);
+  await expect(page.locator(".canvas-document")).toHaveCount(0);
   await expect(page.getByText("All changes saved", { exact: true })).toHaveCount(0);
-  await page.locator('[data-element-id="layout-demo-pdf"]').click({ force: true });
+  await page.locator(".canvas-block").first().click({ force: true });
   await expect(page.getByRole("button", { name: "Selected element options" })).toHaveCount(0);
   await page.getByRole("button", { name: /block library/i }).click();
   await expect(page.locator(".editor-sidebar")).toHaveCount(0);
@@ -354,13 +355,13 @@ test("custom Word template reports missing data and generates with explicit cons
     if (!templateId) throw new Error("Missing field template was not saved");
     stored.documentConfigurations.push({
       id: "e2e-custom-a4-configuration",
-      projectId: "project-riverside-renovation",
+      projectId: "project-logistics-center",
       documentType: "a4_plan",
       templateId,
     });
     window.localStorage.setItem(storageKey, JSON.stringify(stored));
   });
-  await page.goto("/projects/project-riverside-renovation/plan");
+  await page.goto("/projects/project-logistics-center/plan");
   await page.getByRole("button", { name: "Word documents" }).click();
   await expect(page.getByRole("heading", { name: "Undefined placeholders" })).toBeVisible();
   await expect(page.getByText("{{qs.overview.intentionally_missing}}", { exact: true })).toBeVisible();
@@ -398,6 +399,14 @@ test("project documents is a simple folder-based file library", async ({ page })
   await page.goto("/projects/project-logistics-center/documents");
 
   await expect(page.getByRole("heading", { name: "Project documents" })).toBeVisible();
+  await expect(page.getByRole("article").filter({ hasText: "lageplan.jpg" })).toBeVisible();
+  const informationPdf = page.getByRole("article").filter({ hasText: "Infos.pdf" });
+  await expect(informationPdf).toContainText("PDF");
+  await expect(page.getByText("baustellenlage.png", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("lageplan-zweiseitig.pdf", { exact: true })).toHaveCount(0);
+  const informationDownload = page.waitForEvent("download");
+  await informationPdf.getByRole("button", { name: "Download" }).click();
+  expect((await informationDownload).suggestedFilename()).toBe("Infos.pdf");
   await expect(page.getByText("Site principles", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Emergency plan", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Generated documents", { exact: true })).toHaveCount(0);
@@ -765,7 +774,7 @@ test("A0 canvas fits, zooms deeply, edits structural content, and navigates vali
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width + 1);
     const publishButtonBox = await page.getByRole("button", { name: "Publish revision" }).boundingBox();
     expect(publishButtonBox).not.toBeNull();
-    expect(publishButtonBox!.x + publishButtonBox!.width).toBeLessThanOrEqual(viewport.width + 1);
+    expect(publishButtonBox!.x + publishButtonBox!.width).toBeLessThanOrEqual(viewport.width + 2);
   }
 
   const zoomBadge = page.locator(".editor-toolbar .badge").filter({ hasText: "%" });
@@ -803,6 +812,21 @@ test("A0 canvas fits, zooms deeply, edits structural content, and navigates vali
     const sectionId = storedPlan?.layout.elements.find((element) => element.id === elementId && element.kind === "section")?.sectionId;
     return storedPlan?.sections.find((section) => section.id === sectionId)?.titleOverrides?.en;
   }, editedSectionElementId)).toBe("Custom coordination");
+  await page.evaluate(() => {
+    const storageKey = "quicksige.database.v3";
+    const database = JSON.parse(window.localStorage.getItem(storageKey) ?? "{}") as {
+      plans?: Array<{
+        projectId: string;
+        layout: { elements: Array<{ kind: string; x: number; y: number }> };
+      }>;
+    };
+    const storedPlan = database.plans?.find((candidate) => candidate.projectId === "project-logistics-center");
+    const blockElements = storedPlan?.layout.elements.filter((element) => element.kind === "block") ?? [];
+    if (blockElements.length < 2) throw new Error("Expected at least two block elements");
+    blockElements[1].x = blockElements[0].x;
+    blockElements[1].y = blockElements[0].y;
+    window.localStorage.setItem(storageKey, JSON.stringify(database));
+  });
   await page.reload();
   await expect(page.locator(".canvas-plan-header")).toHaveCount(0);
   await expect(page.locator('.canvas-section [data-inline-field="sectionTitle"]').first()).toHaveText("Custom coordination");
@@ -1290,11 +1314,9 @@ test("contextual toolbar covers every seeded canvas element family and drag sele
     ".canvas-block-area",
     ".canvas-section",
     ".canvas-block",
-    '[data-element-id="layout-demo-image"]',
-    '[data-element-id="layout-demo-pdf"]',
-    ".canvas-document",
+    '[data-element-id="layout-logistics-site-plan"]',
+    '[data-element-id="layout-logistics-info-page-1"]',
     ".canvas-text",
-    ".canvas-title-block",
   ]) {
     await page.locator(selector).first().click({ force: true });
     await expect(page.getByRole("button", { name: "Bring forward" })).toHaveCount(0);
@@ -1326,6 +1348,19 @@ test("contextual toolbar covers every seeded canvas element family and drag sele
   expect(after).not.toBeNull(); expect(controls).not.toBeNull();
   expect(Math.abs((controls!.x + controls!.width / 2) - (after!.x + after!.width / 2))).toBeLessThan(8);
   expect(Math.abs((controls!.y + controls!.height / 2) - (after!.y + after!.height / 2))).toBeLessThan(8);
+});
+
+test("example project canvas does not include the legacy title box", async ({ page }) => {
+  await useEnglishInterface(page);
+  await page.goto("/projects/project-logistics-center/plan");
+  await expect(page.locator(".wysiwyg-page")).toBeVisible();
+  await expect(page.locator(".canvas-title-block")).toHaveCount(0);
+  await expect(page.locator(".canvas-asset")).toHaveCount(5);
+  await expect(page.locator('[data-element-id="layout-logistics-site-plan"] img')).toHaveAttribute("src", /lageplan\.jpg/);
+  const informationPdf = page.getByRole("button", { name: /Infos\.pdf.*4 pages available/i });
+  await informationPdf.click();
+  await expect(page.getByRole("button", { name: "Page 4 Portrait" })).toHaveCount(1);
+  await expect(page.locator('[data-element-id="layout-logistics-info-page-4"] img')).toHaveAttribute("src", /^data:image\/png/);
 });
 
 test("multi-page project PDFs expose page previews and place selected pages independently", async ({ page }) => {

@@ -15,6 +15,7 @@ import type {
   OverviewTemplateEntry,
   Participant,
   Plan,
+  PlanAssetElement,
   Project,
   ProjectAssessmentRun,
 } from "../domain/types";
@@ -24,9 +25,28 @@ export const STORAGE_KEY = "quicksige.database.v3";
 const LEGACY_STORAGE_KEYS = ["quicksige.prototype.database.v2"];
 export const BACKUP_KEY = "quicksige.database.migration-backup.v2";
 export const MIGRATION_ERROR_KEY = "quicksige.database.migration-error";
-export const CURRENT_SCHEMA_VERSION = 25;
+export const CURRENT_SCHEMA_VERSION = 29;
 const CATEGORY_HIERARCHY_SCHEMA_VERSION = 24;
+const CATEGORY_ASSIGNMENT_CORRECTION_SCHEMA_VERSION = 20;
+const EXAMPLE_TITLE_BLOCK_CLEANUP_SCHEMA_VERSION = 26;
+const DEMO_CONTENT_REFRESH_SCHEMA_VERSION = 27;
+const CATALOG_TITLE_DEDUPLICATION_SCHEMA_VERSION = 28;
+const EXAMPLE_DOCUMENT_PLACEMENT_SCHEMA_VERSION = 29;
 const MIGRATION_FALLBACK_TIMESTAMP = new Date(0).toISOString();
+const LOGISTICS_DEMO_PROJECT_ID = "project-logistics-center";
+const REMOVED_DEMO_PROJECT_ID = "project-riverside-renovation";
+const EXAMPLE_PROJECT_IDS = new Set([LOGISTICS_DEMO_PROJECT_ID]);
+const REPLACED_DEMO_ASSET_IDS = new Set(["asset-site-image", "asset-multipage-plan"]);
+const REPLACED_DEMO_LAYOUT_ELEMENT_IDS = new Set(["layout-demo-image", "layout-demo-pdf", "layout-demo-document"]);
+const IMPORTED_UTILITIES_BLOCK_ID = "import-existing-utilities";
+const LEGACY_IMPORTED_UTILITIES_TITLES = {
+  de: "Sicherer Umgang mit Bestandsleitungen",
+  en: "Safe handling of existing utilities",
+} as const;
+const CORRECTED_IMPORTED_UTILITIES_TITLES = {
+  de: "Bestandsleitungen bei Erdarbeiten berücksichtigen",
+  en: "Account for existing utilities during earthworks",
+} as const;
 
 const persistedDatabaseSchema = z.object({
   schemaVersion: z.number().int().nonnegative(),
@@ -159,6 +179,68 @@ function migratePlanCategoryHierarchy(
   };
 }
 
+function removeLegacyExampleTitleBlock(plan: Plan, sourceSchemaVersion: number): Plan {
+  if (sourceSchemaVersion >= EXAMPLE_TITLE_BLOCK_CLEANUP_SCHEMA_VERSION || !EXAMPLE_PROJECT_IDS.has(plan.projectId)) return plan;
+  return {
+    ...plan,
+    layout: {
+      ...plan.layout,
+      elements: plan.layout.elements.filter((element) => element.kind !== "title_block"),
+    },
+  };
+}
+
+function refreshLogisticsDemoDocuments(project: Project, defaultProject: Project, sourceSchemaVersion: number): Project {
+  if (sourceSchemaVersion >= DEMO_CONTENT_REFRESH_SCHEMA_VERSION || project.id !== LOGISTICS_DEMO_PROJECT_ID) return project;
+  return {
+    ...project,
+    assets: [
+      ...project.assets.filter((asset) => !REPLACED_DEMO_ASSET_IDS.has(asset.id)),
+      ...structuredClone(defaultProject.assets),
+    ],
+  };
+}
+
+function removeReplacedDemoCanvasElements(plan: Plan, sourceSchemaVersion: number): Plan {
+  if (sourceSchemaVersion >= DEMO_CONTENT_REFRESH_SCHEMA_VERSION || plan.projectId !== LOGISTICS_DEMO_PROJECT_ID) return plan;
+  return {
+    ...plan,
+    includedAssetIds: plan.includedAssetIds.filter((assetId) => !REPLACED_DEMO_ASSET_IDS.has(assetId)),
+    layout: {
+      ...plan.layout,
+      elements: plan.layout.elements.filter((element) => (
+        !REPLACED_DEMO_LAYOUT_ELEMENT_IDS.has(element.id)
+        && !((element.kind === "image" || element.kind === "pdf_page") && REPLACED_DEMO_ASSET_IDS.has(element.assetId))
+      )),
+    },
+  };
+}
+
+function placeDefaultLogisticsDocuments(plan: Plan, defaultPlan: Plan, sourceSchemaVersion: number): Plan {
+  if (sourceSchemaVersion >= EXAMPLE_DOCUMENT_PLACEMENT_SCHEMA_VERSION || plan.projectId !== LOGISTICS_DEMO_PROJECT_ID) return plan;
+  const defaultDocumentElements = defaultPlan.layout.elements.filter(
+    (element): element is PlanAssetElement => element.kind === "image" || element.kind === "pdf_page",
+  );
+  const existingPlacementKeys = new Set(plan.layout.elements.flatMap((element) => (
+    element.kind === "image" || element.kind === "pdf_page"
+      ? [`${element.assetId}:${element.kind === "pdf_page" ? element.pageNumber ?? 1 : "image"}`]
+      : []
+  )));
+  const existingElementIds = new Set(plan.layout.elements.map((element) => element.id));
+  const missingDocumentElements = defaultDocumentElements.filter((element) => {
+    const placementKey = `${element.assetId}:${element.kind === "pdf_page" ? element.pageNumber ?? 1 : "image"}`;
+    return !existingPlacementKeys.has(placementKey) && !existingElementIds.has(element.id);
+  });
+  return {
+    ...plan,
+    includedAssetIds: [...new Set([...plan.includedAssetIds, ...defaultPlan.includedAssetIds])],
+    layout: {
+      ...plan.layout,
+      elements: [...plan.layout.elements, ...structuredClone(missingDocumentElements)],
+    },
+  };
+}
+
 function migrateTemplateEntry(entry: OverviewTemplateEntry): OverviewTemplateEntry {
   return {
     id: entry.id,
@@ -281,10 +363,22 @@ function migrateBlock(block: PersistedBuildingBlock): BuildingBlock {
 }
 
 function correctDefaultCategoryAssignment(block: BuildingBlock, sourceSchemaVersion: number): BuildingBlock {
-  if (sourceSchemaVersion >= CURRENT_SCHEMA_VERSION) return block;
+  if (sourceSchemaVersion >= CATEGORY_ASSIGNMENT_CORRECTION_SCHEMA_VERSION) return block;
   const correction = CATEGORY_ASSIGNMENT_CORRECTIONS[block.id];
   if (!correction || block.primaryCategoryId !== correction.previousCategoryId) return block;
   return { ...block, primaryCategoryId: correction.correctedCategoryId };
+}
+
+function deduplicateDefaultCatalogTitle(block: BuildingBlock, sourceSchemaVersion: number): BuildingBlock {
+  if (sourceSchemaVersion >= CATALOG_TITLE_DEDUPLICATION_SCHEMA_VERSION || block.id !== IMPORTED_UTILITIES_BLOCK_ID) return block;
+  const translations = structuredClone(block.translations);
+  let changed = false;
+  for (const locale of ["de", "en"] as const) {
+    if (translations[locale].title !== LEGACY_IMPORTED_UTILITIES_TITLES[locale]) continue;
+    translations[locale].title = CORRECTED_IMPORTED_UTILITIES_TITLES[locale];
+    changed = true;
+  }
+  return changed ? { ...block, translations } : block;
 }
 
 function migrateCategory(category: BuildingBlockCategory, sortOrder: number): BuildingBlockCategory {
@@ -311,7 +405,12 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
   const locale = source.user?.preferredLocale ?? defaults.user.preferredLocale;
   const organization = { ...defaults.organization, ...source.organization } as typeof source.organization & { defaultLocale?: Locale };
   Reflect.deleteProperty(organization, "defaultLocale");
-  const projects = source.projects.map((project) => migrateProject(project as PersistedProject, locale));
+  const defaultLogisticsProject = defaults.projects.find((project) => project.id === LOGISTICS_DEMO_PROJECT_ID)!;
+  const defaultLogisticsPlan = defaults.plans.find((plan) => plan.projectId === LOGISTICS_DEMO_PROJECT_ID)!;
+  const projects = source.projects
+    .filter((project) => (source.schemaVersion ?? 0) >= DEMO_CONTENT_REFRESH_SCHEMA_VERSION || project.id !== REMOVED_DEMO_PROJECT_ID)
+    .map((project) => migrateProject(project as PersistedProject, locale))
+    .map((project) => refreshLogisticsDemoDocuments(project, defaultLogisticsProject, source.schemaVersion ?? 0));
   const projectById = new Map(projects.map((project) => [project.id, project]));
   const legacyAssessments = source.assessments ?? {};
   const assessmentRuns = (source.assessmentRuns?.length
@@ -343,14 +442,19 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
   const blocks = source.blocks
     .map(migrateBlock)
     .map((block) => correctDefaultCategoryAssignment(block, source.schemaVersion ?? 0))
+    .map((block) => deduplicateDefaultCatalogTitle(block, source.schemaVersion ?? 0))
     .map((block) => normalizeBlockPlacement(block, categories));
   const migratedPlans = (source.plans ?? [])
+    .filter((plan) => projectById.has(plan.projectId))
     .map((plan) => migratePlan(
       plan as PersistedPlan,
       source.user?.name ?? defaults.user.name,
       assessmentRuns.find((run) => run.projectId === plan.projectId && run.completedAt)?.id,
     ))
-    .map((plan) => migratePlanCategoryHierarchy(plan, categories, blocks, source.schemaVersion ?? 0));
+    .map((plan) => migratePlanCategoryHierarchy(plan, categories, blocks, source.schemaVersion ?? 0))
+    .map((plan) => removeLegacyExampleTitleBlock(plan, source.schemaVersion ?? 0))
+    .map((plan) => removeReplacedDemoCanvasElements(plan, source.schemaVersion ?? 0))
+    .map((plan) => placeDefaultLogisticsDocuments(plan, defaultLogisticsPlan, source.schemaVersion ?? 0));
   const activeProjectIds = new Set<string>();
   const plans = migratedPlans.map((plan) => {
     if (plan.supersededAt || !activeProjectIds.has(plan.projectId)) {
@@ -380,18 +484,29 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
     blocks,
     categories,
     plans,
-    revisions: (source.revisions ?? []).map((revision) => {
+    revisions: (source.revisions ?? []).filter((revision) => projectById.has(revision.projectId)).map((revision) => {
       const snapshotCategories = (revision.snapshot.categories ?? categories).map(migrateCategory);
       const snapshotBlocks = (revision.snapshot.blocks ?? source.blocks)
         .map(migrateBlock)
+        .map((block) => deduplicateDefaultCatalogTitle(block, source.schemaVersion ?? 0))
         .map((block) => normalizeBlockPlacement(block, snapshotCategories));
       const snapshotPlan = migratePlan(revision.snapshot.plan as PersistedPlan, source.user?.name ?? defaults.user.name);
       return {
         ...revision,
         snapshot: {
           ...revision.snapshot,
-          project: migrateProject(revision.snapshot.project as PersistedProject, locale),
-          plan: migratePlanCategoryHierarchy(snapshotPlan, snapshotCategories, snapshotBlocks, source.schemaVersion ?? 0),
+          project: refreshLogisticsDemoDocuments(
+            migrateProject(revision.snapshot.project as PersistedProject, locale),
+            defaultLogisticsProject,
+            source.schemaVersion ?? 0,
+          ),
+          plan: removeReplacedDemoCanvasElements(
+            removeLegacyExampleTitleBlock(
+              migratePlanCategoryHierarchy(snapshotPlan, snapshotCategories, snapshotBlocks, source.schemaVersion ?? 0),
+              source.schemaVersion ?? 0,
+            ),
+            source.schemaVersion ?? 0,
+          ),
           blocks: snapshotBlocks,
           categories: snapshotCategories,
           documentTemplates: revision.snapshot.documentTemplates ?? source.documentTemplates ?? defaults.documentTemplates,
@@ -407,8 +522,8 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
         defaults.overviewTemplates.find((candidate) => candidate.id === template.id),
       )),
     documentTemplates,
-    documentConfigurations: (source.documentConfigurations ?? []).filter((configuration) => documentTemplateIds.has(configuration.templateId)),
-    generatedDocuments: (source.generatedDocuments ?? []).map((document) => {
+    documentConfigurations: (source.documentConfigurations ?? []).filter((configuration) => projectById.has(configuration.projectId) && documentTemplateIds.has(configuration.templateId)),
+    generatedDocuments: (source.generatedDocuments ?? []).filter((document) => projectById.has(document.projectId)).map((document) => {
       const project = projects.find((candidate) => candidate.id === document.projectId) ?? projects[0];
       const plan = plans.find((candidate) => candidate.projectId === document.projectId && !candidate.supersededAt);
       return {
@@ -421,7 +536,7 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
         stale: document.stale ?? true,
       };
     }),
-    auditEvents: source.auditEvents ?? [],
+    auditEvents: (source.auditEvents ?? []).filter((event) => !event.projectId || projectById.has(event.projectId)),
   };
   return persistedDatabaseSchema.safeParse(migrated).success ? migrated : null;
 }
