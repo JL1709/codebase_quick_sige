@@ -33,11 +33,11 @@ if (plan.sections[0]) {
 
 await mkdir(outputDirectory, { recursive: true });
 
-const planPdf = buildPlanPdf(project, plan, database.blocks, database.categories);
+const planPdf = buildPlanPdf(project, plan, database.blocks, database.categories, database.user.preferredLocale);
 await writeFile(path.join(outputDirectory, "demo-sige-plan-a0.pdf"), Buffer.from(planPdf.output("arraybuffer")));
 
-const templateData = buildTemplateData(project, plan, blocksWithImages, database.categories);
-const template = await createStandardTemplate("a4_plan", project.documentLocale);
+const templateData = buildTemplateData(project, plan, database.user.preferredLocale, blocksWithImages, database.categories);
+const template = await createStandardTemplate("a4_plan", database.user.preferredLocale);
 const document = await renderTemplate(await blobToArrayBuffer(template), templateData);
 await writeFile(path.join(outputDirectory, "demo-a4-plan.docx"), Buffer.from(await blobToArrayBuffer(document)));
 

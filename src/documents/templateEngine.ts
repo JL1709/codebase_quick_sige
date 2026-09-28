@@ -8,7 +8,7 @@ import type {
   BuildingBlock, BuildingBlockCategory, DocumentType, Locale, Plan, Project,
   ProjectDocumentConfiguration,
 } from "../domain/types";
-import { blockHierarchyColor, categoryHierarchyColor, categoryTrail } from "../domain/categoryTree";
+import { categoryHierarchyColor, categoryIdsInHierarchyOrder, categoryTrail } from "../domain/categoryTree";
 import { overviewSectionTemplateData } from "../domain/overviewTemplates";
 
 const COMMAND_DELIMITER: [string, string] = ["{{", "}}"];
@@ -28,22 +28,22 @@ const XML_ENTITY_MAP: Record<string, string> = { "&amp;": "&", "&lt;": "<", "&gt
 const FRIENDLY_PLACEHOLDER = /\{\{\s*([#/])?\s*(qs(?:\.[A-Za-z_][A-Za-z0-9_]*)+)\s*\}\}/g;
 const LEGACY_AUTHOR_COMMAND = /\{\{\s*(?:FOR|END-FOR|INS|IMAGE)\b[^{}]*\}\}/gi;
 const DYNAMIC_CELL_FILL = /\[\[QS_CELL_FILL:([0-9A-F]{6})\]\]/gi;
+const DYNAMIC_TEXT_COLOR = /\[\[QS_TEXT_COLOR:([0-9A-F]{6})\]\]/gi;
 const FALLBACK_CATEGORY_COLOR = "496F5F";
 const A4_PAGE_WIDTH_DXA = 11_906;
 const A4_PAGE_HEIGHT_DXA = 16_838;
 const A4_PAGE_MARGIN_DXA = 720;
 const A4_CONTENT_WIDTH_DXA = A4_PAGE_WIDTH_DXA - (2 * A4_PAGE_MARGIN_DXA);
+const BLOCK_ACCENT_COLUMN_WIDTH_DXA = 240;
 const BLOCK_IMAGE_COLUMN_WIDTH_DXA = 3_500;
-const BLOCK_DESCRIPTION_COLUMN_WIDTH_DXA = A4_CONTENT_WIDTH_DXA - BLOCK_IMAGE_COLUMN_WIDTH_DXA;
-const BLOCK_IMAGE_WIDTH_CM = 5.4;
+const BLOCK_DESCRIPTION_COLUMN_WIDTH_DXA = A4_CONTENT_WIDTH_DXA - BLOCK_ACCENT_COLUMN_WIDTH_DXA - BLOCK_IMAGE_COLUMN_WIDTH_DXA;
+const BLOCK_IMAGE_WIDTH_CM = 5.3;
 const BLOCK_IMAGE_HEIGHT_CM = 3.6;
 const FRIENDLY_LOOP_VARIABLES: Record<string, string> = {
   "qs.emergency_contacts": "contact",
   "qs.participants": "participant",
-  "qs.plan.categories": "category",
-  "qs.category.sections": "section",
-  "qs.section.blocks": "block",
-  "qs.plan.sections": "section",
+  "qs.plan.category_tree": "category",
+  "qs.category.blocks": "block",
   "qs.plan.blocks": "block",
 };
 
@@ -227,6 +227,21 @@ function setParagraphFill(paragraph: string, fill: string): string {
   return paragraph.replace(/<w:p(?:\s[^>]*)?>/, (opening) => `${opening}<w:pPr>${shading}</w:pPr>`);
 }
 
+function setRunTextColor(run: string, color: string): string {
+  const colorElement = `<w:color w:val="${color}"/>`;
+  if (/<w:color\b/.test(run)) return run.replace(/<w:color\b[^>]*(?:\/>|>[\s\S]*?<\/w:color>)/, colorElement);
+  if (/<w:rPr\s*\/>/.test(run)) return run.replace(/<w:rPr\s*\/>/, `<w:rPr>${colorElement}</w:rPr>`);
+  if (/<w:rPr(?:\s[^>]*)?>/.test(run)) return run.replace(/<w:rPr(?:\s[^>]*)?>/, (properties) => `${properties}${colorElement}`);
+  return run.replace(/<w:r(?:\s[^>]*)?>/, (opening) => `${opening}<w:rPr>${colorElement}</w:rPr>`);
+}
+
+function setVisibleRunTextColor(fragment: string, color: string): string {
+  return fragment.replace(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g, (run) => {
+    const visibleText = [...run.matchAll(XML_TEXT)].map((match) => decodeXmlText(match[1])).join("");
+    return visibleText ? setRunTextColor(run, color) : run;
+  });
+}
+
 interface XmlElementSpan {
   start: number;
   end: number;
@@ -248,11 +263,12 @@ function findXmlElementSpans(xml: string, elementName: "p" | "tc"): XmlElementSp
   return spans;
 }
 
-function applyDynamicCellFillsToXml(xml: string): string {
+function applyDynamicStylesToXml(xml: string): string {
   const cellSpans = findXmlElementSpans(xml, "tc");
   const paragraphSpans = findXmlElementSpans(xml, "p");
   const targets = new Map<number, XmlElementSpan & { kind: "cell" | "paragraph" }>();
-  for (const marker of xml.matchAll(DYNAMIC_CELL_FILL)) {
+  const styleMarkers = [...xml.matchAll(DYNAMIC_CELL_FILL), ...xml.matchAll(DYNAMIC_TEXT_COLOR)];
+  for (const marker of styleMarkers) {
     const markerPosition = marker.index ?? 0;
     const containingCells = cellSpans.filter((cell) => cell.start < markerPosition && cell.end > markerPosition);
     const innermostCell = containingCells.sort((left, right) => (left.end - left.start) - (right.end - right.start))[0];
@@ -264,6 +280,7 @@ function applyDynamicCellFillsToXml(xml: string): string {
     if (paragraph) targets.set(paragraph.start, { ...paragraph, kind: "paragraph" });
   }
   DYNAMIC_CELL_FILL.lastIndex = 0;
+  DYNAMIC_TEXT_COLOR.lastIndex = 0;
 
   let rewritten = xml;
   const orderedTargets = [...targets.values()].sort((left, right) => right.start - left.start);
@@ -271,25 +288,28 @@ function applyDynamicCellFillsToXml(xml: string): string {
     const fragment = rewritten.slice(target.start, target.end);
     const visibleText = [...fragment.matchAll(XML_TEXT)].map((match) => decodeXmlText(match[1])).join("");
     const fill = /\[\[QS_CELL_FILL:([0-9A-F]{6})\]\]/i.exec(visibleText)?.[1]?.toUpperCase();
-    if (!fill) return;
-    const withoutMarker = rewriteXmlTextMatches(fragment, DYNAMIC_CELL_FILL, () => "");
+    const textColor = /\[\[QS_TEXT_COLOR:([0-9A-F]{6})\]\]/i.exec(visibleText)?.[1]?.toUpperCase();
+    let styledFragment = rewriteXmlTextMatches(fragment, DYNAMIC_CELL_FILL, () => "");
     DYNAMIC_CELL_FILL.lastIndex = 0;
-    const filledFragment = target.kind === "cell"
-      ? setTableCellFill(withoutMarker, fill)
-      : setParagraphFill(withoutMarker, fill);
-    rewritten = `${rewritten.slice(0, target.start)}${filledFragment}${rewritten.slice(target.end)}`;
+    styledFragment = rewriteXmlTextMatches(styledFragment, DYNAMIC_TEXT_COLOR, () => "");
+    DYNAMIC_TEXT_COLOR.lastIndex = 0;
+    if (fill) styledFragment = target.kind === "cell"
+      ? setTableCellFill(styledFragment, fill)
+      : setParagraphFill(styledFragment, fill);
+    if (textColor) styledFragment = setVisibleRunTextColor(styledFragment, textColor);
+    rewritten = `${rewritten.slice(0, target.start)}${styledFragment}${rewritten.slice(target.end)}`;
   });
   return rewritten;
 }
 
-async function applyDynamicCellFills(document: ArrayBuffer): Promise<ArrayBuffer> {
+async function applyDynamicStyles(document: ArrayBuffer): Promise<ArrayBuffer> {
   const zip = await JSZip.loadAsync(document);
   const xmlNames = Object.keys(zip.files).filter((name) => /^word\/(document|header\d+|footer\d+)\.xml$/.test(name));
   for (const name of xmlNames) {
     const file = zip.file(name);
     if (!file) continue;
     const xml = await file.async("text");
-    const rewritten = applyDynamicCellFillsToXml(xml);
+    const rewritten = applyDynamicStylesToXml(xml);
     if (rewritten !== xml) zip.file(name, rewritten);
   }
   return zip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" });
@@ -298,6 +318,20 @@ async function applyDynamicCellFills(document: ArrayBuffer): Promise<ArrayBuffer
 function cellFillMarker(color: string): string {
   const normalized = color.replace("#", "").toUpperCase();
   return `[[QS_CELL_FILL:${/^[0-9A-F]{6}$/.test(normalized) ? normalized : FALLBACK_CATEGORY_COLOR}]]`;
+}
+
+function textColorMarker(color: string): string {
+  const normalized = color.replace("#", "").toUpperCase();
+  return `[[QS_TEXT_COLOR:${/^[0-9A-F]{6}$/.test(normalized) ? normalized : "FFFFFF"}]]`;
+}
+
+function readableTextColor(backgroundColor: string): string {
+  const normalized = backgroundColor.replace("#", "");
+  if (!/^[0-9A-F]{6}$/i.test(normalized)) return "#FFFFFF";
+  const channels = [0, 2, 4].map((offset) => Number.parseInt(normalized.slice(offset, offset + 2), 16) / 255);
+  const [red, green, blue] = channels.map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+  const relativeLuminance = (0.2126 * red) + (0.7152 * green) + (0.0722 * blue);
+  return relativeLuminance > 0.179 ? "#000000" : "#FFFFFF";
 }
 
 async function applyControlledPageBreaks(template: ArrayBuffer): Promise<ArrayBuffer> {
@@ -345,6 +379,116 @@ function dataUrlImage(
   return { data: match[2], extension: match[1].toLowerCase() === "png" ? ".png" : ".jpg", ...dimensions };
 }
 
+interface A4TemplateBlock {
+  category: string;
+  title: string;
+  a0_description: string;
+  a4_description: string;
+  short_description: string;
+  long_description: string;
+  regulations: string;
+  image: ReturnType<typeof dataUrlImage>;
+  color: string;
+  cell_fill: string;
+  expert_note: string;
+}
+
+interface A4TemplateCategory {
+  id: string;
+  title: string;
+  path: string;
+  depth: number;
+  color: string;
+  cell_fill: string;
+  blocks: A4TemplateBlock[];
+}
+
+function buildA4CategoryTree(
+  plan: Plan | undefined,
+  locale: Locale,
+  blocks: BuildingBlock[],
+  categories: BuildingBlockCategory[],
+): A4TemplateCategory[] {
+  if (!plan) return [];
+
+  const blockById = new Map(blocks.map((block) => [block.id, block]));
+  const categoryById = new Map(categories.map((category) => [category.id, category]));
+  const sectionByCategoryId = new Map(plan.sections.map((section) => [section.categoryId, section]));
+  const semanticOrder = new Map(plan.layout.elements.map((element) => [
+    element.kind === "block" ? element.itemId : element.id,
+    element.semanticOrder ?? Number.MAX_SAFE_INTEGER,
+  ]));
+  const itemsByCategoryId = new Map<string, Array<{
+    item: Plan["sections"][number]["items"][number];
+    block: BuildingBlock;
+    sourceOrder: number;
+  }>>();
+  const visibleCategoryIds = new Set<string>();
+  const unknownCategoryIds: string[] = [];
+  let sourceOrder = 0;
+
+  plan.sections.forEach((section) => {
+    section.items.forEach((item) => {
+      const block = blockById.get(item.blockId);
+      if (!block) return;
+      const categoryId = categoryById.has(block.primaryCategoryId) ? block.primaryCategoryId : section.categoryId;
+      const categoryItems = itemsByCategoryId.get(categoryId) ?? [];
+      categoryItems.push({ item, block, sourceOrder });
+      sourceOrder += 1;
+      itemsByCategoryId.set(categoryId, categoryItems);
+
+      const trail = categoryTrail(categoryId, categories);
+      if (trail.length) trail.forEach((category) => visibleCategoryIds.add(category.id));
+      else if (!unknownCategoryIds.includes(categoryId)) unknownCategoryIds.push(categoryId);
+    });
+  });
+
+  const orderedCategoryIds = [
+    ...categoryIdsInHierarchyOrder(categories).filter((categoryId) => visibleCategoryIds.has(categoryId)),
+    ...unknownCategoryIds,
+  ];
+
+  return orderedCategoryIds.map((categoryId) => {
+    const category = categoryById.get(categoryId);
+    const trail = categoryTrail(categoryId, categories);
+    const categoryTitle = sectionByCategoryId.get(categoryId)?.titleOverrides?.[locale]?.trim()
+      || category?.translations[locale]?.name
+      || categoryId;
+    const categoryColor = category ? categoryHierarchyColor(categoryId, categories) : `#${FALLBACK_CATEGORY_COLOR}`;
+    const categoryBlocks = (itemsByCategoryId.get(categoryId) ?? [])
+      .sort((left, right) => (semanticOrder.get(left.item.id) ?? Number.MAX_SAFE_INTEGER)
+        - (semanticOrder.get(right.item.id) ?? Number.MAX_SAFE_INTEGER)
+        || left.sourceOrder - right.sourceOrder)
+      .map(({ item, block }) => {
+        const content = block.translations[locale] ?? block.translations.de;
+        const blockColor = category ? categoryColor : `#${FALLBACK_CATEGORY_COLOR}`;
+        return {
+          category: categoryTitle,
+          title: item.customTitle?.[locale] ?? content.title,
+          a0_description: item.customShortDescription?.[locale] ?? content.shortDescription,
+          a4_description: content.longDescription,
+          short_description: item.customShortDescription?.[locale] ?? content.shortDescription,
+          long_description: content.longDescription,
+          regulations: block.regulations.join(", "),
+          image: dataUrlImage(item.imageDataUrl ?? block.imageDataUrl, { width: BLOCK_IMAGE_WIDTH_CM, height: BLOCK_IMAGE_HEIGHT_CM }),
+          color: blockColor,
+          cell_fill: cellFillMarker(blockColor),
+          expert_note: item.expertNote ?? "",
+        };
+      });
+
+    return {
+      id: categoryId,
+      title: categoryTitle,
+      path: trail.map((trailCategory) => trailCategory.translations[locale]?.name ?? trailCategory.id).join(" › ") || categoryTitle,
+      depth: Math.max(0, trail.length - 1),
+      color: categoryColor,
+      cell_fill: `${cellFillMarker(categoryColor)}${textColorMarker(readableTextColor(categoryColor))}`,
+      blocks: categoryBlocks,
+    };
+  });
+}
+
 export function buildTemplateData(
   project: Project,
   plan: Plan | undefined,
@@ -376,79 +520,19 @@ export function buildTemplateData(
   project.overviewSections.forEach((section) => {
     customSections[section.placeholderKey] = overviewSectionTemplateData(section, locale);
   });
-  const blockMap = new Map(blocks.map((block) => [block.id, block]));
-  const categoryMap = new Map(categories.map((category) => [category.id, category]));
-  const planLocale = locale;
-  const semanticOrder = new Map(plan?.layout.elements.map((element) => [element.kind === "block" ? element.itemId : element.kind === "section" ? element.sectionId : element.id, element.semanticOrder ?? Number.MAX_SAFE_INTEGER]) ?? []);
-  const orderedSections = plan ? [...plan.sections].sort((left, right) => (semanticOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (semanticOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER)) : [];
-  const planSections = orderedSections.map((section) => {
-    const category = categoryMap.get(section.categoryId);
-    const trail = categoryTrail(section.categoryId, categories);
-    const trailTitles = trail.map((trailCategory) => trailCategory.translations[planLocale]?.name ?? trailCategory.id);
-    const rootCategory = trail[0] ?? category;
-    const sectionTitle = section.titleOverrides?.[planLocale] ?? category?.translations[planLocale]?.name ?? section.categoryId;
-    const sectionHeading = section.titleOverrides?.[planLocale]
-      ?? (trailTitles.length > 1 ? trailTitles.slice(1).join(" › ") : category?.translations[planLocale]?.description ?? sectionTitle);
-    const sectionBlocks = [...section.items].sort((left, right) => (semanticOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (semanticOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER)).map((item) => {
-    const block = blockMap.get(item.blockId);
-    if (!block) return null;
-    const content = block.translations[planLocale] ?? block.translations.de;
-    const blockColor = blockHierarchyColor(block, categories);
-    return {
-      category: sectionTitle,
-      title: item.customTitle?.[planLocale] ?? content.title,
-      a0_description: item.customShortDescription?.[planLocale] ?? content.shortDescription,
-      a4_description: content.longDescription,
-      short_description: item.customShortDescription?.[planLocale] ?? content.shortDescription,
-      long_description: content.longDescription,
-      regulations: block.regulations.join(", "),
-      image: dataUrlImage(item.imageDataUrl ?? block.imageDataUrl, { width: BLOCK_IMAGE_WIDTH_CM, height: BLOCK_IMAGE_HEIGHT_CM }),
-      color: blockColor,
-      cell_fill: cellFillMarker(blockColor),
-      expert_note: item.expertNote ?? "",
-    };
-    }).filter(Boolean);
-    const rootCategoryId = rootCategory?.id ?? section.categoryId;
-    const rootCategoryTitle = rootCategory?.translations[planLocale]?.name ?? sectionTitle;
-    const rootCategoryColor = rootCategory
-      ? categoryHierarchyColor(rootCategory.id, categories)
-      : `#${FALLBACK_CATEGORY_COLOR}`;
-    return {
-      id: section.id,
-      category_id: section.categoryId,
-      title: sectionTitle,
-      heading: sectionHeading,
-      category_path: trailTitles.join(" › ") || sectionTitle,
-      color: category ? categoryHierarchyColor(category.id, categories) : rootCategoryColor,
-      root_category_id: rootCategoryId,
-      root_category_title: rootCategoryTitle,
-      root_category_color: rootCategoryColor,
-      blocks: sectionBlocks,
-    };
-  }) ?? [];
-  const planBlocks = planSections.flatMap((section) => section.blocks);
-  const planCategories: Array<{ id: string; title: string; color: string; cell_fill: string; sections: typeof planSections }> = [];
-  planSections.forEach((section) => {
-    let category = planCategories.find((candidate) => candidate.id === section.root_category_id);
-    if (!category) {
-      category = {
-        id: section.root_category_id,
-        title: section.root_category_title,
-        color: section.root_category_color,
-        cell_fill: cellFillMarker(section.root_category_color),
-        sections: [],
-      };
-      planCategories.push(category);
-    }
-    category.sections.push(section);
-  });
+  const categoryTree = buildA4CategoryTree(plan, locale, blocks, categories);
+  const planBlocks = categoryTree.flatMap((category) => category.blocks);
   return {
     qs: {
       project: projectFields,
       overview: { ...projectFields, ...customSections },
       emergency_contacts: project.emergencyContacts.map((contact) => ({ label: contact.label, name: contact.name, phone: contact.phone })),
       participants: project.participants.map((participant) => ({ role: participant.role, role_label: participantRoleLabels[locale][participant.role], company: participant.company, name: participant.name, email: participant.email, phone: participant.phone })),
-      plan: { title: plan ? (locale === "de" ? "Sicherheits- und Gesundheitsschutzplan" : "Safety and Health Plan") : "", categories: planCategories, sections: planSections, blocks: planBlocks },
+      plan: {
+        title: plan ? (locale === "de" ? "Sicherheits- und Gesundheitsschutzplan" : "Safety and Health Plan") : "",
+        category_tree: categoryTree,
+        blocks: planBlocks,
+      },
       assets: project.assets.map((asset) => ({ filename: asset.filename, image: asset.mimeType.startsWith("image/") ? dataUrlImage(asset.dataUrl) : undefined })),
       documents: documentConfigurations.map((configuration) => ({ type: configuration.documentType, template_id: configuration.templateId })),
     },
@@ -615,15 +699,13 @@ export async function renderTemplate(template: ArrayBuffer, data: TemplateData):
     failFast: false, processLineBreaks: true, noSandbox: true,
   });
   const reportBuffer = report.buffer.slice(report.byteOffset, report.byteOffset + report.byteLength) as ArrayBuffer;
-  const styledReport = await applyDynamicCellFills(reportBuffer);
+  const styledReport = await applyDynamicStyles(reportBuffer);
   return new Blob([styledReport], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
 }
 
 function standardA4Template(locale: Locale): Document {
   const border = { style: BorderStyle.SINGLE, size: 4, color: "D9D9D9" };
-  const noBorder = { style: BorderStyle.NONE, size: 0, color: "FFFFFF" };
   const tableBorders = { top: border, bottom: border, left: border, right: border, insideHorizontal: border, insideVertical: border };
-  const noBorders = { top: noBorder, bottom: noBorder, left: noBorder, right: noBorder, insideHorizontal: noBorder, insideVertical: noBorder };
   const placeholder = (path: string, options: { bold?: boolean; color?: string; size?: number } = {}) => new TextRun({
     text: `{{${path}}}`,
     bold: options.bold,
@@ -631,74 +713,56 @@ function standardA4Template(locale: Locale): Document {
     font: "Arial",
     size: options.size,
   });
-  const control = (marker: string) => new Paragraph({ spacing: { before: 0, after: 0 }, children: [placeholder(marker, { size: 16 })] });
-  const categoryHeader = new Paragraph({
-    keepNext: true,
-    shading: { fill: "496F5F", type: ShadingType.CLEAR },
-    spacing: { before: 120, after: 120 },
-    children: [
-      new TextRun({ text: "  ", font: "Arial", size: 28 }),
-      placeholder("qs.category.color", { color: "FFFFFF", size: 28 }),
-      placeholder("qs.category.title", { bold: true, color: "FFFFFF", size: 28 }),
-    ],
-  });
-  const sectionHeader = new Paragraph({
-    keepNext: true,
-    shading: { fill: "E7F1ED", type: ShadingType.CLEAR },
-    spacing: { before: 90, after: 90 },
-    children: [
-      new TextRun({ text: "  ", font: "Arial", size: 22 }),
-      placeholder("qs.section.heading", { bold: true, color: "10251F", size: 22 }),
-    ],
-  });
-  const blockCardContents = new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
+  const control = (marker: string) => new Paragraph({ keepNext: true, spacing: { before: 0, after: 0 }, children: [placeholder(marker, { size: 16 })] });
+  const categoryHeader = new Table({
+    width: { size: A4_CONTENT_WIDTH_DXA, type: WidthType.DXA },
     layout: TableLayoutType.FIXED,
-    columnWidths: [BLOCK_IMAGE_COLUMN_WIDTH_DXA, BLOCK_DESCRIPTION_COLUMN_WIDTH_DXA],
+    columnWidths: [A4_CONTENT_WIDTH_DXA],
     borders: tableBorders,
-    rows: [
-      new TableRow({ cantSplit: true, children: [new TableCell({
-        columnSpan: 2,
-        shading: { fill: "D5FF3F", type: ShadingType.CLEAR },
-        margins: { top: 90, bottom: 90, left: 150, right: 150 },
-        children: [new Paragraph({ keepNext: true, spacing: { before: 0, after: 0 }, children: [
-          placeholder("qs.block.color", { color: "10251F", size: 22 }),
-          placeholder("qs.block.title", { bold: true, color: "10251F", size: 22 }),
-        ] })],
-      })] }),
-      new TableRow({ cantSplit: true, children: [
+    rows: [new TableRow({ cantSplit: true, children: [new TableCell({
+      width: { size: A4_CONTENT_WIDTH_DXA, type: WidthType.DXA },
+      shading: { fill: FALLBACK_CATEGORY_COLOR, type: ShadingType.CLEAR },
+      margins: { top: 120, bottom: 120, left: 180, right: 180 },
+      verticalAlign: VerticalAlign.CENTER,
+      children: [new Paragraph({
+        keepNext: true,
+        spacing: { before: 0, after: 0 },
+        children: [
+          placeholder("qs.category.color", { color: FALLBACK_CATEGORY_COLOR, size: 2 }),
+          placeholder("qs.category.title", { bold: true, color: "FFFFFF", size: 27 }),
+        ],
+      })],
+    })] })],
+  });
+  const blockCard = new Table({
+    width: { size: A4_CONTENT_WIDTH_DXA, type: WidthType.DXA },
+    layout: TableLayoutType.FIXED,
+    columnWidths: [BLOCK_ACCENT_COLUMN_WIDTH_DXA, BLOCK_IMAGE_COLUMN_WIDTH_DXA, BLOCK_DESCRIPTION_COLUMN_WIDTH_DXA],
+    borders: tableBorders,
+    rows: [new TableRow({ cantSplit: true, children: [
+        new TableCell({
+          width: { size: BLOCK_ACCENT_COLUMN_WIDTH_DXA, type: WidthType.DXA },
+          shading: { fill: "D5FF3F", type: ShadingType.CLEAR },
+          margins: { top: 0, bottom: 0, left: 0, right: 0 },
+          children: [new Paragraph({ spacing: { before: 0, after: 0 }, children: [placeholder("qs.block.color", { color: "D5FF3F", size: 2 })] })],
+        }),
         new TableCell({
           width: { size: BLOCK_IMAGE_COLUMN_WIDTH_DXA, type: WidthType.DXA },
           margins: { top: 140, bottom: 140, left: 140, right: 140 },
           verticalAlign: VerticalAlign.CENTER,
-          children: [new Paragraph({ keepNext: true, alignment: AlignmentType.CENTER, spacing: { before: 0, after: 0 }, children: [placeholder("qs.block.image", { size: 18 })] })],
+          children: [new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 0 }, children: [placeholder("qs.block.image", { size: 18 })] })],
         }),
         new TableCell({
           width: { size: BLOCK_DESCRIPTION_COLUMN_WIDTH_DXA, type: WidthType.DXA },
-          margins: { top: 160, bottom: 160, left: 170, right: 170 },
+          margins: { top: 150, bottom: 150, left: 190, right: 190 },
           verticalAlign: VerticalAlign.CENTER,
-          children: [new Paragraph({ keepNext: true, spacing: { before: 0, after: 0, line: 276 }, children: [placeholder("qs.block.a4_description", { color: "263A34", size: 20 })] })],
+          children: [
+            new Paragraph({ keepNext: true, spacing: { before: 0, after: 100 }, children: [placeholder("qs.block.title", { bold: true, color: "10251F", size: 22 })] }),
+            new Paragraph({ keepNext: true, spacing: { before: 0, after: 110, line: 276 }, children: [placeholder("qs.block.a4_description", { color: "263A34", size: 20 })] }),
+            new Paragraph({ spacing: { before: 0, after: 0 }, children: [placeholder("qs.block.regulations", { color: "5B6A65", size: 17 })] }),
+          ],
         }),
-      ] }),
-      new TableRow({ cantSplit: true, children: [new TableCell({
-        columnSpan: 2,
-        shading: { fill: "F7F9F8", type: ShadingType.CLEAR },
-        margins: { top: 70, bottom: 70, left: 150, right: 150 },
-        children: [new Paragraph({ spacing: { before: 0, after: 0 }, children: [placeholder("qs.block.regulations", { color: "5B6A65", size: 17 })] })],
-      })] }),
-    ],
-  });
-  const blockCard = new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    layout: TableLayoutType.FIXED,
-    columnWidths: [A4_CONTENT_WIDTH_DXA],
-    borders: noBorders,
-    rows: [new TableRow({ cantSplit: true, children: [new TableCell({
-      width: { size: A4_CONTENT_WIDTH_DXA, type: WidthType.DXA },
-      borders: noBorders,
-      margins: { top: 0, bottom: 0, left: 0, right: 0 },
-      children: [blockCardContents],
-    })] })],
+      ] })],
   });
   return new Document({
     creator: "QuickSiGe",
@@ -712,18 +776,14 @@ function standardA4Template(locale: Locale): Document {
         },
       },
       children: [
-        control("#qs.plan.categories"),
+        control("#qs.plan.category_tree"),
         categoryHeader,
-        new Paragraph({ keepNext: true, spacing: { before: 0, after: 60 } }),
-        control("#qs.category.sections"),
-        sectionHeader,
-        new Paragraph({ keepNext: true, spacing: { before: 0, after: 40 } }),
-        control("#qs.section.blocks"),
+        new Paragraph({ keepNext: true, spacing: { before: 0, after: 55 } }),
+        control("#qs.category.blocks"),
         blockCard,
         new Paragraph({ spacing: { before: 0, after: 100 } }),
-        control("/qs.section.blocks"),
-        control("/qs.category.sections"),
-        control("/qs.plan.categories"),
+        control("/qs.category.blocks"),
+        control("/qs.plan.category_tree"),
       ],
     }],
   });

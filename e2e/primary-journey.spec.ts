@@ -921,6 +921,130 @@ test("plan library reflects settings language, catalog membership, placement, an
     .toHaveCSS("background-color", catalogColor);
 });
 
+test("fit modes honor direction, scale complete blocks, and leave zero layout validations", async ({ page }) => {
+  await useEnglishInterface(page);
+  await page.goto("/projects/project-logistics-center/plan");
+  const layoutMode = page.getByLabel("Block arrangement");
+  const fitBlocksButton = page.getByRole("button", { name: "Fit blocks" });
+  const siteSetupSection = page.locator('[data-category-id="site-setup"]');
+  const earthworksSection = page.locator('[data-category-id="earthworks"]');
+  const securitySection = page.locator('[data-category-id="imported-site-security"]');
+  const accessSection = page.locator('[data-category-id="site-access-emergency"]');
+  const siteAccessBlock = page.locator('[data-block-id="block-site-access"]');
+  const fallProtectionBlock = page.locator('[data-block-id="block-fall-protection"]');
+  const scaffoldingBlock = page.locator('[data-block-id="block-scaffolding"]');
+  const blockArea = page.locator(".canvas-block-area");
+  const rootSections = page.locator([
+    "preparation",
+    "site-setup",
+    "earthworks",
+    "work-at-height",
+    "operations",
+    "hazardous-work",
+    "environment",
+  ].map((categoryId) => `[data-category-id="${categoryId}"]`).join(","));
+  const rootExtent = () => rootSections.evaluateAll((elements) => {
+    const rectangles = elements.map((element) => element.getBoundingClientRect());
+    const left = Math.min(...rectangles.map((rectangle) => rectangle.left));
+    const top = Math.min(...rectangles.map((rectangle) => rectangle.top));
+    const right = Math.max(...rectangles.map((rectangle) => rectangle.right));
+    const bottom = Math.max(...rectangles.map((rectangle) => rectangle.bottom));
+    return { width: right - left, height: bottom - top };
+  });
+
+  const fit = async (mode: "vertical" | "horizontal" | "best_fit") => {
+    await layoutMode.selectOption(mode);
+    await fitBlocksButton.click();
+    await page.getByRole("button", { name: "Validation" }).click();
+    for (const ruleCode of [
+      "LAYOUT_OUTSIDE_SAFE_AREA",
+      "LAYOUT_BLOCK_OUTSIDE_AREA",
+      "LAYOUT_BLOCK_OUTSIDE_SECTION",
+      "LAYOUT_BLOCK_OVERLAP",
+      "TEXT_OVERFLOW",
+    ]) {
+      await expect(page.locator(`.validation-item[data-rule-code="${ruleCode}"]`)).toHaveCount(0);
+    }
+    await page.getByRole("button", { name: "Validation" }).click();
+    const overflowStates = await page.locator(".canvas-block").evaluateAll((elements) => elements.map((element) => {
+      const block = element as HTMLElement;
+      const title = block.querySelector<HTMLElement>(".canvas-block-title");
+      const content = block.querySelector<HTMLElement>(".canvas-block-content");
+      const description = content?.querySelector<HTMLElement>('[data-inline-field="blockDescription"]');
+      const footer = block.querySelector<HTMLElement>(".canvas-block-references");
+      return {
+        contentFits: block.dataset.contentFits,
+        blockOverflows: block.scrollHeight > block.clientHeight + 1 || block.scrollWidth > block.clientWidth + 1,
+        titleOverflows: Boolean(title && (title.scrollHeight > title.clientHeight + 1 || title.scrollWidth > title.clientWidth + 1)),
+        descriptionTouchesFooter: Boolean(description && footer && description.getBoundingClientRect().bottom > footer.getBoundingClientRect().top + 1),
+      };
+    }));
+    const sectionHeaderOverflowStates = await page.locator(".canvas-section > div").evaluateAll((elements) => elements.map((element) => {
+      const header = element as HTMLElement;
+      return header.scrollHeight > header.clientHeight + 1 || header.scrollWidth > header.clientWidth + 1;
+    }));
+    expect(overflowStates.every((state) => state.contentFits === "true")).toBe(true);
+    expect(overflowStates.every((state) => !state.blockOverflows && !state.titleOverflows && !state.descriptionTouchesFooter)).toBe(true);
+    expect(sectionHeaderOverflowStates.every((overflows) => !overflows)).toBe(true);
+  };
+
+  await fit("vertical");
+  const [verticalSiteSetup, verticalEarthworks, verticalSecurity, verticalAccess, verticalFallProtection, verticalScaffolding] = await Promise.all([
+    siteSetupSection.boundingBox(),
+    earthworksSection.boundingBox(),
+    securitySection.boundingBox(),
+    accessSection.boundingBox(),
+    fallProtectionBlock.boundingBox(),
+    scaffoldingBlock.boundingBox(),
+  ]);
+  expect(verticalSiteSetup).not.toBeNull(); expect(verticalEarthworks).not.toBeNull();
+  expect(verticalSecurity).not.toBeNull(); expect(verticalAccess).not.toBeNull();
+  expect(verticalFallProtection).not.toBeNull(); expect(verticalScaffolding).not.toBeNull();
+  expect(Math.abs(verticalSiteSetup!.x - verticalEarthworks!.x)).toBeGreaterThan(1);
+  expect(Math.abs(verticalSiteSetup!.y - verticalEarthworks!.y)).toBeLessThanOrEqual(1);
+  expect(Math.abs(verticalSecurity!.x - verticalAccess!.x)).toBeGreaterThan(1);
+  expect(Math.abs(verticalSecurity!.y - verticalAccess!.y)).toBeLessThanOrEqual(1);
+  expect(Math.abs(verticalFallProtection!.x - verticalScaffolding!.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(verticalFallProtection!.y - verticalScaffolding!.y)).toBeGreaterThan(1);
+  const [verticalAreaBounds, verticalRootExtent] = await Promise.all([blockArea.boundingBox(), rootExtent()]);
+  expect(verticalAreaBounds).not.toBeNull();
+  expect(verticalRootExtent.width / verticalAreaBounds!.width).toBeGreaterThan(0.9);
+  const verticalTypography = await siteAccessBlock.evaluate((element) => ({
+    width: element.getBoundingClientRect().width,
+    fontSize: Number.parseFloat(getComputedStyle(element.querySelector(".canvas-block-title")!).fontSize),
+  }));
+
+  await fit("horizontal");
+  const [horizontalSiteSetup, horizontalEarthworks, horizontalSecurity, horizontalAccess, horizontalFallProtection, horizontalScaffolding] = await Promise.all([
+    siteSetupSection.boundingBox(),
+    earthworksSection.boundingBox(),
+    securitySection.boundingBox(),
+    accessSection.boundingBox(),
+    fallProtectionBlock.boundingBox(),
+    scaffoldingBlock.boundingBox(),
+  ]);
+  expect(horizontalSiteSetup).not.toBeNull(); expect(horizontalEarthworks).not.toBeNull();
+  expect(horizontalSecurity).not.toBeNull(); expect(horizontalAccess).not.toBeNull();
+  expect(horizontalFallProtection).not.toBeNull(); expect(horizontalScaffolding).not.toBeNull();
+  expect(Math.abs(horizontalSiteSetup!.x - horizontalEarthworks!.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(horizontalSiteSetup!.y - horizontalEarthworks!.y)).toBeGreaterThan(1);
+  expect(Math.abs(horizontalSecurity!.x - horizontalAccess!.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(horizontalSecurity!.y - horizontalAccess!.y)).toBeGreaterThan(1);
+  expect(Math.abs(horizontalFallProtection!.x - horizontalScaffolding!.x)).toBeGreaterThan(1);
+  expect(Math.abs(horizontalFallProtection!.y - horizontalScaffolding!.y)).toBeLessThanOrEqual(1);
+  const [horizontalAreaBounds, horizontalRootExtent] = await Promise.all([blockArea.boundingBox(), rootExtent()]);
+  expect(horizontalAreaBounds).not.toBeNull();
+  expect(horizontalRootExtent.height / horizontalAreaBounds!.height).toBeGreaterThan(0.9);
+  const horizontalTypography = await siteAccessBlock.evaluate((element) => ({
+    width: element.getBoundingClientRect().width,
+    fontSize: Number.parseFloat(getComputedStyle(element.querySelector(".canvas-block-title")!).fontSize),
+  }));
+  expect(verticalTypography.width).toBeLessThan(horizontalTypography.width);
+  expect(verticalTypography.fontSize).toBeLessThan(horizontalTypography.fontSize);
+
+  await fit("best_fit");
+});
+
 test("single-axis resize handles preserve perpendicular dimensions", async ({ page }) => {
   await useEnglishInterface(page);
   await page.setViewportSize({ width: 1_920, height: 1_400 });
@@ -1123,7 +1247,9 @@ test("contextual toolbar covers every seeded canvas element family and drag sele
   }
 
   const block = page.locator(".canvas-block").first();
-  await block.click({ force: true });
+  // Select the outer block directly so this drag assertion cannot be mistaken for
+  // a double-click on one of the block's inline-editable text fields.
+  await block.evaluate((element) => (element as HTMLElement).click());
   const before = await block.boundingBox();
   expect(before).not.toBeNull();
   await page.mouse.move(before!.x + before!.width / 2, before!.y + before!.height / 2);

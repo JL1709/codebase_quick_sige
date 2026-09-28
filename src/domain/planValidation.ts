@@ -1,4 +1,5 @@
 import type { BuildingBlock, DocumentTemplate, Locale, Plan, Project, ProjectDocumentConfiguration } from "./types";
+import { calculateBlockPresentationMetrics, getBlockArea } from "./planLayout";
 
 export type PlanValidationSeverity = "error" | "warning" | "information";
 
@@ -12,6 +13,14 @@ export interface PlanValidationIssue {
   suggestedAction?: string;
   professionalReview: boolean;
 }
+
+export const BLOCK_LAYOUT_VALIDATION_RULE_CODES = new Set([
+  "LAYOUT_OUTSIDE_SAFE_AREA",
+  "LAYOUT_BLOCK_OUTSIDE_AREA",
+  "LAYOUT_BLOCK_OUTSIDE_SECTION",
+  "LAYOUT_BLOCK_OVERLAP",
+  "TEXT_OVERFLOW",
+]);
 
 interface ValidationInput {
   plan: Plan;
@@ -40,6 +49,8 @@ function elementName(plan: Plan, project: Project, blocks: Map<string, BuildingB
 export function createPlanValidationIssues({ plan, project, blocks, documentConfigurations, documentTemplates, locale, t }: ValidationInput): PlanValidationIssue[] {
   const issues: PlanValidationIssue[] = [];
   const blockMap = new Map(blocks.map((block) => [block.id, block]));
+  const blockArea = getBlockArea(plan.layout);
+  const visibleBlockElements = plan.layout.elements.filter((element) => !element.hidden && element.kind === "block");
   const addElementIssue = (ruleCode: string, elementId: string, descriptionKey: string, suggestedActionKey: string) => {
     const name = elementName(plan, project, blockMap, elementId, locale, t);
     issues.push({
@@ -71,15 +82,41 @@ export function createPlanValidationIssues({ plan, project, blocks, documentConf
     if (element.kind === "block") {
       const item = plan.sections.find((section) => section.id === element.sectionId)?.items.find((candidate) => candidate.id === element.itemId);
       const block = item ? blockMap.get(item.blockId) : undefined;
-      const text = item && block ? item.customShortDescription?.[locale] ?? block.translations[locale].shortDescription : "";
-      const estimatedCapacity = Math.max(40, Math.floor((element.width / 120) * (element.height / 150)));
-      if (text.length > estimatedCapacity) addElementIssue("TEXT_OVERFLOW", element.id, "editor.validation.overflowDescription", "editor.validation.resizeOrShorten");
+      if (item && block) {
+        const content = block.translations[locale];
+        const presentation = calculateBlockPresentationMetrics(
+          element,
+          item.customTitle?.[locale] ?? content.title,
+          item.customShortDescription?.[locale] ?? content.shortDescription,
+          block.regulations.join(" · "),
+        );
+        if (!presentation.fits) addElementIssue("TEXT_OVERFLOW", element.id, "editor.validation.overflowDescription", "editor.validation.resizeOrShorten");
+      }
+      if (blockArea && (element.x < blockArea.x || element.y < blockArea.y
+        || element.x + element.width > blockArea.x + blockArea.width
+        || element.y + element.height > blockArea.y + blockArea.height)) {
+        addElementIssue("LAYOUT_BLOCK_OUTSIDE_AREA", element.id, "editor.validation.blockAreaDescription", "editor.validation.fitBlocksAgain");
+      }
+      const sectionElement = plan.layout.elements.find((candidate) => candidate.kind === "section" && candidate.sectionId === element.sectionId);
+      if (sectionElement && (element.x < sectionElement.x || element.y < sectionElement.y
+        || element.x + element.width > sectionElement.x + sectionElement.width
+        || element.y + element.height > sectionElement.y + sectionElement.height)) {
+        addElementIssue("LAYOUT_BLOCK_OUTSIDE_SECTION", element.id, "editor.validation.sectionDescription", "editor.validation.fitBlocksAgain");
+      }
     }
 
-    if ((element.kind === "block" || element.kind === "text") && (element.width < 800 || element.height < 280)) {
+    if (element.kind === "text" && (element.width < 800 || element.height < 280)) {
       addElementIssue("PRINT_TEXT_TOO_SMALL", element.id, "editor.validation.smallTextDescription", "editor.validation.enlargeElement");
     }
   }
+
+  visibleBlockElements.forEach((element, index) => {
+    const overlapsAnotherBlock = visibleBlockElements.slice(index + 1).some((candidate) => (
+      element.x < candidate.x + candidate.width && element.x + element.width > candidate.x
+      && element.y < candidate.y + candidate.height && element.y + element.height > candidate.y
+    ));
+    if (overlapsAnotherBlock) addElementIssue("LAYOUT_BLOCK_OVERLAP", element.id, "editor.validation.overlapDescription", "editor.validation.fitBlocksAgain");
+  });
 
   if (!plan.sections.some((section) => section.items.length > 0)) issues.push({ id: "PLAN_NO_BLOCKS", severity: "error", ruleCode: "PLAN_NO_BLOCKS", title: t("editor.noBlocks"), description: t("editor.validation.noBlocksDescription"), suggestedAction: t("editor.validation.addBlock"), professionalReview: false });
   if (!project.participants.some((participant) => participant.role === "coordinator")) issues.push({ id: "PROJECT_NO_COORDINATOR", severity: "error", ruleCode: "PROJECT_NO_COORDINATOR", title: t("editor.missingCoordinator"), description: t("editor.validation.coordinatorDescription"), suggestedAction: t("editor.validation.openOverview"), professionalReview: false });

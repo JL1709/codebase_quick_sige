@@ -6,6 +6,7 @@ import {
   cssPixelsToLayoutUnits, ensurePlanLayout, findNextFreeBlockPosition, findNextFreeNonBlockPosition,
   fitBlocksInArea, getBlockArea, layoutUnitsToCssPixels, layoutUnitsToMillimetres, PLAN_UNITS_PER_MILLIMETRE,
   reconcilePlanSectionsWithCatalog, resizeElementFromCssMeasurement, snapToGrid,
+  calculateBlockPresentationMetrics, calculateSectionPresentationMetrics,
 } from "./planLayout";
 
 describe("physical A0 layout", () => {
@@ -66,6 +67,109 @@ describe("physical A0 layout", () => {
     expect(area?.layoutMode).toBe(mode);
     expect(new Set(blocks.map((element) => `${element.width}x${element.height}`)).size).toBe(1);
     expect(blocks.every((element) => area && element.x >= area.x && element.y >= area.y && element.x + element.width <= area.x + area.width && element.y + element.height <= area.y + area.height)).toBe(true);
+  });
+
+  it("uses the selected mode for blocks and the opposite axis for category siblings", () => {
+    const database = createSeedDatabase();
+    const plan = structuredClone(database.plans[0]);
+    const sections = reconcilePlanSectionsWithCatalog(plan.sections, database.categories, database.blocks);
+    const sectionByCategoryId = new Map(sections.map((section) => [section.categoryId, section.id]));
+    const fittedByMode = new Map((["vertical", "horizontal"] as const).map((mode) => [
+      mode,
+      fitBlocksInArea(plan.layout, sections, database.categories, database.blocks, mode),
+    ]));
+    const findSectionElement = (mode: "vertical" | "horizontal", categoryId: string) => {
+      return fittedByMode.get(mode)!.layout.elements.find(
+        (element) => element.kind === "section" && element.sectionId === sectionByCategoryId.get(categoryId),
+      );
+    };
+    const findBlockElement = (mode: "vertical" | "horizontal", blockId: string) => (
+      fittedByMode.get(mode)!.layout.elements.find((element) => element.kind === "block" && element.blockId === blockId)
+    );
+    const verticalSiteSetup = findSectionElement("vertical", "site-setup");
+    const verticalEarthworks = findSectionElement("vertical", "earthworks");
+    const verticalSecurity = findSectionElement("vertical", "imported-site-security");
+    const verticalAccess = findSectionElement("vertical", "site-access-emergency");
+    const verticalFallProtection = findBlockElement("vertical", "block-fall-protection");
+    const verticalScaffolding = findBlockElement("vertical", "block-scaffolding");
+    const horizontalSiteSetup = findSectionElement("horizontal", "site-setup");
+    const horizontalEarthworks = findSectionElement("horizontal", "earthworks");
+    const horizontalSecurity = findSectionElement("horizontal", "imported-site-security");
+    const horizontalAccess = findSectionElement("horizontal", "site-access-emergency");
+    const horizontalFallProtection = findBlockElement("horizontal", "block-fall-protection");
+    const horizontalScaffolding = findBlockElement("horizontal", "block-scaffolding");
+
+    expect(verticalEarthworks!.x).not.toBe(verticalSiteSetup!.x);
+    expect(verticalEarthworks!.y).toBe(verticalSiteSetup!.y);
+    expect(verticalAccess!.x).not.toBe(verticalSecurity!.x);
+    expect(verticalAccess!.y).toBe(verticalSecurity!.y);
+    expect(verticalScaffolding!.x).toBe(verticalFallProtection!.x);
+    expect(verticalScaffolding!.y).not.toBe(verticalFallProtection!.y);
+
+    expect(horizontalEarthworks!.x).toBe(horizontalSiteSetup!.x);
+    expect(horizontalEarthworks!.y).not.toBe(horizontalSiteSetup!.y);
+    expect(horizontalAccess!.x).toBe(horizontalSecurity!.x);
+    expect(horizontalAccess!.y).not.toBe(horizontalSecurity!.y);
+    expect(horizontalScaffolding!.x).not.toBe(horizontalFallProtection!.x);
+    expect(horizontalScaffolding!.y).toBe(horizontalFallProtection!.y);
+  });
+
+  it.each([
+    ["vertical", "width"],
+    ["horizontal", "height"],
+  ] as const)("scales the %s composition to use the available %s", (mode, axis) => {
+    const database = createSeedDatabase();
+    const plan = structuredClone(database.plans[0]);
+    const sections = reconcilePlanSectionsWithCatalog(plan.sections, database.categories, database.blocks);
+    const fitted = fitBlocksInArea(plan.layout, sections, database.categories, database.blocks, mode);
+    const area = getBlockArea(fitted.layout);
+    const rootCategoryIds = new Set(database.categories.filter((category) => !category.parentId).map((category) => category.id));
+    const rootSectionIds = new Set(sections.filter((section) => rootCategoryIds.has(section.categoryId)).map((section) => section.id));
+    const rootElements = fitted.layout.elements.filter(
+      (element) => element.kind === "section" && rootSectionIds.has(element.sectionId),
+    );
+    const occupiedWidth = Math.max(...rootElements.map((element) => element.x + element.width))
+      - Math.min(...rootElements.map((element) => element.x));
+    const occupiedHeight = Math.max(...rootElements.map((element) => element.y + element.height))
+      - Math.min(...rootElements.map((element) => element.y));
+    const utilization = axis === "width"
+      ? occupiedWidth / area!.width
+      : occupiedHeight / area!.height;
+
+    expect(fitted.fits).toBe(true);
+    expect(utilization).toBeGreaterThan(0.9);
+  });
+
+  it("scales typography below the geometric scale until long content fits", () => {
+    const database = createSeedDatabase();
+    const element = database.plans[0].layout.elements.find((candidate) => candidate.kind === "block");
+    expect(element?.kind).toBe("block");
+    if (!element || element.kind !== "block") return;
+    const metrics = calculateBlockPresentationMetrics(
+      element,
+      "A heading that wraps cleanly",
+      "A deliberately longer description that needs several lines but must remain above the regulations footer without clipping or overlap.",
+      "DGUV Vorschrift 38 · ASR A1.8",
+    );
+
+    expect(metrics.fits).toBe(true);
+    expect(metrics.contentScale).toBeLessThanOrEqual(metrics.layoutScale);
+    expect(metrics.contentScale).toBeGreaterThan(0);
+  });
+
+  it("scales long category headings within their fitted header", () => {
+    const database = createSeedDatabase();
+    const element = database.plans[0].layout.elements.find((candidate) => candidate.kind === "section");
+    expect(element?.kind).toBe("section");
+    if (!element || element.kind !== "section") return;
+    const metrics = calculateSectionPresentationMetrics(
+      element,
+      "Access and emergency organization with an intentionally extended qualification",
+    );
+
+    expect(metrics.fits).toBe(true);
+    expect(metrics.contentScale).toBeLessThanOrEqual(metrics.layoutScale);
+    expect(metrics.contentScale).toBeGreaterThan(0);
   });
 
   it("reconciles existing plan membership with current catalog category assignments before fitting", () => {

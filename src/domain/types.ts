@@ -187,6 +187,8 @@ export interface PlanElementBase {
   height: number;
   zIndex: number;
   semanticOrder?: number;
+  /** Scale chosen by the layout engine for all visual content inside managed elements. */
+  contentScale?: number;
   locked?: boolean;
   hidden?: boolean;
 }

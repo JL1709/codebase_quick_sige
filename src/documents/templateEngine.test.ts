@@ -31,6 +31,41 @@ describe("Word template engine", () => {
     expect(data.qs.plan.blocks.some((block) => block.title === "Organize first aid")).toBe(true);
   });
 
+  it("derives a depth-first category tree with blocks only on their direct category", () => {
+    const database = createSeedDatabase();
+    const plan = structuredClone(database.plans[0]);
+    plan.sections = [{
+      id: "section-mobile-distribution-units",
+      categoryId: "mobile-distribution-units",
+      items: [{ id: "item-import-small-distribution", blockId: "import-small-distribution" }],
+    }];
+    plan.layout.elements = [];
+
+    const data = buildTemplateData(database.projects[0], plan, "en", database.blocks, database.categories) as {
+      qs: {
+        plan: {
+          category_tree: Array<{ id: string; depth: number; path: string; blocks: Array<{ title: string }> }>;
+        };
+      };
+    };
+
+    expect(data.qs.plan.category_tree.map((category) => category.id)).toEqual([
+      "site-setup",
+      "site-utilities",
+      "site-power-water",
+      "temporary-electrical-distribution",
+      "mobile-distribution-units",
+    ]);
+    expect(data.qs.plan.category_tree.map((category) => category.depth)).toEqual([0, 1, 2, 3, 4]);
+    expect(data.qs.plan.category_tree.at(-1)?.path).toBe(
+      "Site setup › Utilities and infrastructure › Temporary power, water, and mobile tanks › Temporary electrical distribution › Mobile distribution units",
+    );
+    expect(data.qs.plan.category_tree.slice(0, -1).every((category) => category.blocks.length === 0)).toBe(true);
+    expect(data.qs.plan.category_tree.at(-1)?.blocks.map((block) => block.title)).toEqual(["Portable electrical distribution board"]);
+    expect("sections" in data.qs.plan).toBe(false);
+    expect("categories" in data.qs.plan).toBe(false);
+  });
+
   it("distinguishes an undefined placeholder from a defined empty value", async () => {
     const database = createSeedDatabase();
     const project = { ...database.projects[0], description: "" };
@@ -96,18 +131,21 @@ describe("Word template engine", () => {
     expect((await inspectTemplate(await blobToArrayBuffer(generated), data)).placeholders).toEqual([]);
     expect(xml).toContain('w:fill="C8644D"');
     expect(xml).not.toContain("QS_CELL_FILL");
+    expect(xml).not.toContain("QS_TEXT_COLOR");
     expect(xml).toContain('<w:gridCol w:w="10466"/>');
     expect(xml).not.toContain('<w:gridCol w:w="100"/>');
-    expect(xml).toContain('<wp:extent cx="1944000" cy="1296000"/>');
+    expect(xml).toContain('<wp:extent cx="1908000" cy="1296000"/>');
 
     const xmlDocument = new DOMParser().parseFromString(xml, "application/xml");
-    const nestedBlockTable = [...xmlDocument.getElementsByTagName("w:tbl")]
-      .find((table) => table.parentElement?.localName === "tc");
-    const wrapperRow = nestedBlockTable?.parentElement?.parentElement;
-    const wrapperRowProperties = [...(wrapperRow?.children ?? [])]
+    const blockTable = [...xmlDocument.getElementsByTagName("w:tbl")]
+      .find((table) => table.textContent?.includes("Sichere Baustellenzugänge"));
+    const blockRow = blockTable?.getElementsByTagName("w:tr")[0];
+    const blockRowProperties = [...(blockRow?.children ?? [])]
       .find((element) => element.localName === "trPr");
-    expect(nestedBlockTable).toBeDefined();
-    expect([...(wrapperRowProperties?.children ?? [])].some((element) => element.localName === "cantSplit")).toBe(true);
+    expect(blockTable).toBeDefined();
+    expect(blockTable?.getElementsByTagName("w:tc")).toHaveLength(3);
+    expect(blockTable?.getElementsByTagName("w:tbl")).toHaveLength(0);
+    expect([...(blockRowProperties?.children ?? [])].some((element) => element.localName === "cantSplit")).toBe(true);
   });
 
   it("renders the friendly placeholder syntax even when Word splits a marker across runs", async () => {
@@ -134,13 +172,13 @@ describe("Word template engine", () => {
     const template = await createStandardTemplate("a4_plan", "en");
     const xml = await documentXml(template);
 
-    expect(xml).toContain("{{#qs.plan.categories}}");
+    expect(xml).toContain("{{#qs.plan.category_tree}}");
     expect(xml).toContain("{{qs.category.title}}");
-    expect(xml).toContain("{{#qs.category.sections}}");
-    expect(xml).toContain("{{#qs.section.blocks}}");
+    expect(xml).toContain("{{#qs.category.blocks}}");
     expect(xml).toContain("{{qs.block.a4_description}}");
     expect(xml).toContain("{{qs.block.image}}");
     expect(xml).toContain("{{qs.block.regulations}}");
+    expect(xml).not.toContain("qs.section");
   });
 
   it("normalizes Unicode labels into stable ASCII placeholder keys", () => {
@@ -152,14 +190,14 @@ describe("Word template engine", () => {
     const unmatchedEnd = await commandTemplate("/qs.plan.blocks");
     const missingEnd = await commandTemplate("#qs.plan.blocks");
     const nestedDocument = new Document({ sections: [{ children: [
-      new Paragraph("{{#qs.plan.categories}}"),
-      new Paragraph("{{#qs.category.sections}}"),
-      new Paragraph("{{#qs.section.blocks}}"),
+      new Paragraph("{{#qs.plan.category_tree}}"),
+      new Paragraph("{{#qs.category.blocks}}"),
       new Paragraph("{{#qs.block.items}}"),
+      new Paragraph("{{#qs.items.children}}"),
+      new Paragraph("{{/qs.items.children}}"),
       new Paragraph("{{/qs.block.items}}"),
-      new Paragraph("{{/qs.section.blocks}}"),
-      new Paragraph("{{/qs.category.sections}}"),
-      new Paragraph("{{/qs.plan.categories}}"),
+      new Paragraph("{{/qs.category.blocks}}"),
+      new Paragraph("{{/qs.plan.category_tree}}"),
     ] }] });
     const nested = await blobToArrayBuffer(await Packer.toBlob(nestedDocument));
 

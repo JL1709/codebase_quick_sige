@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppRepository } from "../data/localRepository";
 import { createSeedDatabase } from "../data/seed";
@@ -87,15 +87,39 @@ describe("Word template settings", () => {
   it("shows only the placeholders used by the standard A4 template", () => {
     renderTemplatesPage(createSeedDatabase());
 
-    expect(screen.getByText("{{#qs.plan.categories}}")).toBeInTheDocument();
+    expect(screen.getByText("{{#qs.plan.category_tree}}")).toBeInTheDocument();
     expect(screen.getByText("{{qs.category.title}}")).toBeInTheDocument();
-    expect(screen.getByText("{{qs.section.heading}}")).toBeInTheDocument();
+    expect(screen.getByText("{{qs.category.path}}")).toBeInTheDocument();
+    expect(screen.getByText("{{#qs.category.blocks}}")).toBeInTheDocument();
     expect(screen.getByText("{{qs.block.image}}")).toBeInTheDocument();
     expect(screen.getByText("{{qs.block.a4_description}}")).toBeInTheDocument();
     expect(screen.getByText("{{qs.block.regulations}}")).toBeInTheDocument();
     expect(screen.queryByText("{{qs.project.name}}")).not.toBeInTheDocument();
     expect(screen.queryByText("{{qs.block.expert_note}}")).not.toBeInTheDocument();
+    expect(screen.queryByText("{{qs.section.heading}}")).not.toBeInTheDocument();
     expect(screen.queryByText("{{PAGEBREAK}}")).not.toBeInTheDocument();
+  });
+
+  it("copies placeholders on an insecure connection and confirms the action", async () => {
+    const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execCommand");
+    const execCommand = vi.fn(() => {
+      expect(document.querySelector("textarea")).toHaveValue("{{qs.category.path}}");
+      return true;
+    });
+    Object.defineProperty(document, "execCommand", { configurable: true, value: execCommand });
+
+    try {
+      renderTemplatesPage(createSeedDatabase());
+      const copyButton = screen.getByRole("button", { name: "Copy Word placeholder: {{qs.category.path}}" });
+
+      fireEvent.click(copyButton);
+
+      await waitFor(() => expect(copyButton).toHaveTextContent("Copied"));
+      expect(execCommand).toHaveBeenCalledWith("copy");
+    } finally {
+      if (originalExecCommand) Object.defineProperty(document, "execCommand", originalExecCommand);
+      else Reflect.deleteProperty(document, "execCommand");
+    }
   });
 
   it("requires a unique custom template name", () => {

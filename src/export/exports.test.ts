@@ -2,9 +2,15 @@ import { Packer } from "docx";
 import { describe, expect, it } from "vitest";
 import { createSeedDatabase } from "../data/seed";
 import { annotationBoundsFromDrag, createAnnotationElement } from "../domain/planAnnotations";
-import { buildPlanDocxDocument, buildPlanPdf, buildSupportingDocumentPdf } from "./exports";
+import { buildPlanDocxDocument, buildPlanPdf, buildSupportingDocumentPdf, planCanvasFontSizeToPdfPoints } from "./exports";
 
 describe("document exports", () => {
+  it("preserves canvas typography at physical A0 scale", () => {
+    expect(planCanvasFontSizeToPdfPoints(8)).toBeCloseTo(22.68, 2);
+    expect(planCanvasFontSizeToPdfPoints(7)).toBeCloseTo(19.84, 2);
+    expect(planCanvasFontSizeToPdfPoints(5.7)).toBeCloseTo(16.16, 2);
+  });
+
   it("builds a physical A0 landscape PDF with substantial content", () => {
     const database = createSeedDatabase();
     const project = database.projects[0];

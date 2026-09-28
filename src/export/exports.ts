@@ -15,6 +15,8 @@ import { blobDataUrl, getBlob } from "../data/blobRepository";
 import { readableTextColor } from "../domain/colorContrast";
 import { hydrateBlockImages } from "../domain/blockImages";
 import { blockHierarchyColor, categoryHierarchyColor } from "../domain/categoryTree";
+import { calculateBlockPresentationMetrics, calculateSectionPresentationMetrics } from "../domain/planLayout";
+import { PLAN_MILLIMETRES_PER_CANVAS_PIXEL, PLAN_PRESENTATION } from "../domain/planPresentation";
 import type {
   BuildingBlock,
   BuildingBlockCategory,
@@ -27,6 +29,12 @@ import type {
 
 const ARROW_HEAD_LENGTH_MM = 8;
 const ARROW_HEAD_HALF_ANGLE_RADIANS = Math.PI / 6;
+const PDF_POINT_TO_MILLIMETRES = 25.4 / 72;
+const PDF_POINTS_PER_MILLIMETRE = 1 / PDF_POINT_TO_MILLIMETRES;
+
+export function planCanvasFontSizeToPdfPoints(canvasFontSize: number): number {
+  return canvasFontSize * PLAN_MILLIMETRES_PER_CANVAS_PIXEL * PDF_POINTS_PER_MILLIMETRE;
+}
 
 function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
@@ -109,39 +117,146 @@ export function buildPlanPdf(
   for (const element of [...plan.layout.elements].filter((candidate) => !candidate.hidden).sort((a, b) => a.zIndex - b.zIndex)) {
     const x = unit(element.x); const y = unit(element.y); const width = unit(element.width); const height = unit(element.height);
     if (element.kind === "header") {
+      const { header } = PLAN_PRESENTATION;
       const projectDetails = `${project.projectNumber} · ${project.address}, ${project.city}`;
       const status = revision
         ? `Revision ${revision.index} · ${new Date(revision.publishedAt).toLocaleDateString(locale === "de" ? "de-DE" : "en-GB")}`
         : locale === "de" ? "Arbeitsstand" : "Working draft";
       pdf.setFillColor(18, 36, 31); pdf.roundedRect(x, y, width, height, 5, 5, "F");
-      pdf.setTextColor(213, 255, 63); pdf.setFont("helvetica", "bold"); pdf.setFontSize(15); pdf.text(element.brandText?.[locale] ?? "QUICKSiGe", x + 13, y + 18);
-      pdf.setTextColor(255, 255, 255); pdf.setFontSize(23); pdf.text(pdf.splitTextToSize(element.titleText?.[locale] ?? (locale === "de" ? "Sicherheits- und Gesundheitsschutzplan" : "Safety and Health Plan"), width * .58).slice(0, 1), x + 13, y + 40);
-      pdf.setFontSize(10); pdf.setFont("helvetica", "normal");
-      pdf.text(element.projectNameText?.[locale] ?? project.name, x + width - 13, y + 16, { align: "right" });
-      pdf.text(pdf.splitTextToSize(element.projectDetailsText?.[locale] ?? projectDetails, width * .36).slice(0, 1), x + width - 13, y + 30, { align: "right" });
-      pdf.text(element.statusText?.[locale] ?? status, x + width - 13, y + 44, { align: "right" });
+      pdf.setTextColor(213, 255, 63); pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(planCanvasFontSizeToPdfPoints(header.brandFontSize));
+      pdf.text(element.brandText?.[locale] ?? "QUICKSiGe", x + header.horizontalPadding, y + 18);
+      pdf.setTextColor(255, 255, 255);
+      pdf.setFontSize(planCanvasFontSizeToPdfPoints(header.titleFontSize));
+      const planTitle = element.titleText?.[locale]
+        ?? (locale === "de" ? "Sicherheits- und Gesundheitsschutzplan" : "Safety and Health Plan");
+      pdf.text(pdf.splitTextToSize(planTitle, width * .58).slice(0, 1), x + header.horizontalPadding, y + 40);
+      pdf.setFontSize(planCanvasFontSizeToPdfPoints(header.projectFontSize));
+      pdf.text(element.projectNameText?.[locale] ?? project.name, x + width - header.horizontalPadding, y + 16, { align: "right" });
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(planCanvasFontSizeToPdfPoints(header.metadataFontSize));
+      pdf.text(pdf.splitTextToSize(element.projectDetailsText?.[locale] ?? projectDetails, width * .36).slice(0, 1), x + width - header.horizontalPadding, y + 30, { align: "right" });
+      pdf.text(element.statusText?.[locale] ?? status, x + width - header.horizontalPadding, y + 44, { align: "right" });
     } else if (element.kind === "section") {
-      const section = sections.get(element.sectionId); const category = section && categoryMap.get(section.categoryId); if (!section || !category) continue;
-      const categoryColor = categoryHierarchyColor(category.id, categories); const color = hexToRgb(categoryColor); pdf.setDrawColor(204, 215, 210); pdf.setFillColor(255, 255, 255); pdf.roundedRect(x, y, width, height, 4, 4, "FD"); pdf.setFillColor(...color); pdf.roundedRect(x, y, width, 16, 4, 4, "F"); pdf.rect(x, y + 12, width, 4, "F"); pdf.setTextColor(...hexToRgb(readableTextColor(categoryColor))); pdf.setFont("helvetica", "bold"); pdf.setFontSize(8); pdf.text(section.titleOverrides?.[locale] ?? category.translations[locale].name, x + 8, y + 11);
+      const section = sections.get(element.sectionId);
+      const category = section && categoryMap.get(section.categoryId);
+      if (!section || !category) continue;
+      const categoryColor = categoryHierarchyColor(category.id, categories);
+      const title = section.titleOverrides?.[locale] ?? category.translations[locale].name;
+      const presentation = calculateSectionPresentationMetrics(element, title);
+      const headerHeight = PLAN_PRESENTATION.section.headerHeight * presentation.layoutScale;
+      const horizontalPadding = PLAN_PRESENTATION.section.horizontalPadding * presentation.layoutScale;
+      const headerRadius = Math.min(4, headerHeight / 2);
+      const titleFontSize = planCanvasFontSizeToPdfPoints(
+        PLAN_PRESENTATION.section.titleFontSize * presentation.contentScale,
+      );
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(titleFontSize);
+      const titleLines = pdf.splitTextToSize(title, Math.max(1, width - horizontalPadding * 2));
+      const titleLineHeight = titleFontSize * PDF_POINT_TO_MILLIMETRES * PLAN_PRESENTATION.section.titleLineHeight;
+      const titleTop = y + Math.max(0, (headerHeight - titleLines.length * titleLineHeight) / 2);
+      pdf.setDrawColor(204, 215, 210);
+      pdf.setLineWidth(PLAN_MILLIMETRES_PER_CANVAS_PIXEL);
+      pdf.setFillColor(255, 255, 255);
+      pdf.roundedRect(x, y, width, height, 4, 4, "FD");
+      pdf.setFillColor(...hexToRgb(categoryColor));
+      pdf.roundedRect(x, y, width, headerHeight, headerRadius, headerRadius, "F");
+      pdf.rect(x, y + headerHeight - headerRadius, width, headerRadius, "F");
+      pdf.setTextColor(...hexToRgb(readableTextColor(categoryColor)));
+      pdf.text(titleLines, x + horizontalPadding, titleTop + titleLineHeight * 0.8, {
+        lineHeightFactor: PLAN_PRESENTATION.section.titleLineHeight,
+      });
     } else if (element.kind === "block") {
-      const section = sections.get(element.sectionId); const item = section?.items.find((candidate) => candidate.id === element.itemId); const block = item && blockMap.get(item.blockId); if (!item || !block) continue;
+      const section = sections.get(element.sectionId);
+      const item = section?.items.find((candidate) => candidate.id === element.itemId);
+      const block = item && blockMap.get(item.blockId);
+      if (!item || !block) continue;
       const content = block.translations[locale] ?? block.translations.de;
+      const title = item.customTitle?.[locale] ?? content.title;
+      const description = item.customShortDescription?.[locale] ?? content.shortDescription;
+      const references = block.regulations.join(" · ");
+      const presentation = calculateBlockPresentationMetrics(element, title, description, references);
       const blockColor = blockHierarchyColor(block, categories);
       const accent = hexToRgb(blockColor);
       const blockImage = item.imageDataUrl ?? block.imageDataUrl;
-      pdf.setDrawColor(212, 221, 217); pdf.setFillColor(255, 255, 255); pdf.roundedRect(x, y, width, height, 3, 3, "FD");
-      pdf.setFillColor(...accent); pdf.roundedRect(x, y, width, 14, 3, 3, "F"); pdf.rect(x, y + 10, width, 4, "F");
-      pdf.setTextColor(...hexToRgb(readableTextColor(blockColor))); pdf.setFont("helvetica", "bold"); pdf.setFontSize(7.4); pdf.text(pdf.splitTextToSize(item.customTitle?.[locale] ?? content.title, width - 12).slice(0, 1), x + 6, y + 9);
-      const bodyX = x + 6; const bodyY = y + 18; const bodyWidth = width - 12; const bodyHeight = Math.max(10, height - 34); const columnGap = 6; const columnWidth = (bodyWidth - columnGap) / 2;
-      let descriptionX = bodyX; let descriptionWidth = bodyWidth;
+      const layoutScale = presentation.layoutScale;
+      const titleFontSize = planCanvasFontSizeToPdfPoints(
+        PLAN_PRESENTATION.block.titleFontSize * presentation.contentScale,
+      );
+      const descriptionFontSize = planCanvasFontSizeToPdfPoints(
+        PLAN_PRESENTATION.block.descriptionFontSize * presentation.contentScale,
+      );
+      const referenceFontSize = planCanvasFontSizeToPdfPoints(
+        PLAN_PRESENTATION.block.referenceFontSize * presentation.contentScale,
+      );
+      const titlePaddingX = PLAN_PRESENTATION.block.titleHorizontalPadding * layoutScale;
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(titleFontSize);
+      const titleLines = pdf.splitTextToSize(title, Math.max(1, width - titlePaddingX * 2));
+      const titleLineHeight = titleFontSize * PDF_POINT_TO_MILLIMETRES * PLAN_PRESENTATION.block.titleLineHeight;
+      const titleHeight = titleLines.length * titleLineHeight
+        + PLAN_PRESENTATION.block.titleVerticalPadding * 2 * layoutScale;
+      const footerMarginX = PLAN_PRESENTATION.block.referenceHorizontalMargin * layoutScale;
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(referenceFontSize);
+      const referenceLines = pdf.splitTextToSize(references, Math.max(1, width - footerMarginX * 2));
+      const referenceLineHeight = referenceFontSize * PDF_POINT_TO_MILLIMETRES
+        * PLAN_PRESENTATION.block.referenceLineHeight;
+      const footerHeight = referenceLines.length * referenceLineHeight
+        + (PLAN_PRESENTATION.block.referenceTopPadding + PLAN_PRESENTATION.block.referenceBottomPadding) * layoutScale;
+      const bodyPadding = PLAN_PRESENTATION.block.bodyPadding * layoutScale;
+      const bodyX = x + bodyPadding;
+      const bodyY = y + titleHeight + bodyPadding;
+      const bodyWidth = Math.max(1, width - bodyPadding * 2);
+      const bodyHeight = Math.max(1, height - titleHeight - footerHeight - bodyPadding * 2);
+      const columnGap = PLAN_PRESENTATION.block.bodyColumnGap * layoutScale;
+      const columnWidth = Math.max(1, (bodyWidth - columnGap) / 2);
+      const headerRadius = Math.min(3, titleHeight / 2);
+      pdf.setDrawColor(212, 221, 217);
+      pdf.setLineWidth(PLAN_MILLIMETRES_PER_CANVAS_PIXEL);
+      pdf.setFillColor(255, 255, 255);
+      pdf.roundedRect(x, y, width, height, 3, 3, "FD");
+      pdf.setFillColor(...accent);
+      pdf.roundedRect(x, y, width, titleHeight, headerRadius, headerRadius, "F");
+      pdf.rect(x, y + titleHeight - headerRadius, width, headerRadius, "F");
+      pdf.setTextColor(...hexToRgb(readableTextColor(blockColor)));
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(titleFontSize);
+      pdf.text(
+        titleLines,
+        x + titlePaddingX,
+        y + PLAN_PRESENTATION.block.titleVerticalPadding * layoutScale + titleLineHeight * 0.8,
+        { lineHeightFactor: PLAN_PRESENTATION.block.titleLineHeight },
+      );
+      let descriptionX = bodyX;
+      let descriptionWidth = bodyWidth;
       if (blockImage) {
         try {
           pdf.addImage(blockImage, blockImage.startsWith("data:image/png") ? "PNG" : "JPEG", bodyX, bodyY, columnWidth, bodyHeight, undefined, "FAST");
           descriptionX = bodyX + columnWidth + columnGap; descriptionWidth = columnWidth;
         } catch { /* Preserve text when an old image override cannot be decoded. */ }
       }
-      pdf.setTextColor(44, 60, 54); pdf.setFont("helvetica", "normal"); pdf.setFontSize(6.7); pdf.text(pdf.splitTextToSize(item.customShortDescription?.[locale] ?? content.shortDescription, descriptionWidth).slice(0, 4), descriptionX, bodyY + 4);
-      pdf.setDrawColor(227, 232, 229); pdf.line(x + 6, y + height - 13, x + width - 6, y + height - 13); pdf.setTextColor(104, 117, 111); pdf.setFontSize(5.5); pdf.text(pdf.splitTextToSize(block.regulations.join(" · "), width - 12).slice(0, 2), x + 6, y + height - 7);
+      pdf.setTextColor(44, 60, 54);
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(descriptionFontSize);
+      const descriptionLines = pdf.splitTextToSize(description, Math.max(1, descriptionWidth));
+      const descriptionLineHeight = descriptionFontSize * PDF_POINT_TO_MILLIMETRES
+        * PLAN_PRESENTATION.block.descriptionLineHeight;
+      pdf.text(descriptionLines, descriptionX, bodyY + descriptionLineHeight * 0.8, {
+        lineHeightFactor: PLAN_PRESENTATION.block.descriptionLineHeight,
+      });
+      const footerTop = y + height - footerHeight;
+      pdf.setDrawColor(227, 232, 229);
+      pdf.line(x + footerMarginX, footerTop, x + width - footerMarginX, footerTop);
+      pdf.setTextColor(104, 117, 111);
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(referenceFontSize);
+      pdf.text(
+        referenceLines,
+        x + footerMarginX,
+        footerTop + PLAN_PRESENTATION.block.referenceTopPadding * layoutScale + referenceLineHeight * 0.8,
+        { lineHeightFactor: PLAN_PRESENTATION.block.referenceLineHeight },
+      );
     } else if (element.kind === "image") {
       const asset = assets.get(element.assetId); if (!asset?.dataUrl) continue;
       const preview = assetPreviewByElement.get(element.id) ?? asset.dataUrl;
@@ -157,10 +272,10 @@ export function buildPlanPdf(
       if (preview) {
         try { pdf.addImage(preview, "PNG", x, y, width, height, undefined, "FAST"); continue; } catch { /* Fall back to a labelled placeholder for legacy assets without a decodable preview. */ }
       }
-      pdf.setDrawColor(174, 189, 183); pdf.setFillColor(244, 247, 245); pdf.roundedRect(x, y, width, height, 3, 3, "FD"); pdf.setTextColor(73, 93, 85); pdf.setFontSize(8); pdf.text(pdf.splitTextToSize(asset.filename, width - 14), x + width / 2, y + height / 2, { align: "center" });
+      pdf.setDrawColor(174, 189, 183); pdf.setFillColor(244, 247, 245); pdf.roundedRect(x, y, width, height, 3, 3, "FD"); pdf.setTextColor(73, 93, 85); pdf.setFontSize(planCanvasFontSizeToPdfPoints(9)); pdf.text(pdf.splitTextToSize(asset.filename, width - 14), x + width / 2, y + height / 2, { align: "center" });
     } else if (element.kind === "document") {
-      pdf.setDrawColor(157, 187, 176); pdf.setFillColor(236, 244, 241); pdf.roundedRect(x, y, width, height, 3, 3, "FD"); pdf.setTextColor(18, 36, 31); pdf.setFont("helvetica", "bold"); pdf.setFontSize(8); pdf.text(supportingCopy[locale][element.documentType].title, x + 10, y + 13);
-      pdf.setFont("helvetica", "normal"); pdf.setFontSize(6.5);
+      pdf.setDrawColor(157, 187, 176); pdf.setFillColor(236, 244, 241); pdf.roundedRect(x, y, width, height, 3, 3, "FD"); pdf.setTextColor(18, 36, 31); pdf.setFont("helvetica", "bold"); pdf.setFontSize(planCanvasFontSizeToPdfPoints(PLAN_PRESENTATION.document.titleFontSize)); pdf.text(supportingCopy[locale][element.documentType].title, x + 10, y + 13);
+      pdf.setFont("helvetica", "normal"); pdf.setFontSize(planCanvasFontSizeToPdfPoints(PLAN_PRESENTATION.document.bodyFontSize));
       if (element.displayVariant === "emergency_card") pdf.text(pdf.splitTextToSize(project.emergencyContacts.slice(0, 3).map((contact) => `${contact.label}: ${contact.phone}`).join(" · ") || "—", width - 20), x + 10, y + 25);
       if (element.displayVariant === "participant_list") pdf.text(pdf.splitTextToSize(project.participants.slice(0, 4).map((participant) => `${participant.name} · ${participant.company}`).join(" · ") || "—", width - 20), x + 10, y + 25);
       if (element.displayVariant === "qr_link") { pdf.setDrawColor(18, 36, 31); pdf.rect(x + width - 32, y + 8, 22, 22, "S"); pdf.text("QR", x + width - 21, y + 21, { align: "center" }); }
@@ -170,7 +285,7 @@ export function buildPlanPdf(
       if (element.strokeColor) { pdf.setDrawColor(...annotationColor(element.strokeColor, opacity)); pdf.setLineWidth(element.strokeWidth ?? 1); pdf.rect(x, y, width, height, "S"); }
       pdf.setTextColor(...annotationColor(element.textColor, opacity));
       pdf.setFont("helvetica", element.fontWeight === "bold" ? "bold" : "normal");
-      pdf.setFontSize(element.fontSize ?? 9);
+      pdf.setFontSize(planCanvasFontSizeToPdfPoints(element.fontSize ?? 9));
       const alignment = element.textAlign ?? "left";
       const textX = alignment === "left" ? x + 6 : alignment === "center" ? x + width / 2 : x + width - 6;
       pdf.text(pdf.splitTextToSize(element.text[locale] ?? "", Math.max(1, width - 12)), textX, y + 10, { align: alignment });
@@ -205,14 +320,15 @@ export function buildPlanPdf(
           pdf.triangle(x + 18, y + height, x + 30, y + height, x + 24, y + height + 8, drawingStyle);
           pdf.setTextColor(...annotationColor(element.textColor, opacity));
           pdf.setFont("helvetica", element.fontWeight === "bold" ? "bold" : "normal");
-          pdf.setFontSize(element.fontSize ?? 9);
+          pdf.setFontSize(planCanvasFontSizeToPdfPoints(element.fontSize ?? 9));
           const alignment = element.textAlign ?? "left";
           const textX = alignment === "left" ? x + 6 : alignment === "center" ? x + width / 2 : x + width - 6;
           pdf.text(pdf.splitTextToSize(element.text?.[locale] ?? "", Math.max(1, width - 12)), textX, y + 10, { align: alignment });
         }
       }
     } else if (element.kind === "title_block") {
-      pdf.setDrawColor(18, 36, 31); pdf.roundedRect(x, y, width, height, 3, 3, "S"); pdf.setTextColor(18, 36, 31); pdf.setFont("helvetica", "bold"); pdf.setFontSize(8); pdf.text(element.projectNameText?.[locale] ?? project.name, x + 8, y + 14); pdf.setFont("helvetica", "normal"); pdf.setFontSize(6); pdf.text(element.coordinatorText?.[locale] ?? project.participants.find((participant) => participant.role === "coordinator")?.name ?? "—", x + 8, y + 28); pdf.text(element.referenceText?.[locale] ?? `${project.projectNumber} · A0`, x + 8, y + 41);
+      const { titleBlock } = PLAN_PRESENTATION;
+      pdf.setDrawColor(18, 36, 31); pdf.roundedRect(x, y, width, height, 3, 3, "S"); pdf.setTextColor(18, 36, 31); pdf.setFont("helvetica", "bold"); pdf.setFontSize(planCanvasFontSizeToPdfPoints(titleBlock.titleFontSize)); pdf.text(element.projectNameText?.[locale] ?? project.name, x + 8, y + 14); pdf.setFont("helvetica", "normal"); pdf.setFontSize(planCanvasFontSizeToPdfPoints(titleBlock.bodyFontSize)); pdf.text(element.coordinatorText?.[locale] ?? project.participants.find((participant) => participant.role === "coordinator")?.name ?? "—", x + 8, y + 28); pdf.text(element.referenceText?.[locale] ?? `${project.projectNumber} · A0`, x + 8, y + 41);
     }
   }
 

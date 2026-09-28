@@ -1,4 +1,5 @@
 import { categoryTrail } from "./categoryTree";
+import { PLAN_PRESENTATION } from "./planPresentation";
 import type {
   BlockLayoutMode,
   BuildingBlock,
@@ -21,12 +22,12 @@ export const PLAN_GRID_SIZE = 20;
 export const CSS_PIXELS_PER_LAYOUT_UNIT = 0.1;
 
 const TITLE_BLOCK_HEIGHT = 520;
-const SECTION_HEADER_HEIGHT = 180;
-const SECTION_PADDING = 60;
-const SECTION_GAP = 80;
-const BLOCK_GAP = 50;
-const MAXIMUM_BLOCK_WIDTH = 1_800;
-const MINIMUM_BLOCK_WIDTH = 760;
+const BASE_SECTION_HEADER_HEIGHT = PLAN_PRESENTATION.section.headerHeight / CSS_PIXELS_PER_LAYOUT_UNIT;
+const BASE_SECTION_PADDING = 60;
+const BASE_SECTION_GAP = 80;
+const BASE_BLOCK_GAP = 50;
+export const REFERENCE_BLOCK_WIDTH = 1_800;
+const MINIMUM_FITTED_BLOCK_WIDTH = 240;
 const BLOCK_ASPECT_RATIO = 1.6;
 const BLOCK_SIZE_STEP = 40;
 const NEW_SECTION_HEIGHT = 1_220;
@@ -63,12 +64,27 @@ interface LayoutCandidate {
   blockHeight: number;
   placements: SectionPlacement[];
   footprint: number;
+  contentScale: number;
 }
 
 interface LocalHierarchyLayout {
   width: number;
   height: number;
   placements: SectionPlacement[];
+}
+
+interface ScaledLayoutMetrics {
+  contentScale: number;
+  sectionHeaderHeight: number;
+  sectionPadding: number;
+  sectionGap: number;
+  blockGap: number;
+}
+
+export interface BlockPresentationMetrics {
+  contentScale: number;
+  layoutScale: number;
+  fits: boolean;
 }
 
 export interface FitBlocksResult {
@@ -278,6 +294,151 @@ function blockHeightForWidth(blockWidth: number): number {
   return snapToGrid(blockWidth / BLOCK_ASPECT_RATIO);
 }
 
+function scaledLayoutMetric(baseValue: number, contentScale: number): number {
+  return Math.max(PLAN_GRID_SIZE, snapToGrid(baseValue * contentScale));
+}
+
+function scaledLayoutMetrics(blockWidth: number): ScaledLayoutMetrics {
+  const contentScale = blockWidth / REFERENCE_BLOCK_WIDTH;
+  return {
+    contentScale,
+    sectionHeaderHeight: scaledLayoutMetric(BASE_SECTION_HEADER_HEIGHT, contentScale),
+    sectionPadding: scaledLayoutMetric(BASE_SECTION_PADDING, contentScale),
+    sectionGap: scaledLayoutMetric(BASE_SECTION_GAP, contentScale),
+    blockGap: scaledLayoutMetric(BASE_BLOCK_GAP, contentScale),
+  };
+}
+
+const ESTIMATED_GLYPH_WIDTH_RATIO = 0.56;
+const MINIMUM_RELATIVE_CONTENT_SCALE = 0.04;
+
+function estimatedWrappedLineCount(text: string, availableWidth: number, fontSize: number): number {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return 1;
+  const maximumCharacters = Math.max(1, Math.floor(availableWidth / Math.max(0.1, fontSize * ESTIMATED_GLYPH_WIDTH_RATIO)));
+  let lines = 1;
+  let currentLineLength = 0;
+  words.forEach((word) => {
+    const wordLength = word.length;
+    if (wordLength > maximumCharacters) {
+      if (currentLineLength > 0) lines += 1;
+      lines += Math.ceil(wordLength / maximumCharacters) - 1;
+      currentLineLength = wordLength % maximumCharacters;
+      return;
+    }
+    const requiredLength = currentLineLength ? currentLineLength + 1 + wordLength : wordLength;
+    if (requiredLength > maximumCharacters) {
+      lines += 1;
+      currentLineLength = wordLength;
+    } else {
+      currentLineLength = requiredLength;
+    }
+  });
+  return lines;
+}
+
+function blockContentFitsAtScale(
+  element: Pick<PlanBlockElement, "width" | "height">,
+  title: string,
+  description: string,
+  regulations: string,
+  layoutScale: number,
+  contentScale: number,
+): boolean {
+  const width = element.width * CSS_PIXELS_PER_LAYOUT_UNIT;
+  const height = element.height * CSS_PIXELS_PER_LAYOUT_UNIT;
+  const { block } = PLAN_PRESENTATION;
+  const titleWidth = Math.max(1, width - block.titleHorizontalPadding * 2 * layoutScale);
+  const titleLines = estimatedWrappedLineCount(title, titleWidth, block.titleFontSize * contentScale);
+  const titleHeight = titleLines * block.titleFontSize * block.titleLineHeight * contentScale
+    + block.titleVerticalPadding * 2 * layoutScale;
+  const footerWidth = Math.max(1, width - block.referenceHorizontalMargin * 2 * layoutScale);
+  const footerLines = estimatedWrappedLineCount(regulations, footerWidth, block.referenceFontSize * contentScale);
+  const footerHeight = footerLines * block.referenceFontSize * block.referenceLineHeight * contentScale
+    + (block.referenceTopPadding + block.referenceBottomPadding) * layoutScale;
+  const descriptionWidth = Math.max(
+    1,
+    (width - (block.bodyPadding * 2 + block.bodyColumnGap) * layoutScale) / 2,
+  );
+  const descriptionLines = estimatedWrappedLineCount(description, descriptionWidth, block.descriptionFontSize * contentScale);
+  const descriptionHeight = descriptionLines * block.descriptionFontSize * block.descriptionLineHeight * contentScale
+    + block.bodyPadding * 2 * layoutScale;
+  return titleHeight + footerHeight + descriptionHeight <= height;
+}
+
+export function calculateBlockPresentationMetrics(
+  element: Pick<PlanBlockElement, "contentScale" | "width" | "height">,
+  title: string,
+  description: string,
+  regulations: string,
+): BlockPresentationMetrics {
+  const referenceHeight = REFERENCE_BLOCK_WIDTH / BLOCK_ASPECT_RATIO;
+  const geometryScale = Math.min(element.width / REFERENCE_BLOCK_WIDTH, element.height / referenceHeight);
+  const layoutScale = Math.max(0.01, Math.min(element.contentScale ?? geometryScale, geometryScale));
+  const minimumScale = layoutScale * MINIMUM_RELATIVE_CONTENT_SCALE;
+  if (blockContentFitsAtScale(element, title, description, regulations, layoutScale, layoutScale)) {
+    return { contentScale: layoutScale, layoutScale, fits: true };
+  }
+  if (!blockContentFitsAtScale(element, title, description, regulations, layoutScale, minimumScale)) {
+    return { contentScale: minimumScale, layoutScale, fits: false };
+  }
+  let lowerBound = minimumScale;
+  let upperBound = layoutScale;
+  for (let iteration = 0; iteration < 20; iteration += 1) {
+    const candidateScale = (lowerBound + upperBound) / 2;
+    if (blockContentFitsAtScale(element, title, description, regulations, layoutScale, candidateScale)) {
+      lowerBound = candidateScale;
+    } else {
+      upperBound = candidateScale;
+    }
+  }
+  return { contentScale: lowerBound, layoutScale, fits: true };
+}
+
+function sectionTitleFitsAtScale(
+  element: Pick<PlanSectionElement, "width">,
+  title: string,
+  layoutScale: number,
+  contentScale: number,
+): boolean {
+  const { section } = PLAN_PRESENTATION;
+  const availableWidth = Math.max(
+    1,
+    element.width * CSS_PIXELS_PER_LAYOUT_UNIT - section.horizontalPadding * 2 * layoutScale,
+  );
+  const availableHeight = Math.max(
+    1,
+    section.headerHeight * layoutScale - section.verticalPadding * 2 * layoutScale,
+  );
+  const titleLines = estimatedWrappedLineCount(title, availableWidth, section.titleFontSize * contentScale);
+  return titleLines * section.titleFontSize * section.titleLineHeight * contentScale <= availableHeight;
+}
+
+export function calculateSectionPresentationMetrics(
+  element: Pick<PlanSectionElement, "contentScale" | "width">,
+  title: string,
+): BlockPresentationMetrics {
+  const layoutScale = Math.max(0.01, element.contentScale ?? 1);
+  const minimumScale = layoutScale * MINIMUM_RELATIVE_CONTENT_SCALE;
+  if (sectionTitleFitsAtScale(element, title, layoutScale, layoutScale)) {
+    return { contentScale: layoutScale, layoutScale, fits: true };
+  }
+  if (!sectionTitleFitsAtScale(element, title, layoutScale, minimumScale)) {
+    return { contentScale: minimumScale, layoutScale, fits: false };
+  }
+  let lowerBound = minimumScale;
+  let upperBound = layoutScale;
+  for (let iteration = 0; iteration < 20; iteration += 1) {
+    const candidateScale = (lowerBound + upperBound) / 2;
+    if (sectionTitleFitsAtScale(element, title, layoutScale, candidateScale)) {
+      lowerBound = candidateScale;
+    } else {
+      upperBound = candidateScale;
+    }
+  }
+  return { contentScale: lowerBound, layoutScale, fits: true };
+}
+
 function offsetPlacements(placements: SectionPlacement[], offsetX: number, offsetY: number): SectionPlacement[] {
   return placements.map((placement) => ({
     ...placement,
@@ -287,71 +448,67 @@ function offsetPlacements(placements: SectionPlacement[], offsetX: number, offse
   }));
 }
 
-function layoutHierarchyNode(
+function layoutAdaptiveHierarchyNode(
   node: SectionHierarchyNode,
   maximumWidth: number,
   blockWidth: number,
   blockHeight: number,
-  mode: BlockLayoutMode,
+  metrics: ScaledLayoutMetrics,
 ): LocalHierarchyLayout | null {
-  const minimumContainerWidth = blockWidth + SECTION_PADDING * 2;
+  const minimumContainerWidth = blockWidth + metrics.sectionPadding * 2;
   if (maximumWidth < minimumContainerWidth) return null;
-  const contentWidth = maximumWidth - SECTION_PADDING * 2;
-  const maximumChildColumns = Math.max(1, Math.floor((contentWidth + SECTION_GAP) / (minimumContainerWidth + SECTION_GAP)));
-  const desiredChildColumns = mode === "horizontal"
-    ? 1
-    : mode === "vertical"
-      ? maximumChildColumns
-      : Math.min(3, maximumChildColumns);
+  const contentWidth = maximumWidth - metrics.sectionPadding * 2;
+  const maximumChildColumns = Math.max(1, Math.floor((contentWidth + metrics.sectionGap) / (minimumContainerWidth + metrics.sectionGap)));
+  const desiredChildColumns = Math.min(3, maximumChildColumns);
   const childWidth = node.children.length
-    ? (contentWidth - SECTION_GAP * (Math.min(desiredChildColumns, node.children.length) - 1)) / Math.min(desiredChildColumns, node.children.length)
+    ? (contentWidth - metrics.sectionGap * (Math.min(desiredChildColumns, node.children.length) - 1)) / Math.min(desiredChildColumns, node.children.length)
     : contentWidth;
   const childLayouts: LocalHierarchyLayout[] = [];
   for (const child of node.children) {
-    const childLayout = layoutHierarchyNode(child, childWidth, blockWidth, blockHeight, mode);
+    const childLayout = layoutAdaptiveHierarchyNode(child, childWidth, blockWidth, blockHeight, metrics);
     if (!childLayout) return null;
     childLayouts.push(childLayout);
   }
 
-  let cursorY = SECTION_HEADER_HEIGHT + SECTION_PADDING;
+  let cursorY = metrics.sectionHeaderHeight + metrics.sectionPadding;
   let usedContentWidth = 0;
   const blockPlacements: SectionPlacement["blocks"] = [];
   if (node.items.length) {
-    const blockColumns = Math.max(1, Math.floor((contentWidth + BLOCK_GAP) / (blockWidth + BLOCK_GAP)));
+    const blockColumns = Math.max(1, Math.floor((contentWidth + metrics.blockGap) / (blockWidth + metrics.blockGap)));
     const blockRows = Math.ceil(node.items.length / blockColumns);
     node.items.forEach((item, index) => {
       blockPlacements.push({
         itemId: item.id,
-        x: SECTION_PADDING + (index % blockColumns) * (blockWidth + BLOCK_GAP),
-        y: cursorY + Math.floor(index / blockColumns) * (blockHeight + BLOCK_GAP),
+        x: metrics.sectionPadding + (index % blockColumns) * (blockWidth + metrics.blockGap),
+        y: cursorY + Math.floor(index / blockColumns) * (blockHeight + metrics.blockGap),
       });
     });
     usedContentWidth = Math.max(
       usedContentWidth,
-      Math.min(blockColumns, node.items.length) * blockWidth + Math.max(0, Math.min(blockColumns, node.items.length) - 1) * BLOCK_GAP,
+      Math.min(blockColumns, node.items.length) * blockWidth + Math.max(0, Math.min(blockColumns, node.items.length) - 1) * metrics.blockGap,
     );
-    cursorY += blockRows * blockHeight + Math.max(0, blockRows - 1) * BLOCK_GAP;
-    if (childLayouts.length) cursorY += SECTION_GAP;
+    cursorY += blockRows * blockHeight + Math.max(0, blockRows - 1) * metrics.blockGap;
+    if (childLayouts.length) cursorY += metrics.sectionGap;
   }
 
   const nestedPlacements: SectionPlacement[] = [];
-  let childRowX = SECTION_PADDING;
+  let childRowX = metrics.sectionPadding;
   let childRowHeight = 0;
   childLayouts.forEach((childLayout) => {
-    if (childRowX > SECTION_PADDING && childRowX + childLayout.width > SECTION_PADDING + contentWidth) {
-      cursorY += childRowHeight + SECTION_GAP;
-      childRowX = SECTION_PADDING;
+    if (childRowX > metrics.sectionPadding && childRowX + childLayout.width > metrics.sectionPadding + contentWidth) {
+      cursorY += childRowHeight + metrics.sectionGap;
+      childRowX = metrics.sectionPadding;
       childRowHeight = 0;
     }
     nestedPlacements.push(...offsetPlacements(childLayout.placements, childRowX, cursorY));
-    usedContentWidth = Math.max(usedContentWidth, childRowX - SECTION_PADDING + childLayout.width);
-    childRowX += childLayout.width + SECTION_GAP;
+    usedContentWidth = Math.max(usedContentWidth, childRowX - metrics.sectionPadding + childLayout.width);
+    childRowX += childLayout.width + metrics.sectionGap;
     childRowHeight = Math.max(childRowHeight, childLayout.height);
   });
   if (childLayouts.length) cursorY += childRowHeight;
 
-  const width = Math.max(minimumContainerWidth, usedContentWidth + SECTION_PADDING * 2);
-  const height = cursorY + SECTION_PADDING;
+  const width = Math.max(minimumContainerWidth, usedContentWidth + metrics.sectionPadding * 2);
+  const height = cursorY + metrics.sectionPadding;
   const placement: SectionPlacement = {
     sectionId: node.section.id,
     depth: node.depth,
@@ -364,23 +521,127 @@ function layoutHierarchyNode(
   return { width, height, placements: [placement, ...nestedPlacements] };
 }
 
-function createCandidate(
-  mode: BlockLayoutMode,
+function layoutDirectionalHierarchyNode(
+  node: SectionHierarchyNode,
+  blockWidth: number,
+  blockHeight: number,
+  mode: Exclude<BlockLayoutMode, "best_fit">,
+  metrics: ScaledLayoutMetrics,
+): LocalHierarchyLayout {
+  const childLayouts = node.children.map((child) => (
+    layoutDirectionalHierarchyNode(child, blockWidth, blockHeight, mode, metrics)
+  ));
+  let cursorY = metrics.sectionHeaderHeight + metrics.sectionPadding;
+  let usedContentWidth = 0;
+  const blockPlacements: SectionPlacement["blocks"] = [];
+
+  if (node.items.length) {
+    const blockColumns = mode === "vertical" ? 1 : node.items.length;
+    const blockRows = mode === "vertical" ? node.items.length : 1;
+    node.items.forEach((item, index) => {
+      blockPlacements.push({
+        itemId: item.id,
+        x: metrics.sectionPadding + (index % blockColumns) * (blockWidth + metrics.blockGap),
+        y: cursorY + Math.floor(index / blockColumns) * (blockHeight + metrics.blockGap),
+      });
+    });
+    usedContentWidth = blockColumns * blockWidth + Math.max(0, blockColumns - 1) * metrics.blockGap;
+    cursorY += blockRows * blockHeight + Math.max(0, blockRows - 1) * metrics.blockGap;
+    if (childLayouts.length) cursorY += metrics.sectionGap;
+  }
+
+  const nestedPlacements: SectionPlacement[] = [];
+  if (childLayouts.length && mode === "vertical") {
+    let childX = metrics.sectionPadding;
+    let childRowHeight = 0;
+    childLayouts.forEach((childLayout, index) => {
+      nestedPlacements.push(...offsetPlacements(childLayout.placements, childX, cursorY));
+      childX += childLayout.width;
+      if (index < childLayouts.length - 1) childX += metrics.sectionGap;
+      childRowHeight = Math.max(childRowHeight, childLayout.height);
+    });
+    usedContentWidth = Math.max(usedContentWidth, childX - metrics.sectionPadding);
+    cursorY += childRowHeight;
+  } else if (childLayouts.length) {
+    let childY = cursorY;
+    let maximumChildWidth = 0;
+    childLayouts.forEach((childLayout, index) => {
+      nestedPlacements.push(...offsetPlacements(childLayout.placements, metrics.sectionPadding, childY));
+      childY += childLayout.height;
+      if (index < childLayouts.length - 1) childY += metrics.sectionGap;
+      maximumChildWidth = Math.max(maximumChildWidth, childLayout.width);
+    });
+    usedContentWidth = Math.max(usedContentWidth, maximumChildWidth);
+    cursorY = childY;
+  }
+
+  const width = Math.max(blockWidth, usedContentWidth) + metrics.sectionPadding * 2;
+  const height = cursorY + metrics.sectionPadding;
+  const placement: SectionPlacement = {
+    sectionId: node.section.id,
+    depth: node.depth,
+    x: 0,
+    y: 0,
+    width,
+    height,
+    blocks: blockPlacements,
+  };
+  return { width, height, placements: [placement, ...nestedPlacements] };
+}
+
+function createDirectionalCandidate(
+  mode: Exclude<BlockLayoutMode, "best_fit">,
   roots: SectionHierarchyNode[],
   area: PlanBlockAreaElement,
   blockWidth: number,
 ): LayoutCandidate | null {
   const blockHeight = blockHeightForWidth(blockWidth);
-  const minimumRootWidth = blockWidth + SECTION_PADDING * 2;
-  const maximumRootColumns = Math.max(1, Math.floor((area.width + SECTION_GAP) / (minimumRootWidth + SECTION_GAP)));
-  let bestCandidate: LayoutCandidate | null = null;
+  const metrics = scaledLayoutMetrics(blockWidth);
+  const rootLayouts = roots.map((root) => layoutDirectionalHierarchyNode(root, blockWidth, blockHeight, mode, metrics));
+  let cursorX = area.x;
+  let cursorY = area.y;
+  let usedWidth = 0;
+  let usedHeight = 0;
+  const placements: SectionPlacement[] = [];
 
-  for (let rootColumns = 1; rootColumns <= Math.min(roots.length, maximumRootColumns); rootColumns += 1) {
-    const rootMaximumWidth = (area.width - SECTION_GAP * (rootColumns - 1)) / rootColumns;
+  rootLayouts.forEach((rootLayout, index) => {
+    placements.push(...offsetPlacements(rootLayout.placements, cursorX, cursorY));
+    if (mode === "vertical") {
+      cursorX += rootLayout.width;
+      if (index < rootLayouts.length - 1) cursorX += metrics.sectionGap;
+      usedWidth = cursorX - area.x;
+      usedHeight = Math.max(usedHeight, rootLayout.height);
+    } else {
+      cursorY += rootLayout.height;
+      if (index < rootLayouts.length - 1) cursorY += metrics.sectionGap;
+      usedWidth = Math.max(usedWidth, rootLayout.width);
+      usedHeight = cursorY - area.y;
+    }
+  });
+
+  if (usedWidth > area.width || usedHeight > area.height) return null;
+  return { blockWidth, blockHeight, placements, footprint: usedWidth * usedHeight, contentScale: metrics.contentScale };
+}
+
+function createAdaptiveCandidate(
+  roots: SectionHierarchyNode[],
+  area: PlanBlockAreaElement,
+  blockWidth: number,
+): LayoutCandidate | null {
+  const blockHeight = blockHeightForWidth(blockWidth);
+  const metrics = scaledLayoutMetrics(blockWidth);
+  const minimumRootWidth = blockWidth + metrics.sectionPadding * 2;
+  const maximumRootColumns = Math.max(1, Math.floor((area.width + metrics.sectionGap) / (minimumRootWidth + metrics.sectionGap)));
+  let bestCandidate: LayoutCandidate | null = null;
+  const maximumUsableRootColumns = Math.min(roots.length, maximumRootColumns);
+  const rootColumnOptions = Array.from({ length: maximumUsableRootColumns }, (_, index) => index + 1);
+
+  for (const rootColumns of rootColumnOptions) {
+    const rootMaximumWidth = (area.width - metrics.sectionGap * (rootColumns - 1)) / rootColumns;
     const rootLayouts: LocalHierarchyLayout[] = [];
     let valid = true;
     for (const root of roots) {
-      const rootLayout = layoutHierarchyNode(root, rootMaximumWidth, blockWidth, blockHeight, mode);
+      const rootLayout = layoutAdaptiveHierarchyNode(root, rootMaximumWidth, blockWidth, blockHeight, metrics);
       if (!rootLayout) { valid = false; break; }
       rootLayouts.push(rootLayout);
     }
@@ -394,20 +655,31 @@ function createCandidate(
     rootLayouts.forEach((rootLayout, index) => {
       if (index > 0 && index % rootColumns === 0) {
         cursorX = area.x;
-        cursorY += rowHeight + SECTION_GAP;
+        cursorY += rowHeight + metrics.sectionGap;
         rowHeight = 0;
       }
       placements.push(...offsetPlacements(rootLayout.placements, cursorX, cursorY));
       usedWidth = Math.max(usedWidth, cursorX - area.x + rootLayout.width);
-      cursorX += rootLayout.width + SECTION_GAP;
+      cursorX += rootLayout.width + metrics.sectionGap;
       rowHeight = Math.max(rowHeight, rootLayout.height);
     });
     const usedHeight = cursorY - area.y + rowHeight;
     if (usedHeight > area.height) continue;
-    const candidate = { blockWidth, blockHeight, placements, footprint: usedWidth * usedHeight };
+    const candidate = { blockWidth, blockHeight, placements, footprint: usedWidth * usedHeight, contentScale: metrics.contentScale };
     if (!bestCandidate || candidate.footprint < bestCandidate.footprint) bestCandidate = candidate;
   }
   return bestCandidate;
+}
+
+function createCandidate(
+  mode: BlockLayoutMode,
+  roots: SectionHierarchyNode[],
+  area: PlanBlockAreaElement,
+  blockWidth: number,
+): LayoutCandidate | null {
+  return mode === "best_fit"
+    ? createAdaptiveCandidate(roots, area, blockWidth)
+    : createDirectionalCandidate(mode, roots, area, blockWidth);
 }
 
 function flattenHierarchy(nodes: SectionHierarchyNode[]): SectionHierarchyNode[] {
@@ -430,6 +702,7 @@ function buildManagedElements(layout: PlanLayout, roots: SectionHierarchyNode[],
       y: placement.y,
       width: placement.width,
       height: placement.height,
+      contentScale: candidate.contentScale,
       zIndex: 100 + placement.depth * 20 + sectionIndex,
       semanticOrder: sectionIndex * 1_000,
     });
@@ -445,6 +718,7 @@ function buildManagedElements(layout: PlanLayout, roots: SectionHierarchyNode[],
         y: blockPlacement.y,
         width: candidate.blockWidth,
         height: candidate.blockHeight,
+        contentScale: candidate.contentScale,
         zIndex: 500 + sectionIndex * 100 + blockIndex,
         semanticOrder: sectionIndex * 1_000 + blockIndex + 1,
       });
@@ -472,9 +746,9 @@ export function fitBlocksInArea(
     };
   }
 
-  const maximumWidth = Math.min(MAXIMUM_BLOCK_WIDTH, area.width - SECTION_PADDING * 2);
+  const maximumWidth = Math.min(REFERENCE_BLOCK_WIDTH, area.width - BASE_SECTION_PADDING * 2);
   let candidate: LayoutCandidate | null = null;
-  for (let blockWidth = snapToGrid(maximumWidth); blockWidth >= MINIMUM_BLOCK_WIDTH; blockWidth -= BLOCK_SIZE_STEP) {
+  for (let blockWidth = snapToGrid(maximumWidth); blockWidth >= MINIMUM_FITTED_BLOCK_WIDTH; blockWidth -= BLOCK_SIZE_STEP) {
     candidate = createCandidate(mode, roots, updatedArea, blockWidth);
     if (candidate) break;
   }
@@ -523,10 +797,10 @@ export function createLayoutFromSections(
         sectionId: section.id,
         itemId: item.id,
         blockId: item.blockId,
-        x: blockArea.x + SECTION_PADDING,
-        y: blockArea.y + SECTION_HEADER_HEIGHT + SECTION_PADDING,
-        width: MINIMUM_BLOCK_WIDTH,
-        height: blockHeightForWidth(MINIMUM_BLOCK_WIDTH),
+        x: blockArea.x + BASE_SECTION_PADDING,
+        y: blockArea.y + BASE_SECTION_HEADER_HEIGHT + BASE_SECTION_PADDING,
+        width: MINIMUM_FITTED_BLOCK_WIDTH,
+        height: blockHeightForWidth(MINIMUM_FITTED_BLOCK_WIDTH),
         zIndex: 500 + sectionIndex * 100 + itemIndex,
         semanticOrder: sectionIndex * 1_000 + itemIndex + 1,
       });
@@ -586,8 +860,8 @@ function overlaps(a: PlanElement, b: PlanElement): boolean {
 
 function firstFreePosition(layout: PlanLayout, width: number, height: number, startX: number, endX: number): Pick<PlanBlockElement, "x" | "y" | "width" | "height"> | null {
   const maximumY = layout.height - layout.safeMargin - height;
-  for (let y = layout.safeMargin; y <= maximumY; y += height + BLOCK_GAP) {
-    for (let x = startX; x <= endX; x += width + BLOCK_GAP) {
+  for (let y = layout.safeMargin; y <= maximumY; y += height + BASE_BLOCK_GAP) {
+    for (let x = startX; x <= endX; x += width + BASE_BLOCK_GAP) {
       const candidate = { id: "candidate", kind: "block", x, y, width, height, zIndex: 1 } as PlanElement;
       const collision = layout.elements.some((element) => element.kind !== "block_area" && element.kind !== "section" && overlaps(candidate, element));
       if (!collision) return { x, y, width, height };
@@ -599,7 +873,7 @@ function firstFreePosition(layout: PlanLayout, width: number, height: number, st
 export function findNextFreeNonBlockPosition(layout: PlanLayout, width: number, height: number): Pick<PlanBlockElement, "x" | "y" | "width" | "height"> {
   const area = getBlockArea(layout);
   const rightEdge = layout.width - layout.safeMargin - width;
-  const preferredStart = area ? snapToGrid(area.x + area.width + SECTION_GAP, layout.gridSize) : layout.safeMargin;
+  const preferredStart = area ? snapToGrid(area.x + area.width + BASE_SECTION_GAP, layout.gridSize) : layout.safeMargin;
   if (preferredStart <= rightEdge) {
     const preferred = firstFreePosition(layout, width, height, preferredStart, rightEdge);
     if (preferred) return preferred;
@@ -607,14 +881,14 @@ export function findNextFreeNonBlockPosition(layout: PlanLayout, width: number, 
   return firstFreePosition(layout, width, height, layout.safeMargin, rightEdge) ?? { x: layout.safeMargin, y: layout.safeMargin, width, height };
 }
 
-export function findNextFreeBlockPosition(layout: PlanLayout, width = MINIMUM_BLOCK_WIDTH, height = blockHeightForWidth(width)): Pick<PlanBlockElement, "x" | "y" | "width" | "height"> {
+export function findNextFreeBlockPosition(layout: PlanLayout, width = MINIMUM_FITTED_BLOCK_WIDTH, height = blockHeightForWidth(width)): Pick<PlanBlockElement, "x" | "y" | "width" | "height"> {
   const area = getBlockArea(layout);
-  const startX = (area?.x ?? layout.safeMargin) + SECTION_PADDING;
-  const startY = (area?.y ?? layout.safeMargin) + SECTION_HEADER_HEIGHT + SECTION_PADDING;
-  const maximumX = (area ? area.x + area.width : layout.width - layout.safeMargin) - SECTION_PADDING - width;
-  const maximumY = (area ? area.y + area.height : layout.height - layout.safeMargin) - SECTION_PADDING - height;
-  for (let y = startY; y <= maximumY; y += height + BLOCK_GAP) {
-    for (let x = startX; x <= maximumX; x += width + BLOCK_GAP) {
+  const startX = (area?.x ?? layout.safeMargin) + BASE_SECTION_PADDING;
+  const startY = (area?.y ?? layout.safeMargin) + BASE_SECTION_HEADER_HEIGHT + BASE_SECTION_PADDING;
+  const maximumX = (area ? area.x + area.width : layout.width - layout.safeMargin) - BASE_SECTION_PADDING - width;
+  const maximumY = (area ? area.y + area.height : layout.height - layout.safeMargin) - BASE_SECTION_PADDING - height;
+  for (let y = startY; y <= maximumY; y += height + BASE_BLOCK_GAP) {
+    for (let x = startX; x <= maximumX; x += width + BASE_BLOCK_GAP) {
       const candidate = { id: "candidate", kind: "block", x, y, width, height, zIndex: 1 } as PlanElement;
       const collision = layout.elements.some((element) => element.kind === "block" && overlaps(candidate, element));
       if (!collision) return { x, y, width, height };
@@ -628,7 +902,7 @@ export function createSectionElement(sectionId: string, layout: PlanLayout, pref
   const height = Math.min(NEW_SECTION_HEIGHT, area?.height ?? NEW_SECTION_HEIGHT);
   const minimumY = area?.y ?? layout.safeMargin;
   const maximumY = (area ? area.y + area.height : layout.height - layout.safeMargin) - height;
-  const y = Math.min(Math.max(snapToGrid(preferredY - SECTION_HEADER_HEIGHT - SECTION_PADDING, layout.gridSize), minimumY), maximumY);
+  const y = Math.min(Math.max(snapToGrid(preferredY - BASE_SECTION_HEADER_HEIGHT - BASE_SECTION_PADDING, layout.gridSize), minimumY), maximumY);
   return {
     id: `layout-section-${sectionId}`,
     kind: "section",

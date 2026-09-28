@@ -1,7 +1,7 @@
 import { DndContext, PointerSensor, pointerWithin, type DragEndEvent, type DragOverEvent, useDraggable, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
-import { ArchiveRestore, CircleHelp, Copy, Database, Download, FilePlus2, GripVertical, Languages, MoreVertical, Pencil, Plus, RotateCcw, Search, ShieldCheck, Trash2 } from "lucide-react";
-import { type ChangeEvent, type CSSProperties, type FormEvent, useEffect, useMemo, useState } from "react";
+import { ArchiveRestore, Check, CircleAlert, CircleHelp, Copy, Database, Download, FilePlus2, GripVertical, Languages, MoreVertical, Pencil, Plus, RotateCcw, Search, ShieldCheck, Trash2 } from "lucide-react";
+import { type ChangeEvent, type CSSProperties, type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Modal, PageHeader } from "../components/Ui";
 import { FieldTypeHelpModal } from "../components/FieldTypeHelpModal";
 import { getBlob, saveBlob } from "../data/blobRepository";
@@ -19,13 +19,15 @@ import {
 import type { DocumentTemplate, Locale, OverviewEntryType, OverviewTemplate, OverviewTemplateEntry } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
 import { newId, useApp } from "../state/AppProvider";
+import { copyTextToClipboard } from "../utils/clipboard";
 
 const overviewEntryTypes: OverviewEntryType[] = ["text", "date", "group", "repeating_group"];
+const COPY_FEEDBACK_DURATION_MS = 1800;
 const placeholderReference = [
-  "{{#qs.plan.categories}}", "{{qs.category.title}}", "{{qs.category.color}}",
-  "{{#qs.category.sections}}", "{{qs.section.heading}}", "{{#qs.section.blocks}}",
+  "{{#qs.plan.category_tree}}", "{{qs.category.title}}", "{{qs.category.path}}", "{{qs.category.depth}}", "{{qs.category.color}}",
+  "{{#qs.category.blocks}}",
   "{{qs.block.color}}", "{{qs.block.title}}", "{{qs.block.a4_description}}", "{{qs.block.regulations}}",
-  "{{qs.block.image}}", "{{/qs.section.blocks}}", "{{/qs.category.sections}}", "{{/qs.plan.categories}}",
+  "{{qs.block.image}}", "{{/qs.category.blocks}}", "{{/qs.plan.category_tree}}",
 ];
 
 export function SettingsPage() {
@@ -53,6 +55,8 @@ export function TemplatesPage() {
   const [documentOpen, setDocumentOpen] = useState(false);
   const [editingDocument, setEditingDocument] = useState<DocumentTemplate | null>(null);
   const [placeholderQuery, setPlaceholderQuery] = useState("");
+  const [copyFeedback, setCopyFeedback] = useState<{ token: string; status: "copied" | "failed" } | null>(null);
+  const copyFeedbackTimer = useRef<number | null>(null);
   const [overviewToDelete, setOverviewToDelete] = useState<OverviewTemplate | null>(null);
   const [documentToDelete, setDocumentToDelete] = useState<DocumentTemplate | null>(null);
   const openOverview = (template?: OverviewTemplate) => { setEditingOverview(template ?? null); setOverviewOpen(true); };
@@ -60,6 +64,17 @@ export function TemplatesPage() {
   const visibleDocumentTemplates = database.documentTemplates.filter(
     (template) => template.locale === locale && template.lifecycle !== "archived",
   );
+
+  useEffect(() => () => {
+    if (copyFeedbackTimer.current !== null) window.clearTimeout(copyFeedbackTimer.current);
+  }, []);
+
+  const copyPlaceholder = async (token: string) => {
+    const copied = await copyTextToClipboard(token);
+    setCopyFeedback({ token, status: copied ? "copied" : "failed" });
+    if (copyFeedbackTimer.current !== null) window.clearTimeout(copyFeedbackTimer.current);
+    copyFeedbackTimer.current = window.setTimeout(() => setCopyFeedback(null), COPY_FEEDBACK_DURATION_MS);
+  };
 
   const downloadDocumentTemplate = async (template: DocumentTemplate) => {
     const { createStandardTemplate, downloadBlob } = await import("../documents/templateEngine");
@@ -117,7 +132,10 @@ export function TemplatesPage() {
       </div>
     </section>
 
-    <section className="panel template-reference"><div><h2>{t("templates.placeholderTitle")}</h2><p>{t("templates.placeholderText")}</p><div className="search-shell"><Search size={15} /><input className="search-input" value={placeholderQuery} onChange={(event) => setPlaceholderQuery(event.target.value)} placeholder={t("templates.searchPlaceholders")} /></div></div><div className="placeholder-examples">{placeholderReference.filter((token) => token.toLowerCase().includes(placeholderQuery.toLowerCase())).map((token) => <button className="placeholder-copy" key={token} onClick={() => void navigator.clipboard.writeText(token)}><code>{token}</code><Copy size={13} /></button>)}</div><p className="field-help">{t("templates.placeholderLocations")}</p></section>
+    <section className="panel template-reference"><div><h2>{t("templates.placeholderTitle")}</h2><p>{t("templates.placeholderText")}</p><div className="search-shell"><Search size={15} /><input className="search-input" value={placeholderQuery} onChange={(event) => setPlaceholderQuery(event.target.value)} placeholder={t("templates.searchPlaceholders")} /></div></div><div className="placeholder-examples">{placeholderReference.filter((token) => token.toLowerCase().includes(placeholderQuery.toLowerCase())).map((token) => {
+      const status = copyFeedback?.token === token ? copyFeedback.status : null;
+      return <button type="button" className={`placeholder-copy ${status ? `is-${status}` : ""}`} key={token} aria-label={`${t("templates.copyPlaceholder")}: ${token}`} onClick={() => void copyPlaceholder(token)}><code>{token}</code><span className="placeholder-copy-action" aria-hidden="true">{status === "copied" ? <><Check size={13} />{t("templates.copied")}</> : status === "failed" ? <><CircleAlert size={13} />{t("templates.copyFailed")}</> : <Copy size={13} />}</span></button>;
+    })}</div><span className="visually-hidden" role="status">{copyFeedback ? `${t(copyFeedback.status === "copied" ? "templates.copied" : "templates.copyFailed")}: ${copyFeedback.token}` : ""}</span><p className="field-help">{t("templates.placeholderLocations")}</p></section>
 
     <OverviewTemplateModal key={`overview-${editingOverview?.id ?? "new"}-${overviewOpen}`} open={overviewOpen} template={editingOverview} templates={database.overviewTemplates} organizationId={database.organization.id} locale={locale} onClose={() => setOverviewOpen(false)} onSave={(template) => { saveOverviewTemplate(template, locale); setOverviewOpen(false); }} t={t} />
     <Modal open={Boolean(overviewToDelete)} title={t("templates.deleteTitle")} onClose={() => setOverviewToDelete(null)}><div className="modal-body"><p>{t("templates.deleteText", { name: overviewToDelete ? overviewTemplateName(overviewToDelete, locale) : "" })}</p></div><div className="modal-footer"><Button variant="secondary" onClick={() => setOverviewToDelete(null)}>{t("common.cancel")}</Button><Button variant="danger" onClick={() => { if (!overviewToDelete) return; deleteOverviewTemplate(overviewToDelete.id); setOverviewToDelete(null); }}>{t("common.delete")}</Button></div></Modal>
@@ -271,10 +289,11 @@ function TemplateBuilderEntry({ entry, depth, template, invalidEntryIds, dropInd
     : "";
   const entryErrorId = `template-entry-error-${entry.id}`;
   const rowStyle = { "--template-depth": depth, transform: CSS.Translate.toString(transform) } as CSSProperties;
-  const copyPlaceholder = () => {
-    void navigator.clipboard.writeText(overviewEntryClipboardValue(template, entry.id));
+  const copyPlaceholder = async () => {
+    const copied = await copyTextToClipboard(overviewEntryClipboardValue(template, entry.id));
+    if (!copied) return;
     onCopied(entry.id);
-    window.setTimeout(() => onCopied(null), 1600);
+    window.setTimeout(() => onCopied(null), COPY_FEEDBACK_DURATION_MS);
   };
   return <div className={`template-builder-node ${isDragging ? "is-dragging" : ""}`} ref={setDragRef} style={rowStyle}>
     <div ref={before.setNodeRef} className={`template-drop-zone drop-before ${dropIndicator?.entryId === entry.id && dropIndicator.position === "before" ? "is-active" : ""}`} />

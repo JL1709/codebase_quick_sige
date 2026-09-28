@@ -17,16 +17,17 @@ import { renderPdfPage } from "../documents/pdfPreview";
 import { hydrateBlockImages } from "../domain/blockImages";
 import { calculateAnchoredScroll, calculateFitZoom, clampCanvasZoom, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, stepCanvasZoom } from "../domain/canvasViewport";
 import { readableTextColor } from "../domain/colorContrast";
+import { PLAN_PRESENTATION } from "../domain/planPresentation";
 import { blockHierarchyColor, categoryDescendantIds, categoryHierarchyColor } from "../domain/categoryTree";
 import { annotationBoundsFromDrag, createAnnotationElement, isMeaningfulAnnotationDrag, type AnnotationBounds, type AnnotationInsertTool, type AnnotationPoint } from "../domain/planAnnotations";
 import {
   A0_LANDSCAPE_HEIGHT, A0_LANDSCAPE_WIDTH, clampElementToPage, createBlockAreaElement,
   createSectionElement, CSS_PIXELS_PER_LAYOUT_UNIT, findNextFreeBlockPosition, findNextFreeNonBlockPosition,
   fitBlocksInArea, getBlockArea, minimumElementSize, reconcilePlanSectionsWithCatalog,
-  resizeElementFromCssMeasurement, snapToGrid,
+  resizeElementFromCssMeasurement, snapToGrid, calculateBlockPresentationMetrics, calculateSectionPresentationMetrics,
   type ElementResizeMeasurement,
 } from "../domain/planLayout";
-import { createPlanValidationIssues, type PlanValidationIssue } from "../domain/planValidation";
+import { BLOCK_LAYOUT_VALIDATION_RULE_CODES, createPlanValidationIssues, type PlanValidationIssue } from "../domain/planValidation";
 import type { BlockLayoutMode, BuildingBlockCategory, DocumentTemplate, Plan, PlanAnnotationStyle, PlanBlockElement, PlanConnectorPoint, PlanElement, PlanItem, PlanSection, PlanSectionElement, PlanShapeElement, PlanTextElement, Project } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
 import { translate } from "../i18n/translations";
@@ -541,7 +542,24 @@ export function PlanEditorPage() {
     const fitted = fitBlocksInArea(plan.layout, reconciledSections, database.categories, database.blocks, blockArea.layoutMode);
     setBlockFitMessage(fitted.fits ? "" : t("editor.fitBlocksTooSmall"));
     if (!fitted.fits) return;
-    applyPlan({ ...plan, sections: reconciledSections, layout: fitted.layout });
+    const fittedPlan = { ...plan, sections: reconciledSections, layout: fitted.layout };
+    const managedElementIds = new Set(fitted.layout.elements
+      .filter((element) => element.kind === "block" || element.kind === "section")
+      .map((element) => element.id));
+    const remainingLayoutIssues = createPlanValidationIssues({
+      plan: fittedPlan,
+      project,
+      blocks: database.blocks,
+      documentConfigurations: database.documentConfigurations,
+      documentTemplates: database.documentTemplates,
+      locale,
+      t,
+    }).filter((issue) => issue.elementId && managedElementIds.has(issue.elementId) && BLOCK_LAYOUT_VALIDATION_RULE_CODES.has(issue.ruleCode));
+    if (remainingLayoutIssues.length) {
+      setBlockFitMessage(t("editor.fitBlocksTooSmall"));
+      return;
+    }
+    applyPlan(fittedPlan);
     const refittedSelection = selectedElementId
       ? fitted.layout.elements.find((element) => element.id === selectedElementId)
       : undefined;
@@ -767,7 +785,7 @@ export function PlanEditorPage() {
       <main ref={canvasShellRef} className="editor-canvas-shell">
         {blockFitMessage && <div className="block-fit-message" role="status"><TriangleAlert size={14} />{blockFitMessage}</div>}
         <div className="canvas-stage" style={{ width: A0_LANDSCAPE_WIDTH * CSS_PIXELS_PER_LAYOUT_UNIT * zoom, height: A0_LANDSCAPE_HEIGHT * CSS_PIXELS_PER_LAYOUT_UNIT * zoom }}>
-          <PlanCanvas ref={canvasRef} plan={plan} project={project} locale={locale} zoom={zoom} blockMap={blockMap} categoryMap={categoryMap} selectedIds={selectedElementIds} editing={editing} activeInsertTool={activeInsertTool} focusedIssueElementId={focusedIssueElementId} setElementRef={(id, element) => { if (element) elementRefs.current.set(id, element); else elementRefs.current.delete(id); }} onInsert={addAnnotation} onSelect={(element) => { setSelectedElementId(element.id); setSelectedElementIds([element.id]); if (element.kind === "block") setSelected({ sectionId: element.sectionId, itemId: element.itemId, elementId: element.id }); else setSelected(null); }} onClearSelection={() => { setEditing(null); setSelected(null); setSelectedElementId(null); setSelectedElementIds([]); }} onEditStart={(elementId, field) => setEditing({ elementId, field })} onEditCommit={commitInlineEdit} onEditCancel={() => setEditing(null)} t={t} />
+          <PlanCanvas ref={canvasRef} plan={plan} project={project} locale={locale} zoom={zoom} blockMap={blockMap} categoryMap={categoryMap} selectedIds={selectedElementIds} editing={editing} activeInsertTool={activeInsertTool} focusedIssueElementId={focusedIssueElementId} setElementRef={(id, element) => { if (element) elementRefs.current.set(id, element); else elementRefs.current.delete(id); }} onInsert={addAnnotation} onSelect={(element) => { setSelectedElementId(element.id); setSelectedElementIds([element.id]); if (element.kind === "block") setSelected({ sectionId: element.sectionId, itemId: element.itemId, elementId: element.id }); else setSelected(null); }} onClearSelection={() => { setEditing(null); setSelected(null); setSelectedElementId(null); setSelectedElementIds([]); }} onEditCommit={commitInlineEdit} onEditCancel={() => setEditing(null)} t={t} />
         </div>
         <Selecto
           dragContainer=".editor-canvas-shell"
@@ -788,8 +806,15 @@ export function PlanEditorPage() {
             const selectedIds = event.selected.map((element) => (element as HTMLElement).dataset.elementId).filter((id): id is string => Boolean(id));
             const currentInlineClick = typeof clickedElementId === "string" && typeof inlineField === "string" ? { elementId: clickedElementId, field: inlineField } : null;
             const previousInlineClick = lastInlineClick.current;
-            const matchingDoubleClick = event.isDouble && (inputEvent?.detail ?? 0) >= 2 && previousInlineClick && (!currentInlineClick || (currentInlineClick.elementId === previousInlineClick.elementId && currentInlineClick.field === previousInlineClick.field));
-            if (currentInlineClick) lastInlineClick.current = currentInlineClick;
+            const matchingDoubleClick = event.isClick
+              && event.isDouble
+              && !event.isDragStart
+              && !event.isDragStartEnd
+              && (inputEvent?.detail ?? 0) >= 2
+              && previousInlineClick
+              && currentInlineClick?.elementId === previousInlineClick.elementId
+              && currentInlineClick.field === previousInlineClick.field;
+            lastInlineClick.current = currentInlineClick;
             const inlineSelection = matchingDoubleClick ? previousInlineClick : null;
             const ids = inlineSelection ? [inlineSelection.elementId] : selectedIds;
             setSelectedElementIds(ids); setSelectedElementId(ids.at(-1) ?? null);
@@ -958,7 +983,7 @@ function DraggableLibraryItem({ id, title, subtitle, icon, compact = false, inde
   </article>;
 }
 
-const PlanCanvas = function PlanCanvas({ ref, plan, project, locale, zoom, blockMap, categoryMap, selectedIds, editing, activeInsertTool, focusedIssueElementId, setElementRef, onInsert, onSelect, onClearSelection, onEditStart, onEditCommit, onEditCancel, t }: {
+const PlanCanvas = function PlanCanvas({ ref, plan, project, locale, zoom, blockMap, categoryMap, selectedIds, editing, activeInsertTool, focusedIssueElementId, setElementRef, onInsert, onSelect, onClearSelection, onEditCommit, onEditCancel, t }: {
   ref: React.Ref<HTMLDivElement>;
   plan: Plan;
   project: NonNullable<ReturnType<typeof useApp>["database"]["projects"][number]>;
@@ -974,7 +999,6 @@ const PlanCanvas = function PlanCanvas({ ref, plan, project, locale, zoom, block
   onInsert: (tool: AnnotationInsertTool, bounds: AnnotationBounds) => void;
   onSelect: (element: PlanElement) => void;
   onClearSelection: () => void;
-  onEditStart: (elementId: string, field: InlineField) => void;
   onEditCommit: (elementId: string, field: InlineField, value: string) => void;
   onEditCancel: () => void;
   t: (key: string) => string;
@@ -1017,10 +1041,29 @@ const PlanCanvas = function PlanCanvas({ ref, plan, project, locale, zoom, block
   const previewBounds = activeInsertTool && annotationDraft && !connectorGestureIsPending
     ? annotationBoundsFromDrag(activeInsertTool, annotationDraft.start, annotationDraft.current, plan.layout.gridSize)
     : null;
+  const planPageStyle = {
+    transform: `scale(${zoom})`,
+    "--plan-section-header-height": `${PLAN_PRESENTATION.section.headerHeight}px`,
+    "--plan-section-horizontal-padding": `${PLAN_PRESENTATION.section.horizontalPadding}px`,
+    "--plan-section-vertical-padding": `${PLAN_PRESENTATION.section.verticalPadding}px`,
+    "--plan-section-title-font-size": `${PLAN_PRESENTATION.section.titleFontSize}px`,
+    "--plan-block-title-font-size": `${PLAN_PRESENTATION.block.titleFontSize}px`,
+    "--plan-block-title-horizontal-padding": `${PLAN_PRESENTATION.block.titleHorizontalPadding}px`,
+    "--plan-block-title-vertical-padding": `${PLAN_PRESENTATION.block.titleVerticalPadding}px`,
+    "--plan-block-description-font-size": `${PLAN_PRESENTATION.block.descriptionFontSize}px`,
+    "--plan-block-body-padding": `${PLAN_PRESENTATION.block.bodyPadding}px`,
+    "--plan-block-body-column-gap": `${PLAN_PRESENTATION.block.bodyColumnGap}px`,
+    "--plan-block-reference-font-size": `${PLAN_PRESENTATION.block.referenceFontSize}px`,
+    "--plan-block-reference-horizontal-margin": `${PLAN_PRESENTATION.block.referenceHorizontalMargin}px`,
+    "--plan-block-reference-top-padding": `${PLAN_PRESENTATION.block.referenceTopPadding}px`,
+    "--plan-block-reference-bottom-padding": `${PLAN_PRESENTATION.block.referenceBottomPadding}px`,
+    "--plan-title-block-title-font-size": `${PLAN_PRESENTATION.titleBlock.titleFontSize}px`,
+    "--plan-title-block-body-font-size": `${PLAN_PRESENTATION.titleBlock.bodyFontSize}px`,
+  } as React.CSSProperties;
   return <div
     ref={combinedRef}
     className={`wysiwyg-page ${activeInsertTool ? "is-inserting" : ""}`}
-    style={{ transform: `scale(${zoom})` }}
+    style={planPageStyle}
     onPointerDownCapture={(event) => {
       if (!activeInsertTool || event.button !== 0) return;
       event.preventDefault();
@@ -1057,7 +1100,6 @@ const PlanCanvas = function PlanCanvas({ ref, plan, project, locale, zoom, block
       focused={focusedIssueElementId === element.id}
       setRef={(node) => setElementRef(element.id, node)}
       onSelect={() => onSelect(element)}
-      onEditStart={(field) => { onSelect(element); onEditStart(element.id, field); }}
       onEditCommit={(field, value) => onEditCommit(element.id, field, value)}
       onEditCancel={onEditCancel}
       t={t}
@@ -1100,7 +1142,7 @@ function annotationVisualStyle(element: PlanTextElement | PlanShapeElement): Rea
   };
 }
 
-function PlanElementView({ element, plan, project, locale, blockMap, categoryMap, selected, editing, focused, setRef, onSelect, onEditStart, onEditCommit, onEditCancel, t }: {
+function PlanElementView({ element, plan, project, locale, blockMap, categoryMap, selected, editing, focused, setRef, onSelect, onEditCommit, onEditCancel, t }: {
   element: PlanElement;
   plan: Plan;
   project: ReturnType<typeof useApp>["database"]["projects"][number];
@@ -1112,7 +1154,6 @@ function PlanElementView({ element, plan, project, locale, blockMap, categoryMap
   focused: boolean;
   setRef: (node: HTMLElement | null) => void;
   onSelect: () => void;
-  onEditStart: (field: InlineField) => void;
   onEditCommit: (field: InlineField, value: string) => void;
   onEditCancel: () => void;
   t: (key: string) => string;
@@ -1135,18 +1176,18 @@ function PlanElementView({ element, plan, project, locale, blockMap, categoryMap
     const status = plan.status === "published" ? translate(locale, "status.published") : translate(locale, "editor.workingDraft");
     return <header {...interactiveProps} className={`${interactiveProps.className} plan-header canvas-plan-header`}>
       <div>
-        <InlineText field="brandText" className="plan-header-brand" value={element.brandText?.[locale] ?? "QUICKSiGe"} editing={isEditing("brandText")} onStart={() => onEditStart("brandText")} onCommit={(value) => onEditCommit("brandText", value)} onCancel={onEditCancel} label={t("editor.headerBrand")} />
-        <InlineText field="titleText" className="plan-header-title" value={element.titleText?.[locale] ?? t("editor.planTitle")} editing={isEditing("titleText")} onStart={() => onEditStart("titleText")} onCommit={(value) => onEditCommit("titleText", value)} onCancel={onEditCancel} label={t("editor.headerTitle")} />
+        <InlineText field="brandText" className="plan-header-brand" value={element.brandText?.[locale] ?? "QUICKSiGe"} editing={isEditing("brandText")} onCommit={(value) => onEditCommit("brandText", value)} onCancel={onEditCancel} label={t("editor.headerBrand")} />
+        <InlineText field="titleText" className="plan-header-title" value={element.titleText?.[locale] ?? t("editor.planTitle")} editing={isEditing("titleText")} onCommit={(value) => onEditCommit("titleText", value)} onCancel={onEditCancel} label={t("editor.headerTitle")} />
       </div>
       <div className="plan-header-meta">
-        <InlineText field="projectNameText" className="plan-header-project" value={element.projectNameText?.[locale] ?? project.name} editing={isEditing("projectNameText")} onStart={() => onEditStart("projectNameText")} onCommit={(value) => onEditCommit("projectNameText", value)} onCancel={onEditCancel} label={t("editor.headerProject")} />
-        <InlineText field="projectDetailsText" value={element.projectDetailsText?.[locale] ?? `${project.projectNumber} · ${project.address}, ${project.city}`} editing={isEditing("projectDetailsText")} onStart={() => onEditStart("projectDetailsText")} onCommit={(value) => onEditCommit("projectDetailsText", value)} onCancel={onEditCancel} label={t("editor.headerDetails")} />
-        <InlineText field="statusText" value={element.statusText?.[locale] ?? status} editing={isEditing("statusText")} onStart={() => onEditStart("statusText")} onCommit={(value) => onEditCommit("statusText", value)} onCancel={onEditCancel} label={t("editor.headerStatus")} />
+        <InlineText field="projectNameText" className="plan-header-project" value={element.projectNameText?.[locale] ?? project.name} editing={isEditing("projectNameText")} onCommit={(value) => onEditCommit("projectNameText", value)} onCancel={onEditCancel} label={t("editor.headerProject")} />
+        <InlineText field="projectDetailsText" value={element.projectDetailsText?.[locale] ?? `${project.projectNumber} · ${project.address}, ${project.city}`} editing={isEditing("projectDetailsText")} onCommit={(value) => onEditCommit("projectDetailsText", value)} onCancel={onEditCancel} label={t("editor.headerDetails")} />
+        <InlineText field="statusText" value={element.statusText?.[locale] ?? status} editing={isEditing("statusText")} onCommit={(value) => onEditCommit("statusText", value)} onCancel={onEditCancel} label={t("editor.headerStatus")} />
       </div>
     </header>;
   }
-  if (element.kind === "section") { const section = plan.sections.find((candidate) => candidate.id === element.sectionId); const category = section && categoryMap.get(section.categoryId); if (!section || !category) return null; const categories = [...categoryMap.values()]; const sectionColor = categoryHierarchyColor(category.id, categories); const title = section.titleOverrides?.[locale] ?? category.translations[locale].name; return <section {...interactiveProps} data-category-id={category.id} className={`${interactiveProps.className} canvas-section`}><div style={{ backgroundColor: sectionColor, color: readableTextColor(sectionColor) }}><InlineText field="sectionTitle" value={title} editing={isEditing("sectionTitle")} onStart={() => onEditStart("sectionTitle")} onCommit={(value) => onEditCommit("sectionTitle", value)} onCancel={onEditCancel} label={t("editor.sectionTitle")} /></div></section>; }
-  if (element.kind === "block") { const section = plan.sections.find((candidate) => candidate.id === element.sectionId); const item = section?.items.find((candidate) => candidate.id === element.itemId); const block = item && blockMap.get(item.blockId); if (!item || !block) return null; const content = block.translations[locale]; const imageDataUrl = item.imageDataUrl ?? block.imageDataUrl; const title = item.customTitle?.[locale] ?? content.title; const description = item.customShortDescription?.[locale] ?? content.shortDescription; const blockColor = blockHierarchyColor(block, [...categoryMap.values()]); return <div {...interactiveProps} data-block-id={block.id} role="button" aria-pressed={selected} className={`${interactiveProps.className} canvas-block`}><span className="canvas-block-title" style={{ backgroundColor: blockColor, color: readableTextColor(blockColor) }}><InlineText field="blockTitle" value={title} editing={isEditing("blockTitle")} onStart={() => onEditStart("blockTitle")} onCommit={(value) => onEditCommit("blockTitle", value)} onCancel={onEditCancel} label={t("editor.visibleTitle")} /></span><span className="canvas-block-content">{imageDataUrl ? <img className="canvas-block-image" src={imageDataUrl} alt="" /> : <BlockVisual visualKey={block.visualKey} color={blockColor} size="small" />}<InlineText field="blockDescription" value={description} editing={isEditing("blockDescription")} multiline onStart={() => onEditStart("blockDescription")} onCommit={(value) => onEditCommit("blockDescription", value)} onCancel={onEditCancel} label={t("editor.visibleDescription")} /></span><span className="canvas-block-references">{block.regulations.join(" · ")}</span></div>; }
+  if (element.kind === "section") { const section = plan.sections.find((candidate) => candidate.id === element.sectionId); const category = section && categoryMap.get(section.categoryId); if (!section || !category) return null; const categories = [...categoryMap.values()]; const sectionColor = categoryHierarchyColor(category.id, categories); const title = section.titleOverrides?.[locale] ?? category.translations[locale].name; const presentation = calculateSectionPresentationMetrics(element, title); const sectionStyle = { ...interactiveProps.style, "--layout-scale": presentation.layoutScale, "--content-scale": presentation.contentScale } as React.CSSProperties; return <section {...interactiveProps} style={sectionStyle} data-category-id={category.id} data-content-fits={String(presentation.fits)} className={`${interactiveProps.className} canvas-section`}><div style={{ backgroundColor: sectionColor, color: readableTextColor(sectionColor) }}><InlineText field="sectionTitle" value={title} editing={isEditing("sectionTitle")} onCommit={(value) => onEditCommit("sectionTitle", value)} onCancel={onEditCancel} label={t("editor.sectionTitle")} /></div></section>; }
+  if (element.kind === "block") { const section = plan.sections.find((candidate) => candidate.id === element.sectionId); const item = section?.items.find((candidate) => candidate.id === element.itemId); const block = item && blockMap.get(item.blockId); if (!item || !block) return null; const content = block.translations[locale]; const imageDataUrl = item.imageDataUrl ?? block.imageDataUrl; const title = item.customTitle?.[locale] ?? content.title; const description = item.customShortDescription?.[locale] ?? content.shortDescription; const blockColor = blockHierarchyColor(block, [...categoryMap.values()]); const presentation = calculateBlockPresentationMetrics(element, title, description, block.regulations.join(" · ")); const blockStyle = { ...interactiveProps.style, "--layout-scale": presentation.layoutScale, "--content-scale": presentation.contentScale } as React.CSSProperties; return <div {...interactiveProps} style={blockStyle} data-block-id={block.id} data-content-fits={String(presentation.fits)} role="button" aria-pressed={selected} className={`${interactiveProps.className} canvas-block`}><span className="canvas-block-title" style={{ backgroundColor: blockColor, color: readableTextColor(blockColor) }}><InlineText field="blockTitle" value={title} editing={isEditing("blockTitle")} onCommit={(value) => onEditCommit("blockTitle", value)} onCancel={onEditCancel} label={t("editor.visibleTitle")} /></span><span className="canvas-block-content">{imageDataUrl ? <img className="canvas-block-image" src={imageDataUrl} alt="" /> : <BlockVisual visualKey={block.visualKey} color={blockColor} size="small" />}<InlineText field="blockDescription" value={description} editing={isEditing("blockDescription")} multiline onCommit={(value) => onEditCommit("blockDescription", value)} onCancel={onEditCancel} label={t("editor.visibleDescription")} /></span><span className="canvas-block-references">{block.regulations.join(" · ")}</span></div>; }
   if (element.kind === "image" || element.kind === "pdf_page") { const asset = project.assets.find((candidate) => candidate.id === element.assetId); if (!asset) return null; return <div {...interactiveProps} className={`${interactiveProps.className} canvas-asset`}><CanvasAssetImage asset={asset} pdfPage={element.kind === "pdf_page"} pageNumber={element.pageNumber} fitMode={element.fitMode} crop={element.crop} t={t} /></div>; }
   if (element.kind === "document") {
     const variant = element.displayVariant ?? "compact";
@@ -1158,19 +1199,19 @@ function PlanElementView({ element, plan, project, locale, blockMap, categoryMap
     }
     const visualStyle = annotationVisualStyle(element);
     return <div {...interactiveProps} className={`${interactiveProps.className} canvas-shape is-${element.shape}`} style={{ ...interactiveProps.style, ...visualStyle }}>
-      {element.shape === "callout" && <InlineText field="text" value={element.text?.[locale] ?? ""} editing={isEditing("text")} multiline onStart={() => onEditStart("text")} onCommit={(value) => onEditCommit("text", value)} onCancel={onEditCancel} label={t("editor.textContent")} />}
+      {element.shape === "callout" && <InlineText field="text" value={element.text?.[locale] ?? ""} editing={isEditing("text")} multiline onCommit={(value) => onEditCommit("text", value)} onCancel={onEditCancel} label={t("editor.textContent")} />}
     </div>;
   }
-  if (element.kind === "title_block") { const coordinator = project.participants.find((participant) => participant.role === "coordinator")?.name ?? "—"; return <div {...interactiveProps} className={`${interactiveProps.className} canvas-title-block`}><InlineText field="projectNameText" className="title-block-project" value={element.projectNameText?.[locale] ?? project.name} editing={isEditing("projectNameText")} onStart={() => onEditStart("projectNameText")} onCommit={(value) => onEditCommit("projectNameText", value)} onCancel={onEditCancel} label={t("editor.titleBlockProject")} /><InlineText field="coordinatorText" value={element.coordinatorText?.[locale] ?? coordinator} editing={isEditing("coordinatorText")} onStart={() => onEditStart("coordinatorText")} onCommit={(value) => onEditCommit("coordinatorText", value)} onCancel={onEditCancel} label={t("editor.titleBlockCoordinator")} /><InlineText field="referenceText" value={element.referenceText?.[locale] ?? `${project.projectNumber} · A0`} editing={isEditing("referenceText")} onStart={() => onEditStart("referenceText")} onCommit={(value) => onEditCommit("referenceText", value)} onCancel={onEditCancel} label={t("editor.titleBlockReference")} /></div>; }
-  if (element.kind === "text") return <div {...interactiveProps} className={`${interactiveProps.className} canvas-text`} style={{ ...interactiveProps.style, ...annotationVisualStyle(element) }}><InlineText field="text" value={element.text[locale] ?? ""} editing={isEditing("text")} multiline onStart={() => onEditStart("text")} onCommit={(value) => onEditCommit("text", value)} onCancel={onEditCancel} label={t("editor.textContent")} /></div>;
+  if (element.kind === "title_block") { const coordinator = project.participants.find((participant) => participant.role === "coordinator")?.name ?? "—"; return <div {...interactiveProps} className={`${interactiveProps.className} canvas-title-block`}><InlineText field="projectNameText" className="title-block-project" value={element.projectNameText?.[locale] ?? project.name} editing={isEditing("projectNameText")} onCommit={(value) => onEditCommit("projectNameText", value)} onCancel={onEditCancel} label={t("editor.titleBlockProject")} /><InlineText field="coordinatorText" value={element.coordinatorText?.[locale] ?? coordinator} editing={isEditing("coordinatorText")} onCommit={(value) => onEditCommit("coordinatorText", value)} onCancel={onEditCancel} label={t("editor.titleBlockCoordinator")} /><InlineText field="referenceText" value={element.referenceText?.[locale] ?? `${project.projectNumber} · A0`} editing={isEditing("referenceText")} onCommit={(value) => onEditCommit("referenceText", value)} onCancel={onEditCancel} label={t("editor.titleBlockReference")} /></div>; }
+  if (element.kind === "text") return <div {...interactiveProps} className={`${interactiveProps.className} canvas-text`} style={{ ...interactiveProps.style, ...annotationVisualStyle(element) }}><InlineText field="text" value={element.text[locale] ?? ""} editing={isEditing("text")} multiline onCommit={(value) => onEditCommit("text", value)} onCancel={onEditCancel} label={t("editor.textContent")} /></div>;
   return null;
 }
 
-function InlineText({ value, editing, field, multiline = false, className, onStart, onCommit, onCancel, label }: { value: string; editing: boolean; field: InlineField; multiline?: boolean; className?: string; onStart: () => void; onCommit: (value: string) => void; onCancel: () => void; label: string }) {
+function InlineText({ value, editing, field, multiline = false, className, onCommit, onCancel, label }: { value: string; editing: boolean; field: InlineField; multiline?: boolean; className?: string; onCommit: (value: string) => void; onCancel: () => void; label: string }) {
   const [draft, setDraft] = useState(value);
   const cancelled = useRef(false);
   useEffect(() => { setDraft(value); }, [value, editing]);
-  if (!editing) return <span className={className} data-inline-field={field} onDoubleClick={(event) => { event.stopPropagation(); onStart(); }}>{value}</span>;
+  if (!editing) return <span className={className} data-inline-field={field}>{value}</span>;
   const sharedProps = {
     autoFocus: true,
     className: `canvas-inline-editor ${className ?? ""}`,
@@ -1240,7 +1281,7 @@ function ValidationPopover({ issues, onNavigate, t }: { issues: PlanValidationIs
   const actionableIssues = issues.filter((issue) => issue.severity !== "information");
   return <div className="toolbar-popover validation-popover" role="dialog" aria-label={t("editor.validation")}>
     <div className="toolbar-popover-heading"><strong>{t("editor.validation")}</strong><span>{actionableIssues.length ? t("editor.validationIssues", { count: actionableIssues.length }) : t("editor.validationReady")}</span></div>
-    <div className="validation-list">{issues.map((issue) => <button type="button" className={`validation-item is-${issue.severity}`} key={issue.id} onClick={() => issue.elementId && onNavigate(issue)} disabled={!issue.elementId}>
+    <div className="validation-list">{issues.map((issue) => <button type="button" className={`validation-item is-${issue.severity}`} data-rule-code={issue.ruleCode} data-element-id={issue.elementId} key={issue.id} onClick={() => issue.elementId && onNavigate(issue)} disabled={!issue.elementId}>
       <span className="validation-icon">{issue.severity === "information" ? <CheckCircle2 size={15} /> : <TriangleAlert size={15} />}</span>
       <span><small>{t(`editor.validation.severity.${issue.severity}`)}</small><strong>{issue.title}</strong><span>{issue.description}</span>{issue.suggestedAction && <em>{issue.suggestedAction}</em>}</span>
     </button>)}</div>

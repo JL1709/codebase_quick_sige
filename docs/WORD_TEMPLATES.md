@@ -6,15 +6,15 @@ QuickSiGe accepts normal `.docx` files. Templates are edited in Microsoft Word o
 
 - Text: `{{qs.project.name}}`
 - Image: `{{qs.block.image}}`
-- Loop start: `{{#qs.plan.blocks}}`
-- Loop end: `{{/qs.plan.blocks}}`
+- Loop start: `{{#qs.plan.category_tree}}`
+- Loop end: `{{/qs.plan.category_tree}}`
 - Controlled page break: `{{PAGEBREAK}}`
 
-The opening and closing paths of a loop must match. Inside a loop, use the singular context shown by the standard template, such as `qs.category`, `qs.section`, or `qs.block`. Image placeholders must be the only visible content in their paragraph or table cell.
+The opening and closing paths of a loop must match. Inside a loop, use the singular context shown by the standard template, such as `qs.category` or `qs.block`. Image placeholders must be the only visible content in their paragraph or table cell.
 
 Only namespaced property paths and the commands documented here are accepted. JavaScript expressions, `EXEC`, `QUERY`, raw XML, HTML, macros, ActiveX, embedded executables, encrypted packages, and external package relationships are rejected.
 
-Text, loops, and page breaks work in the document body, headers, footers, paragraphs, and table cells. Loops may be nested to three levels, which supports a category loop containing a section loop containing a block loop.
+Text, loops, and page breaks work in the document body, headers, footers, paragraphs, and table cells. Loops may be nested to three levels. The A4 template uses a category-tree loop containing a block loop.
 
 ## Project data
 
@@ -42,23 +42,20 @@ Use `{{#qs.participants}}` with `{{qs.participant.role}}`, `{{qs.participant.rol
 The standard A4 template preserves the catalog hierarchy:
 
 ```text
-{{#qs.plan.categories}}
+{{#qs.plan.category_tree}}
 {{qs.category.color}}{{qs.category.title}}
-{{#qs.category.sections}}
-{{qs.section.heading}}
-{{#qs.section.blocks}}
+{{#qs.category.blocks}}
 {{qs.block.color}}{{qs.block.title}}
 {{qs.block.image}}
 {{qs.block.a4_description}}
 {{qs.block.regulations}}
-{{/qs.section.blocks}}
-{{/qs.category.sections}}
-{{/qs.plan.categories}}
+{{/qs.category.blocks}}
+{{/qs.plan.category_tree}}
 ```
 
 `qs.category.color` and `qs.block.color` are optional cell-formatting placeholders. When placed in a Word table cell, they apply the catalog color to that cell and disappear from the generated document.
 
-A category provides `title`, `color`, and `sections`. A section provides `title`, `heading`, `category_path`, and `blocks`. A block provides:
+`qs.plan.category_tree` is a depth-first view of the selected catalog hierarchy. QuickSiGe includes every ancestor of a selected block and flattens the recursive tree before Word rendering, so categories can be nested to any depth without requiring recursive template commands. Each category provides `title`, `path`, `depth`, `color`, and the blocks assigned directly to that category. A block provides:
 
 - `{{qs.block.category}}`
 - `{{qs.block.title}}`
@@ -70,7 +67,7 @@ A category provides `title`, `color`, and `sections`. A section provides `title`
 - `{{qs.block.image}}`
 - `{{qs.block.expert_note}}`
 
-For a flat export, use `{{#qs.plan.blocks}}` and the same `qs.block.*` placeholders, followed by `{{/qs.plan.blocks}}`.
+The category tree is the source of truth for A4 output. There is no separate Word-template section layer.
 
 ## Missing and empty data
 
