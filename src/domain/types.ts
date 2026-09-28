@@ -114,6 +114,18 @@ export interface AssessmentAnswers {
   season: Season; notes: string;
 }
 
+export interface ProjectAssessmentRun {
+  id: string;
+  projectId: string;
+  definitionVersion: number;
+  answers: AssessmentAnswers;
+  reason?: string;
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
 export interface LocalizedBuildingBlockContent {
   title: string;
   shortDescription: string;
@@ -167,6 +179,13 @@ export interface PlanSupportingDocument { id: string; type: SupportingDocumentTy
 export type BlockLayoutMode = "vertical" | "horizontal" | "best_fit";
 export type PlanAnnotationShape = "rectangle" | "line" | "arrow" | "callout";
 export type PlanTextAlignment = "left" | "center" | "right";
+export type PlanPaperRaster = "none" | "A1" | "A2" | "A3" | "A4" | "A5";
+export interface PlanMargins {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
 export interface PlanAnnotationStyle {
   fillColor?: string;
   strokeColor?: string;
@@ -234,18 +253,29 @@ export type PlanElement = PlanBlockAreaElement | PlanHeaderElement | PlanSection
 
 /** Coordinates are integer tenths of a millimetre to avoid floating-point drift. */
 export interface PlanLayout {
-  layoutVersion: 4;
+  layoutVersion: 5;
   format: "A0";
   orientation: "landscape";
   width: number;
   height: number;
-  safeMargin: number;
+  margins: PlanMargins;
+  paperRaster: PlanPaperRaster;
   gridSize: number;
   elements: PlanElement[];
 }
 
 export interface Plan {
   id: string; projectId: string; status: "draft" | "published";
+  provenance: {
+    method: "guided_assessment" | "blank" | "current_plan" | "revision";
+    createdByName: string;
+    reason?: string;
+    sourceAssessmentRunId?: string;
+    sourcePlanId?: string;
+    sourceRevisionId?: string;
+  };
+  supersededAt?: string;
+  supersededByPlanId?: string;
   sections: PlanSection[]; layout: PlanLayout; recommendations: Recommendation[]; requirementAssessment: RequirementAssessment;
   supportingDocuments: PlanSupportingDocument[]; includedAssetIds: string[]; createdAt: string; updatedAt: string;
 }
@@ -306,7 +336,7 @@ export interface AuditEvent { id: string; projectId?: string; action: string; ac
 
 export interface AppDatabase {
   schemaVersion: number; organization: Organization; user: AppUser; projects: Project[];
-  assessments: Record<string, AssessmentAnswers>; blocks: BuildingBlock[]; categories: BuildingBlockCategory[];
+  assessmentRuns: ProjectAssessmentRun[]; blocks: BuildingBlock[]; categories: BuildingBlockCategory[];
   plans: Plan[]; revisions: PlanRevision[]; overviewTemplates: OverviewTemplate[]; documentTemplates: DocumentTemplate[];
   documentConfigurations: ProjectDocumentConfiguration[]; generatedDocuments: GeneratedDocument[]; auditEvents: AuditEvent[];
 }

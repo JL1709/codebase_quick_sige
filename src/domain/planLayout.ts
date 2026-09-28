@@ -10,6 +10,7 @@ import type {
   PlanElement,
   PlanItem,
   PlanLayout,
+  PlanMargins,
   PlanSection,
   PlanSectionElement,
 } from "./types";
@@ -17,9 +18,9 @@ import type {
 export const PLAN_UNITS_PER_MILLIMETRE = 10;
 export const A0_LANDSCAPE_WIDTH = 11_890;
 export const A0_LANDSCAPE_HEIGHT = 8_410;
-export const PLAN_SAFE_MARGIN = 180;
 export const PLAN_GRID_SIZE = 20;
 export const CSS_PIXELS_PER_LAYOUT_UNIT = 0.1;
+export const DEFAULT_PLAN_MARGINS: PlanMargins = { top: 0, right: 0, bottom: 0, left: 0 };
 
 const TITLE_BLOCK_HEIGHT = 520;
 const BASE_SECTION_HEADER_HEIGHT = PLAN_PRESENTATION.section.headerHeight / CSS_PIXELS_PER_LAYOUT_UNIT;
@@ -103,21 +104,64 @@ export interface ElementResizeMeasurement {
   directionY: number;
 }
 
-function defaultBlockAreaGeometry(): Pick<PlanBlockAreaElement, "x" | "y" | "width" | "height"> {
-  const printableWidth = A0_LANDSCAPE_WIDTH - PLAN_SAFE_MARGIN * 2;
+export interface UsableCanvasBounds {
+  x: number;
+  y: number;
+  right: number;
+  bottom: number;
+  width: number;
+  height: number;
+}
+
+export function normalizePlanMargins(
+  margins: PlanMargins,
+  width = A0_LANDSCAPE_WIDTH,
+  height = A0_LANDSCAPE_HEIGHT,
+): PlanMargins {
+  const finiteMargin = (value: number) => Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
+  const left = Math.min(finiteMargin(margins.left), width - MINIMUM_BLOCK_AREA_WIDTH);
+  const right = Math.min(finiteMargin(margins.right), width - left - MINIMUM_BLOCK_AREA_WIDTH);
+  const top = Math.min(finiteMargin(margins.top), height - MINIMUM_BLOCK_AREA_HEIGHT);
+  const bottom = Math.min(finiteMargin(margins.bottom), height - top - MINIMUM_BLOCK_AREA_HEIGHT);
+  return { top, right, bottom, left };
+}
+
+export function getUsableCanvasBounds(layout: Pick<PlanLayout, "width" | "height" | "margins">): UsableCanvasBounds {
+  const margins = normalizePlanMargins(layout.margins, layout.width, layout.height);
+  const right = layout.width - margins.right;
+  const bottom = layout.height - margins.bottom;
   return {
-    x: PLAN_SAFE_MARGIN,
-    y: PLAN_SAFE_MARGIN,
-    width: snapToGrid(printableWidth * DEFAULT_BLOCK_AREA_WIDTH_RATIO),
-    height: A0_LANDSCAPE_HEIGHT - PLAN_SAFE_MARGIN * 2,
+    x: margins.left,
+    y: margins.top,
+    right,
+    bottom,
+    width: right - margins.left,
+    height: bottom - margins.top,
   };
 }
 
-export function createBlockAreaElement(layoutMode: BlockLayoutMode = "best_fit"): PlanBlockAreaElement {
+function defaultBlockAreaGeometry(
+  layout?: Pick<PlanLayout, "width" | "height" | "margins">,
+): Pick<PlanBlockAreaElement, "x" | "y" | "width" | "height"> {
+  const usableArea = layout
+    ? getUsableCanvasBounds(layout)
+    : getUsableCanvasBounds({ width: A0_LANDSCAPE_WIDTH, height: A0_LANDSCAPE_HEIGHT, margins: DEFAULT_PLAN_MARGINS });
+  return {
+    x: usableArea.x,
+    y: usableArea.y,
+    width: snapToGrid(usableArea.width * DEFAULT_BLOCK_AREA_WIDTH_RATIO),
+    height: usableArea.height,
+  };
+}
+
+export function createBlockAreaElement(
+  layoutMode: BlockLayoutMode = "best_fit",
+  layout?: Pick<PlanLayout, "width" | "height" | "margins">,
+): PlanBlockAreaElement {
   return {
     id: PLAN_BLOCK_AREA_ELEMENT_ID,
     kind: "block_area",
-    ...defaultBlockAreaGeometry(),
+    ...defaultBlockAreaGeometry(layout),
     layoutMode,
     zIndex: 0,
     semanticOrder: 0,
@@ -131,6 +175,10 @@ export function getBlockArea(layout: PlanLayout): PlanBlockAreaElement | undefin
 
 export function layoutUnitsToMillimetres(layoutUnits: number): number {
   return layoutUnits / PLAN_UNITS_PER_MILLIMETRE;
+}
+
+export function millimetresToLayoutUnits(millimetres: number): number {
+  return Math.round(millimetres * PLAN_UNITS_PER_MILLIMETRE);
 }
 
 export function layoutUnitsToCssPixels(layoutUnits: number, zoom = 1): number {
@@ -170,10 +218,11 @@ export function resizeElementFromCssMeasurement(
     ? element.y + cssPixelsToLayoutUnits(measurement.translateY)
     : element.y;
   const positioned = clampElementToPage({ ...element, x, y, width, height }, layout);
+  const usableArea = getUsableCanvasBounds(layout);
   return {
     ...positioned,
-    width: Math.min(positioned.width, layout.width - layout.safeMargin - positioned.x),
-    height: Math.min(positioned.height, layout.height - layout.safeMargin - positioned.y),
+    width: Math.min(positioned.width, usableArea.right - positioned.x),
+    height: Math.min(positioned.height, usableArea.bottom - positioned.y),
   };
 }
 
@@ -734,8 +783,9 @@ export function fitBlocksInArea(
   blocks: BuildingBlock[],
   requestedMode?: BlockLayoutMode,
 ): FitBlocksResult {
-  const area = getBlockArea(layout);
-  if (!area) return { layout, fits: false };
+  const storedArea = getBlockArea(layout);
+  if (!storedArea) return { layout, fits: false };
+  const area = clampElementToPage(storedArea, layout) as PlanBlockAreaElement;
   const mode = requestedMode ?? area.layoutMode;
   const roots = sectionHierarchy(sections, categories, blocks);
   const updatedArea = { ...area, layoutMode: mode };
@@ -775,7 +825,10 @@ export function createLayoutFromSections(
   categories: BuildingBlockCategory[] = [],
   blocks: BuildingBlock[] = [],
 ): PlanLayout {
-  const blockArea = createBlockAreaElement();
+  const margins = { ...DEFAULT_PLAN_MARGINS };
+  const layoutBounds = { width: A0_LANDSCAPE_WIDTH, height: A0_LANDSCAPE_HEIGHT, margins };
+  const usableArea = getUsableCanvasBounds(layoutBounds);
+  const blockArea = createBlockAreaElement("best_fit", layoutBounds);
   const elements: PlanElement[] = [blockArea];
   sections.filter((section) => section.items.length > 0).forEach((section, sectionIndex) => {
     elements.push({
@@ -809,8 +862,8 @@ export function createLayoutFromSections(
   elements.push({
     id: PLAN_TITLE_BLOCK_ELEMENT_ID,
     kind: "title_block",
-    x: A0_LANDSCAPE_WIDTH - 3_200,
-    y: A0_LANDSCAPE_HEIGHT - PLAN_SAFE_MARGIN - TITLE_BLOCK_HEIGHT,
+    x: usableArea.right - 3_020,
+    y: usableArea.bottom - TITLE_BLOCK_HEIGHT,
     width: 3_020,
     height: TITLE_BLOCK_HEIGHT,
     zIndex: 1_000,
@@ -818,12 +871,13 @@ export function createLayoutFromSections(
     locked: false,
   });
   const layout: PlanLayout = {
-    layoutVersion: 4,
+    layoutVersion: 5,
     format: "A0",
     orientation: "landscape",
     width: A0_LANDSCAPE_WIDTH,
     height: A0_LANDSCAPE_HEIGHT,
-    safeMargin: PLAN_SAFE_MARGIN,
+    margins,
+    paperRaster: "none",
     gridSize: PLAN_GRID_SIZE,
     elements,
   };
@@ -832,12 +886,36 @@ export function createLayoutFromSections(
 
 export function ensurePlanLayout(plan: Omit<Plan, "layout"> & { layout?: PlanLayout }): Plan {
   if (!plan.layout) return { ...plan, layout: createLayoutFromSections(plan.sections) };
-  if (plan.layout.layoutVersion === 4) return plan as Plan;
-  const legacyLayout = plan.layout as unknown as Omit<PlanLayout, "layoutVersion"> & { layoutVersion: number };
-  const migratedElements = legacyLayout.elements.map((element) => element.kind === "title_block" || element.kind === "header" ? { ...element, locked: false } : element) as PlanElement[];
+  const persistedLayout = plan.layout as unknown as Omit<PlanLayout, "layoutVersion" | "margins" | "paperRaster"> & {
+    layoutVersion: number;
+    margins?: PlanMargins;
+    paperRaster?: PlanLayout["paperRaster"];
+    safeMargin?: number;
+  };
+  const layoutWithoutLegacySafeMargin = { ...persistedLayout };
+  Reflect.deleteProperty(layoutWithoutLegacySafeMargin, "safeMargin");
+  const margins = persistedLayout.layoutVersion >= 5 && persistedLayout.margins
+    ? normalizePlanMargins(persistedLayout.margins, persistedLayout.width, persistedLayout.height)
+    : { ...DEFAULT_PLAN_MARGINS };
+  const migratedElements = persistedLayout.elements.map((element) => (
+    element.kind === "title_block" || element.kind === "header" ? { ...element, locked: false } : element
+  )) as PlanElement[];
+  const migratedLayout: PlanLayout = {
+    ...layoutWithoutLegacySafeMargin,
+    layoutVersion: 5,
+    margins,
+    paperRaster: persistedLayout.paperRaster ?? "none",
+    elements: migratedElements,
+  };
+  if (persistedLayout.layoutVersion >= 4) {
+    return { ...plan, layout: constrainLayoutToMargins(migratedLayout, margins) } as Plan;
+  }
   return {
     ...plan,
-    layout: { ...legacyLayout, layoutVersion: 4, elements: [createBlockAreaElement(), ...migratedElements] },
+    layout: constrainLayoutToMargins({
+      ...migratedLayout,
+      elements: [createBlockAreaElement("best_fit", migratedLayout), ...migratedElements],
+    }, margins),
   };
 }
 
@@ -846,12 +924,23 @@ export function snapToGrid(value: number, gridSize = PLAN_GRID_SIZE): number {
 }
 
 export function clampElementToPage(element: PlanElement, layout: PlanLayout): PlanElement {
-  const minimum = Math.ceil(layout.safeMargin / layout.gridSize) * layout.gridSize;
-  const maximumX = Math.floor((layout.width - layout.safeMargin - element.width) / layout.gridSize) * layout.gridSize;
-  const maximumY = Math.floor((layout.height - layout.safeMargin - element.height) / layout.gridSize) * layout.gridSize;
-  const x = Math.min(Math.max(snapToGrid(element.x, layout.gridSize), minimum), maximumX);
-  const y = Math.min(Math.max(snapToGrid(element.y, layout.gridSize), minimum), maximumY);
-  return { ...element, x, y };
+  const usableArea = getUsableCanvasBounds(layout);
+  const width = Math.min(element.width, usableArea.width);
+  const height = Math.min(element.height, usableArea.height);
+  const maximumX = usableArea.right - width;
+  const maximumY = usableArea.bottom - height;
+  const x = Math.min(Math.max(snapToGrid(element.x, layout.gridSize), usableArea.x), maximumX);
+  const y = Math.min(Math.max(snapToGrid(element.y, layout.gridSize), usableArea.y), maximumY);
+  return { ...element, x, y, width, height };
+}
+
+export function constrainLayoutToMargins(layout: PlanLayout, margins: PlanMargins): PlanLayout {
+  const normalizedMargins = normalizePlanMargins(margins, layout.width, layout.height);
+  const nextLayout = { ...layout, margins: normalizedMargins };
+  return {
+    ...nextLayout,
+    elements: nextLayout.elements.map((element) => clampElementToPage(element, nextLayout)),
+  };
 }
 
 function overlaps(a: PlanElement, b: PlanElement): boolean {
@@ -859,8 +948,9 @@ function overlaps(a: PlanElement, b: PlanElement): boolean {
 }
 
 function firstFreePosition(layout: PlanLayout, width: number, height: number, startX: number, endX: number): Pick<PlanBlockElement, "x" | "y" | "width" | "height"> | null {
-  const maximumY = layout.height - layout.safeMargin - height;
-  for (let y = layout.safeMargin; y <= maximumY; y += height + BASE_BLOCK_GAP) {
+  const usableArea = getUsableCanvasBounds(layout);
+  const maximumY = usableArea.bottom - height;
+  for (let y = usableArea.y; y <= maximumY; y += height + BASE_BLOCK_GAP) {
     for (let x = startX; x <= endX; x += width + BASE_BLOCK_GAP) {
       const candidate = { id: "candidate", kind: "block", x, y, width, height, zIndex: 1 } as PlanElement;
       const collision = layout.elements.some((element) => element.kind !== "block_area" && element.kind !== "section" && overlaps(candidate, element));
@@ -872,21 +962,26 @@ function firstFreePosition(layout: PlanLayout, width: number, height: number, st
 
 export function findNextFreeNonBlockPosition(layout: PlanLayout, width: number, height: number): Pick<PlanBlockElement, "x" | "y" | "width" | "height"> {
   const area = getBlockArea(layout);
-  const rightEdge = layout.width - layout.safeMargin - width;
-  const preferredStart = area ? snapToGrid(area.x + area.width + BASE_SECTION_GAP, layout.gridSize) : layout.safeMargin;
+  const usableArea = getUsableCanvasBounds(layout);
+  const constrainedWidth = Math.min(width, usableArea.width);
+  const constrainedHeight = Math.min(height, usableArea.height);
+  const rightEdge = usableArea.right - constrainedWidth;
+  const preferredStart = area ? snapToGrid(area.x + area.width + BASE_SECTION_GAP, layout.gridSize) : usableArea.x;
   if (preferredStart <= rightEdge) {
-    const preferred = firstFreePosition(layout, width, height, preferredStart, rightEdge);
+    const preferred = firstFreePosition(layout, constrainedWidth, constrainedHeight, preferredStart, rightEdge);
     if (preferred) return preferred;
   }
-  return firstFreePosition(layout, width, height, layout.safeMargin, rightEdge) ?? { x: layout.safeMargin, y: layout.safeMargin, width, height };
+  return firstFreePosition(layout, constrainedWidth, constrainedHeight, usableArea.x, rightEdge)
+    ?? { x: usableArea.x, y: usableArea.y, width: constrainedWidth, height: constrainedHeight };
 }
 
 export function findNextFreeBlockPosition(layout: PlanLayout, width = MINIMUM_FITTED_BLOCK_WIDTH, height = blockHeightForWidth(width)): Pick<PlanBlockElement, "x" | "y" | "width" | "height"> {
   const area = getBlockArea(layout);
-  const startX = (area?.x ?? layout.safeMargin) + BASE_SECTION_PADDING;
-  const startY = (area?.y ?? layout.safeMargin) + BASE_SECTION_HEADER_HEIGHT + BASE_SECTION_PADDING;
-  const maximumX = (area ? area.x + area.width : layout.width - layout.safeMargin) - BASE_SECTION_PADDING - width;
-  const maximumY = (area ? area.y + area.height : layout.height - layout.safeMargin) - BASE_SECTION_PADDING - height;
+  const usableArea = getUsableCanvasBounds(layout);
+  const startX = (area?.x ?? usableArea.x) + BASE_SECTION_PADDING;
+  const startY = (area?.y ?? usableArea.y) + BASE_SECTION_HEADER_HEIGHT + BASE_SECTION_PADDING;
+  const maximumX = (area ? area.x + area.width : usableArea.right) - BASE_SECTION_PADDING - width;
+  const maximumY = (area ? area.y + area.height : usableArea.bottom) - BASE_SECTION_PADDING - height;
   for (let y = startY; y <= maximumY; y += height + BASE_BLOCK_GAP) {
     for (let x = startX; x <= maximumX; x += width + BASE_BLOCK_GAP) {
       const candidate = { id: "candidate", kind: "block", x, y, width, height, zIndex: 1 } as PlanElement;
@@ -899,17 +994,18 @@ export function findNextFreeBlockPosition(layout: PlanLayout, width = MINIMUM_FI
 
 export function createSectionElement(sectionId: string, layout: PlanLayout, preferredY: number): PlanSectionElement {
   const area = getBlockArea(layout);
+  const usableArea = getUsableCanvasBounds(layout);
   const height = Math.min(NEW_SECTION_HEIGHT, area?.height ?? NEW_SECTION_HEIGHT);
-  const minimumY = area?.y ?? layout.safeMargin;
-  const maximumY = (area ? area.y + area.height : layout.height - layout.safeMargin) - height;
+  const minimumY = area?.y ?? usableArea.y;
+  const maximumY = (area ? area.y + area.height : usableArea.bottom) - height;
   const y = Math.min(Math.max(snapToGrid(preferredY - BASE_SECTION_HEADER_HEIGHT - BASE_SECTION_PADDING, layout.gridSize), minimumY), maximumY);
   return {
     id: `layout-section-${sectionId}`,
     kind: "section",
     sectionId,
-    x: area?.x ?? layout.safeMargin,
+    x: area?.x ?? usableArea.x,
     y,
-    width: area?.width ?? layout.width - layout.safeMargin * 2,
+    width: area?.width ?? usableArea.width,
     height,
     zIndex: Math.max(100, ...layout.elements.filter((element) => element.kind === "section").map((element) => element.zIndex)) + 1,
     semanticOrder: Math.max(0, ...layout.elements.map((element) => element.semanticOrder ?? 0)) + 1,

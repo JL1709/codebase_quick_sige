@@ -58,6 +58,24 @@ describe("local database migration", () => {
     expect(migrated?.blocks[0].translations.en.searchTerms).toContain("legacy global term");
   });
 
+  it("migrates the single legacy assessment into a completed run and adds plan provenance", () => {
+    const source = structuredClone(createSeedDatabase()) as unknown as Record<string, unknown>;
+    source.schemaVersion = 23;
+    const assessmentRuns = source.assessmentRuns as Array<{ projectId: string; answers: unknown }>;
+    source.assessments = Object.fromEntries(assessmentRuns.map((run) => [run.projectId, run.answers]));
+    delete source.assessmentRuns;
+    const plans = source.plans as Array<Record<string, unknown>>;
+    plans.forEach((plan) => delete plan.provenance);
+
+    const migrated = migrateDatabase(source);
+
+    expect(migrated?.assessmentRuns).toHaveLength(assessmentRuns.length);
+    expect(migrated?.assessmentRuns.every((run) => Boolean(run.completedAt))).toBe(true);
+    expect(migrated).not.toHaveProperty("assessments");
+    expect(migrated?.plans.every((plan) => plan.provenance.method === "guided_assessment")).toBe(true);
+    expect(migrated?.plans.every((plan) => Boolean(plan.provenance.sourceAssessmentRunId))).toBe(true);
+  });
+
   it("keeps valid document folders and moves files from missing folders to Unsorted", () => {
     const source = createSeedDatabase();
     source.projects[0].documentFolders = [{ id: "folder-permits", name: "Permits", createdAt: "2026-09-01T00:00:00.000Z" }];

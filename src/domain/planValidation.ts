@@ -1,5 +1,5 @@
 import type { BuildingBlock, DocumentTemplate, Locale, Plan, Project, ProjectDocumentConfiguration } from "./types";
-import { calculateBlockPresentationMetrics, getBlockArea } from "./planLayout";
+import { calculateBlockPresentationMetrics, getBlockArea, getUsableCanvasBounds } from "./planLayout";
 
 export type PlanValidationSeverity = "error" | "warning" | "information";
 
@@ -50,6 +50,7 @@ export function createPlanValidationIssues({ plan, project, blocks, documentConf
   const issues: PlanValidationIssue[] = [];
   const blockMap = new Map(blocks.map((block) => [block.id, block]));
   const blockArea = getBlockArea(plan.layout);
+  const usableArea = getUsableCanvasBounds(plan.layout);
   const visibleBlockElements = plan.layout.elements.filter((element) => !element.hidden && element.kind === "block");
   const addElementIssue = (ruleCode: string, elementId: string, descriptionKey: string, suggestedActionKey: string) => {
     const name = elementName(plan, project, blockMap, elementId, locale, t);
@@ -66,9 +67,9 @@ export function createPlanValidationIssues({ plan, project, blocks, documentConf
   };
 
   for (const element of plan.layout.elements.filter((candidate) => !candidate.hidden && candidate.kind !== "block_area")) {
-    const outsideSafeArea = element.x < plan.layout.safeMargin || element.y < plan.layout.safeMargin
-      || element.x + element.width > plan.layout.width - plan.layout.safeMargin
-      || element.y + element.height > plan.layout.height - plan.layout.safeMargin;
+    const outsideSafeArea = element.x < usableArea.x || element.y < usableArea.y
+      || element.x + element.width > usableArea.right
+      || element.y + element.height > usableArea.bottom;
     if (outsideSafeArea) addElementIssue("LAYOUT_OUTSIDE_SAFE_AREA", element.id, "editor.validation.outsideDescription", "editor.validation.moveInside");
 
     if (element.kind === "image") {

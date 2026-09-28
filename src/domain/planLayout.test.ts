@@ -4,7 +4,7 @@ import type { Plan, PlanBlockElement } from "./types";
 import {
   A0_LANDSCAPE_HEIGHT, A0_LANDSCAPE_WIDTH, clampElementToPage, createSectionElement,
   cssPixelsToLayoutUnits, ensurePlanLayout, findNextFreeBlockPosition, findNextFreeNonBlockPosition,
-  fitBlocksInArea, getBlockArea, layoutUnitsToCssPixels, layoutUnitsToMillimetres, PLAN_UNITS_PER_MILLIMETRE,
+  fitBlocksInArea, getBlockArea, getUsableCanvasBounds, layoutUnitsToCssPixels, layoutUnitsToMillimetres, PLAN_UNITS_PER_MILLIMETRE,
   reconcilePlanSectionsWithCatalog, resizeElementFromCssMeasurement, snapToGrid,
   calculateBlockPresentationMetrics, calculateSectionPresentationMetrics,
 } from "./planLayout";
@@ -15,13 +15,28 @@ describe("physical A0 layout", () => {
     expect(A0_LANDSCAPE_HEIGHT / PLAN_UNITS_PER_MILLIMETRE).toBe(841);
   });
 
-  it("snaps and clamps freely positioned elements inside the printable page", () => {
+  it("treats all four configured margins as hard placement boundaries", () => {
+    const source = createSeedDatabase().plans[0].layout;
+    const layout = { ...source, margins: { top: 300, right: 400, bottom: 500, left: 600 } };
+    const usableArea = getUsableCanvasBounds(layout);
+    const element = source.elements.find((candidate) => candidate.kind === "block")!;
+    const clamped = clampElementToPage({ ...element, x: -10_000, y: -10_000, width: source.width, height: source.height }, layout);
+
+    expect(usableArea).toEqual({ x: 600, y: 300, right: source.width - 400, bottom: source.height - 500, width: source.width - 1_000, height: source.height - 800 });
+    expect(clamped.x).toBe(usableArea.x);
+    expect(clamped.y).toBe(usableArea.y);
+    expect(clamped.width).toBe(usableArea.width);
+    expect(clamped.height).toBe(usableArea.height);
+  });
+
+  it("snaps and clamps freely positioned elements inside the usable area", () => {
     const layout = createSeedDatabase().plans[0].layout;
+    const usableArea = getUsableCanvasBounds(layout);
     const element = layout.elements.find((candidate) => candidate.kind === "block");
     expect(element).toBeDefined();
     const clamped = clampElementToPage({ ...element!, x: -100, y: 99_000 }, layout);
-    expect(clamped.x).toBe(layout.safeMargin);
-    expect(clamped.y + clamped.height).toBeLessThanOrEqual(layout.height - layout.safeMargin);
+    expect(clamped.x).toBe(usableArea.x);
+    expect(clamped.y + clamped.height).toBeLessThanOrEqual(usableArea.bottom);
     expect(clamped.x).toBe(snapToGrid(clamped.x));
   });
 
@@ -29,15 +44,18 @@ describe("physical A0 layout", () => {
     const layout = createSeedDatabase().plans[0].layout;
     const free = findNextFreeBlockPosition(layout);
     const section = createSectionElement("new-section", layout, free.y);
+    const usableArea = getUsableCanvasBounds(layout);
     expect(section.kind).toBe("section");
     expect(section.locked).toBe(false);
-    expect(section.y).toBeGreaterThanOrEqual(layout.safeMargin);
-    expect(section.y + section.height).toBeLessThanOrEqual(layout.height - layout.safeMargin);
+    expect(section.y).toBeGreaterThanOrEqual(usableArea.y);
+    expect(section.y + section.height).toBeLessThanOrEqual(usableArea.bottom);
   });
 
   it("creates a selectable block area without forcing a plan header", () => {
     const layout = createSeedDatabase().plans[0].layout;
-    expect(layout.layoutVersion).toBe(4);
+    expect(layout.layoutVersion).toBe(5);
+    expect(layout.margins).toEqual({ top: 0, right: 0, bottom: 0, left: 0 });
+    expect(layout.paperRaster).toBe("none");
     expect(layout.elements.find((element) => element.kind === "block_area")?.locked).toBe(false);
     expect(layout.elements.some((element) => element.kind === "header")).toBe(false);
     expect(layout.elements.find((element) => element.kind === "title_block")?.locked).toBe(false);
@@ -47,9 +65,11 @@ describe("physical A0 layout", () => {
     const plan = structuredClone(createSeedDatabase().plans[0]);
     const before = plan.layout.elements.filter((element) => element.kind !== "block_area");
     const legacyHeader = { id: "legacy-header", kind: "header" as const, x: 180, y: 180, width: 11_530, height: 520, zIndex: 900 };
-    const legacyPlan = { ...plan, layout: { ...plan.layout, layoutVersion: 3, elements: [legacyHeader, ...before] } };
+    const legacyPlan = { ...plan, layout: { ...plan.layout, layoutVersion: 3, safeMargin: 180, elements: [legacyHeader, ...before] } };
     const migrated = ensurePlanLayout(legacyPlan as unknown as Plan);
-    expect(migrated.layout.layoutVersion).toBe(4);
+    expect(migrated.layout.layoutVersion).toBe(5);
+    expect(migrated.layout.margins).toEqual({ top: 0, right: 0, bottom: 0, left: 0 });
+    expect(migrated.layout).not.toHaveProperty("safeMargin");
     expect(migrated.layout.elements[0].kind).toBe("block_area");
     expect(migrated.layout.elements.some((element) => element.id === legacyHeader.id)).toBe(true);
     expect(migrated.layout.elements.filter((element) => element.kind !== "block_area" && element.kind !== "header").map(({ x, y, width, height }) => ({ x, y, width, height })))
@@ -296,15 +316,16 @@ describe("physical A0 layout", () => {
 
   it("keeps a representative 100-element layout bounded and deterministic", () => {
     const source = createSeedDatabase().plans[0].layout;
+    const usableArea = getUsableCanvasBounds(source);
     const elements = Array.from({ length: 100 }, (_, index) => clampElementToPage({
       ...source.elements.find((candidate) => candidate.kind === "block")!,
       id: `performance-${index}`,
-      x: source.safeMargin + (index % 10) * 930,
-      y: source.safeMargin + Math.floor(index / 10) * 680,
+      x: usableArea.x + (index % 10) * 930,
+      y: usableArea.y + Math.floor(index / 10) * 680,
     }, source));
     expect(elements).toHaveLength(100);
-    expect(elements.every((element) => element.x >= source.safeMargin && element.y >= source.safeMargin)).toBe(true);
-    expect(elements.every((element) => element.x + element.width <= source.width - source.safeMargin)).toBe(true);
-    expect(elements.every((element) => element.y + element.height <= source.height - source.safeMargin)).toBe(true);
+    expect(elements.every((element) => element.x >= usableArea.x && element.y >= usableArea.y)).toBe(true);
+    expect(elements.every((element) => element.x + element.width <= usableArea.right)).toBe(true);
+    expect(elements.every((element) => element.y + element.height <= usableArea.bottom)).toBe(true);
   });
 });

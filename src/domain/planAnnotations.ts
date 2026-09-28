@@ -1,4 +1,4 @@
-import { clampElementToPage, findNextFreeNonBlockPosition, snapToGrid } from "./planLayout";
+import { clampElementToPage, findNextFreeNonBlockPosition, getUsableCanvasBounds, snapToGrid } from "./planLayout";
 import type { PlanConnectorPoint, PlanLayout, PlanShapeElement, PlanTextElement } from "./types";
 
 export type AnnotationInsertTool = "text" | "rectangle" | "line" | "arrow" | "callout";
@@ -99,11 +99,12 @@ export function createAnnotationElement(
   const freePosition = findNextFreeNonBlockPosition(layout, defaultSize.width, defaultSize.height);
   const requestedGeometry = requestedBounds ?? { x: freePosition.x, y: freePosition.y, ...defaultSize };
   const { connectorStart, connectorEnd } = requestedGeometry;
+  const usableArea = getUsableCanvasBounds(layout);
   const geometry = {
     x: requestedGeometry.x,
     y: requestedGeometry.y,
-    width: Math.min(requestedGeometry.width, layout.width - layout.safeMargin * 2),
-    height: Math.min(requestedGeometry.height, layout.height - layout.safeMargin * 2),
+    width: Math.min(requestedGeometry.width, usableArea.width),
+    height: Math.min(requestedGeometry.height, usableArea.height),
   };
   const base = {
     id,

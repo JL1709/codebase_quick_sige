@@ -533,7 +533,13 @@ const englishAssessment: AssessmentAnswers = {
 };
 
 export function createSeedDatabase(): AppDatabase {
-  const generatedPlan = createPlanFromAssessment(demoProject, demoAssessment, seedBlocks, seedCategories);
+  const demoAssessmentRunId = `assessment-${demoProject.id}-initial`;
+  const englishAssessmentRunId = `assessment-${englishProject.id}-initial`;
+  const generatedPlan = createPlanFromAssessment(demoProject, demoAssessment, seedBlocks, seedCategories, undefined, {
+    method: "guided_assessment",
+    createdByName: "Max",
+    sourceAssessmentRunId: demoAssessmentRunId,
+  });
   const publishedPlan = structuredClone(generatedPlan);
   publishedPlan.status = "published";
   publishedPlan.updatedAt = "2026-09-20T09:00:00.000Z";
@@ -546,7 +552,11 @@ export function createSeedDatabase(): AppDatabase {
     { id: "layout-demo-pdf", kind: "pdf_page", assetId: "asset-multipage-plan", pageNumber: 2, fitMode: "contain", x: 8_500, y: 2_080, width: 3_000, height: 2_800, zIndex: 801, semanticOrder: 10_001 },
     { id: "layout-demo-document", kind: "document", documentType: "alarm_plan", displayVariant: "emergency_card", x: 8_500, y: 4_980, width: 3_000, height: 700, zIndex: 802, semanticOrder: 10_002 },
   );
-  const englishPlan = createPlanFromAssessment(englishProject, englishAssessment, seedBlocks, seedCategories);
+  const englishPlan = createPlanFromAssessment(englishProject, englishAssessment, seedBlocks, seedCategories, undefined, {
+    method: "guided_assessment",
+    createdByName: "Max",
+    sourceAssessmentRunId: englishAssessmentRunId,
+  });
   const documentTemplates = (["de", "en"] as const).map((locale) => ({
     id: `standard-a4_plan-${locale}`,
     organizationId: "organization-demo",
@@ -562,7 +572,7 @@ export function createSeedDatabase(): AppDatabase {
     updatedAt: createdAt,
   }));
   return {
-    schemaVersion: 23,
+    schemaVersion: 25,
     organization: {
       id: "organization-demo",
       name: "Sicher Planen Ingenieure",
@@ -577,7 +587,28 @@ export function createSeedDatabase(): AppDatabase {
       preferredLocale: "de",
     },
     projects: [demoProject, englishProject],
-    assessments: { [demoProject.id]: demoAssessment, [englishProject.id]: englishAssessment },
+    assessmentRuns: [
+      {
+        id: demoAssessmentRunId,
+        projectId: demoProject.id,
+        definitionVersion: 1,
+        answers: demoAssessment,
+        createdByName: "Max",
+        createdAt,
+        updatedAt: createdAt,
+        completedAt: createdAt,
+      },
+      {
+        id: englishAssessmentRunId,
+        projectId: englishProject.id,
+        definitionVersion: 1,
+        answers: englishAssessment,
+        createdByName: "Max",
+        createdAt,
+        updatedAt: createdAt,
+        completedAt: createdAt,
+      },
+    ],
     blocks: seedBlocks,
     categories: seedCategories,
     plans: [plan, englishPlan],

@@ -65,7 +65,8 @@ test("complete project workflow remains localized and revision-safe", async ({ p
   const navigation = page.getByRole("navigation", { name: "Project navigation" });
   const initialNavigationBox = await navigation.boundingBox();
   expect(initialNavigationBox).not.toBeNull();
-  for (const tab of ["Project assessment", "Safety plan", "Documents", "Revisions", "Overview"]) {
+  await expect(navigation.getByRole("link", { name: "Project assessment", exact: true })).toHaveCount(0);
+  for (const tab of ["Safety plan", "Documents", "Revisions", "Overview"]) {
     await navigation.getByRole("link", { name: tab, exact: true }).click();
     await expect(navigation).toBeVisible();
     const box = await navigation.boundingBox();
@@ -188,6 +189,9 @@ test("project creation applies templates and guided assessment creates a plan", 
   await additionalInformation.getByPlaceholder("Label").fill("Internal reference");
   await additionalInformation.getByLabel("Value (optional)").fill("MP-01");
   await page.getByRole("button", { name: "Create project" }).click();
+  await expect(page).toHaveURL(/\/projects\/[^/]+\/plan$/);
+  await expect(page.getByRole("button", { name: "Create safety plan" })).toBeVisible();
+  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("link", { name: "Overview" }).click();
   await expect(page.getByText("Minimal project", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Internal reference", { exact: true })).toBeVisible();
   await expect(page.getByText("MP-01", { exact: true })).toBeVisible();
@@ -201,6 +205,8 @@ test("project creation applies templates and guided assessment creates a plan", 
   const includedGeneral = page.locator(".project-included-section").filter({ has: page.getByRole("heading", { name: "General" }) });
   await includedGeneral.getByLabel("Client").fill("Template Client GmbH");
   await page.getByRole("button", { name: "Create project" }).click();
+  await expect(page.getByRole("button", { name: "Create safety plan" })).toBeVisible();
+  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("link", { name: "Overview" }).click();
   await expect(page.getByText("Single-template project", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Client", { exact: true })).toBeVisible();
   await expect(page.getByText("Template Client GmbH", { exact: true })).toBeVisible();
@@ -217,10 +223,19 @@ test("project creation applies templates and guided assessment creates a plan", 
   await page.locator(".project-included-section").filter({ has: page.getByRole("heading", { name: "General" }) }).getByLabel("Client").fill("North Campus GmbH");
   await page.getByRole("button", { name: "Create project" }).click();
 
+  await expect(page.getByRole("button", { name: "Create safety plan" })).toBeVisible();
+  const projectNavigation = page.getByRole("navigation", { name: "Project navigation" });
+  await expect(projectNavigation.getByRole("link", { name: "Project assessment", exact: true })).toHaveCount(0);
+  await projectNavigation.getByRole("link", { name: "Overview" }).click();
   await expect(page.getByText("Client", { exact: true })).toBeVisible();
   await expect(page.getByText("Fire brigade / emergency services", { exact: true })).toBeVisible();
 
-  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("link", { name: "Project assessment" }).click();
+  await projectNavigation.getByRole("link", { name: "Safety plan" }).click();
+  await page.getByRole("button", { name: "Create safety plan" }).click();
+  const creationDialog = page.getByRole("dialog", { name: "How would you like to start the safety plan?" });
+  await expect(creationDialog.getByRole("button", { name: /Guided project assessment/ })).toBeVisible();
+  await expect(creationDialog.getByRole("button", { name: /Start with an empty plan/ })).toBeVisible();
+  await creationDialog.getByRole("button", { name: /Guided project assessment/ }).click();
   for (let step = 0; step < 3; step += 1) await page.getByRole("button", { name: "Continue" }).click();
   await page.getByRole("button", { name: "Review recommendations" }).click();
   await page.getByRole("button", { name: "Create draft" }).click();
@@ -262,6 +277,46 @@ test("project creation applies templates and guided assessment creates a plan", 
       request.onerror = () => resolve(true);
     });
   }, deletionState.blobId)).toBe(false);
+});
+
+test("safety plan hub creates revision and current-plan drafts without overwriting working history", async ({ page }) => {
+  await useEnglishInterface(page);
+  await page.goto("/projects/project-logistics-center/plan");
+  await page.getByRole("button", { name: "Create new draft" }).click();
+  const revisionDialog = page.getByRole("dialog", { name: "How would you like to start the safety plan?" });
+  await revisionDialog.getByLabel("Reason for the update (optional)").fill("Changed logistics phase");
+  await revisionDialog.getByLabel("Select revision").selectOption("revision-demo-a");
+  await revisionDialog.getByRole("button", { name: "Use revision" }).click();
+  await expect(page.locator(".wysiwyg-page")).toBeVisible();
+
+  const revisionDraftState = await page.evaluate(() => {
+    const database = JSON.parse(window.localStorage.getItem("quicksige.database.v3") ?? "{}") as {
+      plans?: Array<{ id: string; projectId: string; supersededAt?: string; provenance?: { method: string; sourceRevisionId?: string; reason?: string } }>;
+    };
+    const projectPlans = database.plans?.filter((plan) => plan.projectId === "project-logistics-center") ?? [];
+    return { projectPlans, activePlan: projectPlans.find((plan) => !plan.supersededAt) };
+  });
+  expect(revisionDraftState.projectPlans).toHaveLength(2);
+  expect(revisionDraftState.projectPlans.filter((plan) => Boolean(plan.supersededAt))).toHaveLength(1);
+  expect(revisionDraftState.activePlan?.provenance).toMatchObject({
+    method: "revision",
+    sourceRevisionId: "revision-demo-a",
+    reason: "Changed logistics phase",
+  });
+
+  await page.getByRole("button", { name: "Create new draft" }).click();
+  const copyDialog = page.getByRole("dialog", { name: "How would you like to start the safety plan?" });
+  await copyDialog.getByRole("button", { name: /Copy current plan/ }).click();
+  const copyDraftState = await page.evaluate(() => {
+    const database = JSON.parse(window.localStorage.getItem("quicksige.database.v3") ?? "{}") as {
+      plans?: Array<{ projectId: string; supersededAt?: string; provenance?: { method: string; sourcePlanId?: string } }>;
+    };
+    const projectPlans = database.plans?.filter((plan) => plan.projectId === "project-logistics-center") ?? [];
+    return { projectPlans, activePlan: projectPlans.find((plan) => !plan.supersededAt) };
+  });
+  expect(copyDraftState.projectPlans).toHaveLength(3);
+  expect(copyDraftState.projectPlans.filter((plan) => Boolean(plan.supersededAt))).toHaveLength(2);
+  expect(copyDraftState.activePlan?.provenance?.method).toBe("current_plan");
 });
 
 test("custom Word template reports missing data and generates with explicit consent", async ({ page }) => {
@@ -673,6 +728,7 @@ test("overview template builder supports hierarchy, drag placement, dates, and p
   const includedHandover = page.locator(".project-included-section").filter({ has: page.getByRole("heading", { name: "Site handover" }) });
   await includedHandover.getByLabel("Permit number").fill("B-2042");
   await page.getByRole("button", { name: "Create project" }).click();
+  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("link", { name: "Overview" }).click();
   const overviewSection = page.locator(".overview-template-section").filter({ hasText: "Site handover" });
   await expect(overviewSection.getByText("Inspector", { exact: true })).toBeVisible();
   await expect(overviewSection.getByText("27/09/2026", { exact: true })).toBeVisible();
@@ -1328,4 +1384,59 @@ test("annotation insert tools create and format native plan elements", async ({ 
   await expect(arrowGraphic).toHaveAttribute("y2", "100%");
   await expect(page.locator(".canvas-shape.is-callout")).toHaveCount(1);
   await expect(page.locator(".canvas-text")).toHaveCount(1);
+});
+
+test("paper-size guide tiles the A0 canvas and margins enforce the usable area", async ({ page }) => {
+  await useEnglishInterface(page);
+  await page.goto("/projects/project-logistics-center/plan");
+  await expect(page.locator(".wysiwyg-page")).toBeVisible();
+
+  await page.getByRole("button", { name: "Canvas layout" }).click();
+  await page.getByLabel("Paper-size guide").selectOption("A4");
+  await expect(page.locator('.paper-size-raster[data-paper-raster="A4"] > span')).toHaveCount(16);
+
+  await page.getByRole("button", { name: "Change all margins together" }).click();
+  await page.getByLabel("Top (mm)").fill("10");
+  await page.getByLabel("Right (mm)").fill("20");
+  await page.getByLabel("Bottom (mm)").fill("30");
+  await page.getByLabel("Left (mm)").fill("40");
+
+  const persistedLayout = await page.evaluate(() => {
+    const database = JSON.parse(window.localStorage.getItem("quicksige.database.v3") ?? "{}") as {
+      plans?: Array<{
+        projectId: string;
+        layout: {
+          width: number;
+          height: number;
+          paperRaster: string;
+          margins: { top: number; right: number; bottom: number; left: number };
+          elements: Array<{ x: number; y: number; width: number; height: number }>;
+        };
+      }>;
+    };
+    return database.plans?.find((plan) => plan.projectId === "project-logistics-center")?.layout;
+  });
+  expect(persistedLayout?.paperRaster).toBe("A4");
+  expect(persistedLayout?.margins).toEqual({ top: 100, right: 200, bottom: 300, left: 400 });
+  expect(persistedLayout?.elements.every((element) => (
+    element.x >= 400
+    && element.y >= 100
+    && element.x + element.width <= persistedLayout.width - 200
+    && element.y + element.height <= persistedLayout.height - 300
+  ))).toBe(true);
+
+  const guideOffsets = await page.locator(".canvas-usable-area-guide").evaluate((guide) => {
+    const guideBounds = guide.getBoundingClientRect();
+    const pageBounds = guide.parentElement!.getBoundingClientRect();
+    return {
+      left: (guideBounds.left - pageBounds.left) / pageBounds.width,
+      top: (guideBounds.top - pageBounds.top) / pageBounds.height,
+      right: (pageBounds.right - guideBounds.right) / pageBounds.width,
+      bottom: (pageBounds.bottom - guideBounds.bottom) / pageBounds.height,
+    };
+  });
+  expect(guideOffsets.left).toBeCloseTo(400 / 11_890, 3);
+  expect(guideOffsets.top).toBeCloseTo(100 / 8_410, 3);
+  expect(guideOffsets.right).toBeCloseTo(200 / 11_890, 3);
+  expect(guideOffsets.bottom).toBeCloseTo(300 / 8_410, 3);
 });

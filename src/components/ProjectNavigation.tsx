@@ -6,7 +6,6 @@ export function ProjectNavigation({ projectId }: { projectId: string }) {
   return (
     <nav className="project-nav" aria-label={t("project.navigationLabel")}>
       <NavLink to={`/projects/${projectId}`} end>{t("project.overview")}</NavLink>
-      <NavLink to={`/projects/${projectId}/assessment`}>{t("project.assessment")}</NavLink>
       <NavLink to={`/projects/${projectId}/plan`}>{t("project.plan")}</NavLink>
       <NavLink to={`/projects/${projectId}/documents`}>{t("project.documents")}</NavLink>
       <NavLink to={`/projects/${projectId}/revisions`}>{t("project.revisions")}</NavLink>

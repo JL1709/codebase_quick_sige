@@ -1,7 +1,8 @@
 import { ArrowLeft, ArrowRight, Building2, CircleHelp, ClipboardList, CloudSun, Pickaxe } from "lucide-react";
 import { useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Button, PageHeader } from "../components/Ui";
+import { defaultAssessmentAnswers } from "../data/seed";
 import type { AssessmentAnswers, Season } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
 import { useApp } from "../state/AppProvider";
@@ -13,11 +14,15 @@ function BooleanQuestion({ label, value, onChange, yes, no }: { label: string; v
 
 export function AssessmentPage() {
   const { projectId = "" } = useParams();
-  const { getProject, getAssessment, saveAssessment } = useApp();
+  const { getProject, getAssessmentRun, getLatestAssessmentRun, saveAssessment } = useApp();
   const { t } = useI18n();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const project = getProject(projectId);
-  const [answers, setAnswers] = useState<AssessmentAnswers>(() => getAssessment(projectId));
+  const requestedRun = getAssessmentRun(searchParams.get("assessmentRunId") ?? "");
+  const initialRun = requestedRun?.projectId === projectId ? requestedRun : getLatestAssessmentRun(projectId);
+  const [assessmentRunId, setAssessmentRunId] = useState<string | undefined>(() => initialRun?.completedAt ? undefined : initialRun?.id);
+  const [answers, setAnswers] = useState<AssessmentAnswers>(() => structuredClone(initialRun?.answers ?? defaultAssessmentAnswers));
   const [step, setStep] = useState(0);
   if (!project) return <NotFoundPage />;
 
@@ -29,14 +34,16 @@ export function AssessmentPage() {
   ];
   const update = <Key extends keyof AssessmentAnswers>(key: Key, value: AssessmentAnswers[Key]) => setAnswers((current) => ({ ...current, [key]: value }));
   const next = () => {
-    saveAssessment(project.id, answers);
-    if (step === steps.length - 1) navigate(`/projects/${project.id}/recommendations`);
+    const completed = step === steps.length - 1;
+    const savedRun = saveAssessment(project.id, assessmentRunId, answers, completed);
+    setAssessmentRunId(savedRun.id);
+    if (completed) navigate(`/projects/${project.id}/recommendations?assessmentRunId=${savedRun.id}`);
     else setStep((current) => current + 1);
   };
 
   return (
     <div className="workspace-page">
-      <PageHeader eyebrow={t("assessment.eyebrow")} title={t("assessment.title")} description={t("assessment.subtitle")} action={<Link to={`/projects/${project.id}`}><Button variant="ghost"><ArrowLeft size={16} />{t("common.back")}</Button></Link>} />
+      <PageHeader eyebrow={t("assessment.eyebrow")} title={t("assessment.title")} description={t("assessment.subtitle")} action={<Link to={`/projects/${project.id}/plan`}><Button variant="ghost"><ArrowLeft size={16} />{t("common.back")}</Button></Link>} />
       <div className="assessment-layout">
         <aside className="assessment-steps">
           {steps.map(({ key, icon: Icon }, index) => <button type="button" key={key} className={`assessment-step ${index === step ? "is-active" : ""}`} onClick={() => setStep(index)}><span>{index < step ? "✓" : <Icon size={15} />}</span><strong>{t(`assessment.step.${key}`)}</strong></button>)}

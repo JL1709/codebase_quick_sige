@@ -6,7 +6,7 @@ describe("recommendation engine", () => {
   it("identifies likely notification and plan requirements for the seeded project", () => {
     const database = createSeedDatabase();
     const project = database.projects[0];
-    const answers = database.assessments[project.id];
+    const answers = database.assessmentRuns.find((run) => run.projectId === project.id)!.answers;
     const result = assessRequirements(project, answers);
 
     expect(result.advanceNoticeLikelyRequired).toBe(true);
@@ -28,7 +28,7 @@ describe("recommendation engine", () => {
   it("groups included recommendations into semantic plan sections", () => {
     const database = createSeedDatabase();
     const project = database.projects[0];
-    const answers = database.assessments[project.id];
+    const answers = database.assessmentRuns.find((run) => run.projectId === project.id)!.answers;
     const recommendations = generateRecommendations(project, answers).map((result) => result.blockId === "block-hot-works" ? { ...result, included: false } : result);
     const plan = createPlanFromAssessment(project, answers, database.blocks, database.categories, recommendations);
 

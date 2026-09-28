@@ -4,14 +4,22 @@ import { deleteBlob } from "../data/blobRepository";
 import { defaultAssessmentAnswers } from "../data/seed";
 import { createPlanFromAssessment } from "../domain/recommendationEngine";
 import { buildRevisionSnapshot } from "../domain/revisionSnapshot";
+import { activePlanForProject, createDraftFromCurrentPlan, createDraftFromRevision, normalizePlanReason, replaceActivePlan } from "../domain/planLifecycle";
 import { categoryPlacementIds, normalizeCategoryColorOwnership } from "../domain/categoryTree";
 import { instantiateOverviewSection, localizeOverviewTemplate, normalizeOverviewKey, validateOverviewTemplate } from "../domain/overviewTemplates";
 import type {
   AppDatabase, AssessmentAnswers, BuildingBlock, BuildingBlockCategory, DocumentTemplate, GeneratedDocument,
-  Locale, OverviewTemplate, Plan, PlanRevision, Project, ProjectDocumentConfiguration, ProjectFormValues, ProjectStatus, Recommendation,
+  Locale, OverviewTemplate, Plan, PlanRevision, Project, ProjectAssessmentRun, ProjectDocumentConfiguration, ProjectFormValues, ProjectStatus, Recommendation,
 } from "../domain/types";
 
 interface PublishInput { index: string; changeSummary: string; approvedBy: string }
+const ASSESSMENT_DEFINITION_VERSION = 1;
+
+export type CreatePlanInput =
+  | { method: "guided_assessment"; assessmentRunId: string; recommendations?: Recommendation[]; reason?: string }
+  | { method: "blank"; reason?: string }
+  | { method: "current_plan"; reason?: string }
+  | { method: "revision"; revisionId: string; reason?: string };
 
 interface AppContextValue {
   database: AppDatabase;
@@ -20,8 +28,9 @@ interface AppContextValue {
   deleteProject: (projectId: string) => Promise<void>;
   updateProject: (project: Project) => void;
   updateProjectStatus: (projectId: string, status: ProjectStatus) => void;
-  saveAssessment: (projectId: string, answers: AssessmentAnswers) => void;
-  createPlan: (projectId: string, recommendations?: Recommendation[]) => Plan;
+  beginAssessment: (projectId: string, reason?: string) => ProjectAssessmentRun;
+  saveAssessment: (projectId: string, assessmentRunId: string | undefined, answers: AssessmentAnswers, completed: boolean) => ProjectAssessmentRun;
+  createPlan: (projectId: string, input: CreatePlanInput) => Plan;
   updatePlan: (plan: Plan) => void;
   publishPlan: (planId: string, input: PublishInput) => PlanRevision;
   saveBlock: (block: BuildingBlock) => void;
@@ -44,7 +53,8 @@ interface AppContextValue {
   resetDemo: () => void;
   getProject: (projectId: string) => Project | undefined;
   getPlanForProject: (projectId: string) => Plan | undefined;
-  getAssessment: (projectId: string) => AssessmentAnswers;
+  getAssessmentRun: (assessmentRunId: string) => ProjectAssessmentRun | undefined;
+  getLatestAssessmentRun: (projectId: string) => ProjectAssessmentRun | undefined;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -96,7 +106,6 @@ export function AppProvider({ children, repository: providedRepository }: { chil
     const project = initialProject;
     commit((current) => ({
       ...current, projects: [project, ...current.projects],
-      assessments: { ...current.assessments, [project.id]: { ...defaultAssessmentAnswers } },
       auditEvents: [...current.auditEvents, { id: newId("audit"), projectId: project.id, action: "project.created", actorName: current.user.name, createdAt: now, details: project.name }],
     }));
     return project;
@@ -117,12 +126,10 @@ export function AppProvider({ children, repository: providedRepository }: { chil
     ].filter((blobId): blobId is string => Boolean(blobId)));
     await Promise.all([...blobIds].map((blobId) => deleteBlob(blobId)));
     commit((current) => {
-      const assessments = { ...current.assessments };
-      Reflect.deleteProperty(assessments, projectId);
       return {
         ...current,
         projects: current.projects.filter((candidate) => candidate.id !== projectId),
-        assessments,
+        assessmentRuns: current.assessmentRuns.filter((run) => run.projectId !== projectId),
         plans: current.plans.filter((plan) => plan.projectId !== projectId),
         revisions: current.revisions.filter((revision) => revision.projectId !== projectId),
         documentConfigurations: current.documentConfigurations.filter((configuration) => configuration.projectId !== projectId),
@@ -137,7 +144,7 @@ export function AppProvider({ children, repository: providedRepository }: { chil
     commit((current) => ({
       ...current,
       projects: current.projects.map((candidate) => candidate.id === project.id ? { ...project, updatedAt: now } : candidate),
-      plans: current.plans.map((plan) => plan.projectId === project.id ? { ...plan, status: "draft", updatedAt: now } : plan),
+      plans: current.plans.map((plan) => plan.projectId === project.id && !plan.supersededAt ? { ...plan, status: "draft", updatedAt: now } : plan),
       generatedDocuments: current.generatedDocuments.map((document) => document.projectId === project.id ? { ...document, stale: true } : document),
     }));
   }, [commit]);
@@ -150,22 +157,119 @@ export function AppProvider({ children, repository: providedRepository }: { chil
     }));
   }, [commit]);
 
-  const saveAssessment = useCallback((projectId: string, answers: AssessmentAnswers) => {
+  const beginAssessment = useCallback((projectId: string, reason?: string): ProjectAssessmentRun => {
+    const inProgressRun = database.assessmentRuns.find((run) => run.projectId === projectId && !run.completedAt);
+    const normalizedReason = normalizePlanReason(reason);
+    if (inProgressRun) {
+      if (!normalizedReason || normalizedReason === inProgressRun.reason) return inProgressRun;
+      const updatedRun = { ...inProgressRun, reason: normalizedReason, updatedAt: new Date().toISOString() };
+      commit((current) => ({ ...current, assessmentRuns: current.assessmentRuns.map((run) => run.id === updatedRun.id ? updatedRun : run) }));
+      return updatedRun;
+    }
     const now = new Date().toISOString();
-    commit((current) => ({
-      ...current, assessments: { ...current.assessments, [projectId]: answers },
-      projects: current.projects.map((project) => project.id === projectId ? { ...project, updatedAt: now } : project),
-      auditEvents: [...current.auditEvents, { id: newId("audit"), projectId, action: "assessment.saved", actorName: current.user.name, createdAt: now, details: "Guided assessment updated" }],
-    }));
-  }, [commit]);
+    const previousRun = database.assessmentRuns.find((run) => run.projectId === projectId && run.completedAt);
+    const run: ProjectAssessmentRun = {
+      id: newId("assessment"),
+      projectId,
+      definitionVersion: ASSESSMENT_DEFINITION_VERSION,
+      answers: structuredClone(previousRun?.answers ?? defaultAssessmentAnswers),
+      reason: normalizedReason,
+      createdByName: database.user.name,
+      createdAt: now,
+      updatedAt: now,
+    };
+    commit((current) => ({ ...current, assessmentRuns: [run, ...current.assessmentRuns] }));
+    return run;
+  }, [commit, database.assessmentRuns, database.user.name]);
 
-  const createPlan = useCallback((projectId: string, recommendations?: Recommendation[]): Plan => {
+  const saveAssessment = useCallback((projectId: string, assessmentRunId: string | undefined, answers: AssessmentAnswers, completed: boolean): ProjectAssessmentRun => {
+    const now = new Date().toISOString();
+    const existingRun = database.assessmentRuns.find((run) => run.id === assessmentRunId && run.projectId === projectId && !run.completedAt);
+    const savedRun: ProjectAssessmentRun = existingRun
+      ? { ...existingRun, answers, updatedAt: now, completedAt: completed ? now : undefined }
+      : {
+        id: newId("assessment"),
+        projectId,
+        definitionVersion: ASSESSMENT_DEFINITION_VERSION,
+        answers,
+        createdByName: database.user.name,
+        createdAt: now,
+        updatedAt: now,
+        completedAt: completed ? now : undefined,
+      };
+    commit((current) => ({
+      ...current,
+      assessmentRuns: current.assessmentRuns.some((run) => run.id === savedRun.id)
+        ? current.assessmentRuns.map((run) => run.id === savedRun.id ? savedRun : run)
+        : [savedRun, ...current.assessmentRuns],
+      projects: current.projects.map((project) => project.id === projectId ? { ...project, updatedAt: now } : project),
+      auditEvents: completed
+        ? [...current.auditEvents, { id: newId("audit"), projectId, action: "assessment.completed", actorName: current.user.name, createdAt: now, details: savedRun.id }]
+        : current.auditEvents,
+    }));
+    return savedRun;
+  }, [commit, database.assessmentRuns, database.user.name]);
+
+  const createPlan = useCallback((projectId: string, input: CreatePlanInput): Plan => {
     const project = database.projects.find((candidate) => candidate.id === projectId);
     if (!project) throw new Error(`Project ${projectId} not found`);
-    const plan = createPlanFromAssessment(project, database.assessments[projectId] ?? defaultAssessmentAnswers, database.blocks, database.categories, recommendations);
-    commit((current) => ({ ...current, plans: [plan, ...current.plans.filter((candidate) => candidate.projectId !== projectId)], projects: current.projects.map((candidate) => candidate.id === projectId ? { ...candidate, updatedAt: plan.updatedAt } : candidate) }));
+    const now = new Date().toISOString();
+    const planId = newId("plan");
+    const currentPlan = activePlanForProject(database.plans, projectId);
+    const assessmentRun = input.method === "guided_assessment"
+      ? database.assessmentRuns.find((run) => run.id === input.assessmentRunId && run.projectId === projectId && run.completedAt)
+      : undefined;
+    const revision = input.method === "revision"
+      ? database.revisions.find((candidate) => candidate.id === input.revisionId && candidate.projectId === projectId)
+      : undefined;
+    if (input.method === "guided_assessment" && !assessmentRun) throw new Error("Completed assessment not found");
+    if (input.method === "current_plan" && !currentPlan) throw new Error("Current plan not found");
+    if (input.method === "revision" && !revision) throw new Error("Revision not found");
+
+    const plan = input.method === "guided_assessment" && assessmentRun
+      ? {
+        ...createPlanFromAssessment(project, assessmentRun.answers, database.blocks, database.categories, input.recommendations, {
+          method: "guided_assessment",
+          createdByName: database.user.name,
+          reason: normalizePlanReason(input.reason) ?? assessmentRun.reason,
+          sourceAssessmentRunId: assessmentRun.id,
+        }),
+        id: planId,
+        createdAt: now,
+        updatedAt: now,
+      }
+      : input.method === "current_plan" && currentPlan
+        ? createDraftFromCurrentPlan(currentPlan, { id: planId, now, createdByName: database.user.name, reason: normalizePlanReason(input.reason) })
+        : input.method === "revision" && revision
+          ? createDraftFromRevision(revision, { id: planId, now, createdByName: database.user.name, reason: normalizePlanReason(input.reason) })
+          : {
+            ...createPlanFromAssessment(project, defaultAssessmentAnswers, database.blocks, database.categories, [], {
+              method: "blank",
+              createdByName: database.user.name,
+              reason: normalizePlanReason(input.reason),
+            }),
+            id: planId,
+            createdAt: now,
+            updatedAt: now,
+          };
+
+    const revisionAssets = revision
+      ? revision.snapshot.project.assets.filter((asset) => plan.includedAssetIds.includes(asset.id) || plan.layout.elements.some((element) => (element.kind === "image" || element.kind === "pdf_page") && element.assetId === asset.id))
+      : [];
+    commit((current) => ({
+      ...current,
+      plans: replaceActivePlan(current.plans, plan, now),
+      projects: current.projects.map((candidate) => {
+        if (candidate.id !== projectId) return candidate;
+        const existingAssetIds = new Set(candidate.assets.map((asset) => asset.id));
+        const restoredAssets = revisionAssets.filter((asset) => !existingAssetIds.has(asset.id));
+        return { ...candidate, assets: [...candidate.assets, ...restoredAssets], updatedAt: now };
+      }),
+      generatedDocuments: current.generatedDocuments.map((document) => document.projectId === projectId ? { ...document, stale: true } : document),
+      auditEvents: [...current.auditEvents, { id: newId("audit"), projectId, action: "plan.draft.created", actorName: current.user.name, createdAt: now, details: input.method }],
+    }));
     return plan;
-  }, [commit, database.assessments, database.blocks, database.categories, database.projects]);
+  }, [commit, database]);
 
   const updatePlan = useCallback((plan: Plan) => {
     const updatedPlan = { ...plan, status: "draft" as const, updatedAt: new Date().toISOString() };
@@ -268,7 +372,7 @@ export function AppProvider({ children, repository: providedRepository }: { chil
   }, []);
   const resetDemo = useCallback(() => setDatabase(repository.current.reset()), []);
   const value = useMemo<AppContextValue>(() => ({
-    database, setLocale, createProject, deleteProject, updateProject, updateProjectStatus, saveAssessment, createPlan, updatePlan, publishPlan,
+    database, setLocale, createProject, deleteProject, updateProject, updateProjectStatus, beginAssessment, saveAssessment, createPlan, updatePlan, publishPlan,
     saveBlock, archiveBlock, restoreBlock, saveCategory, reorderCategories, archiveCategory, restoreCategory,
     applyOverviewTemplates: applyTemplatesToProject, saveOverviewTemplate, deleteOverviewTemplate,
     saveDocumentTemplate, deleteDocumentTemplate, setDocumentTemplate, addGeneratedDocument, resetDemo,
@@ -278,9 +382,10 @@ export function AppProvider({ children, repository: providedRepository }: { chil
     },
     restoreMigrationBackup, downloadMigrationBackup,
     getProject: (projectId) => database.projects.find((project) => project.id === projectId),
-    getPlanForProject: (projectId) => database.plans.find((plan) => plan.projectId === projectId),
-    getAssessment: (projectId) => database.assessments[projectId] ?? { ...defaultAssessmentAnswers },
-  }), [database, setLocale, createProject, deleteProject, updateProject, updateProjectStatus, saveAssessment, createPlan, updatePlan, publishPlan, saveBlock, archiveBlock, restoreBlock, saveCategory, reorderCategories, archiveCategory, restoreCategory, applyTemplatesToProject, saveOverviewTemplate, deleteOverviewTemplate, saveDocumentTemplate, deleteDocumentTemplate, setDocumentTemplate, addGeneratedDocument, restoreMigrationBackup, downloadMigrationBackup, resetDemo]);
+    getPlanForProject: (projectId) => activePlanForProject(database.plans, projectId),
+    getAssessmentRun: (assessmentRunId) => database.assessmentRuns.find((run) => run.id === assessmentRunId),
+    getLatestAssessmentRun: (projectId) => database.assessmentRuns.find((run) => run.projectId === projectId),
+  }), [database, setLocale, createProject, deleteProject, updateProject, updateProjectStatus, beginAssessment, saveAssessment, createPlan, updatePlan, publishPlan, saveBlock, archiveBlock, restoreBlock, saveCategory, reorderCategories, archiveCategory, restoreCategory, applyTemplatesToProject, saveOverviewTemplate, deleteOverviewTemplate, saveDocumentTemplate, deleteDocumentTemplate, setDocumentTemplate, addGeneratedDocument, restoreMigrationBackup, downloadMigrationBackup, resetDemo]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

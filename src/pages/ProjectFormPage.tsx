@@ -65,7 +65,7 @@ export function ProjectFormPage() {
       return;
     }
     const project = createProject(validation.data);
-    navigate(`/projects/${project.id}`);
+    navigate(`/projects/${project.id}/plan`);
   };
 
   return <div className="page page-narrow project-form-page">

@@ -2,15 +2,16 @@ import { DndContext, type DragEndEvent, KeyboardSensor, PointerSensor, useDragga
 import {
   AlignCenter, AlignCenterHorizontal, AlignCenterVertical, AlignHorizontalDistributeCenter, AlignLeft, AlignRight, AlignVerticalDistributeCenter,
   ArrowRight, Bold, BringToFront, Check, CheckCircle2, ChevronDown, ChevronRight,
-  Copy, FileOutput, Image, Lock, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Search, ShieldCheck,
+  Copy, FileOutput, FilePlus2, Grid3X3, Image, Link2, Lock, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Ruler, Search, ShieldCheck,
   LayoutGrid, Maximize2, MessageSquare, Minus, Palette, RectangleHorizontal, Scan, SendToBack, Trash2, TriangleAlert, Type, Undo2, Unlock, ZoomIn, ZoomOut,
 } from "lucide-react";
 import Moveable, { type OnResize } from "react-moveable";
 import Selecto from "react-selecto";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { BlockVisual } from "../components/BlockVisual";
+import { PlanCreationDialog } from "../components/PlanCreationDialog";
 import { Badge, Button, EmptyState, Modal } from "../components/Ui";
 import { blobObjectUrl, getBlob, saveBlob } from "../data/blobRepository";
 import { renderPdfPage } from "../documents/pdfPreview";
@@ -20,15 +21,16 @@ import { readableTextColor } from "../domain/colorContrast";
 import { PLAN_PRESENTATION } from "../domain/planPresentation";
 import { blockHierarchyColor, categoryDescendantIds, categoryHierarchyColor } from "../domain/categoryTree";
 import { annotationBoundsFromDrag, createAnnotationElement, isMeaningfulAnnotationDrag, type AnnotationBounds, type AnnotationInsertTool, type AnnotationPoint } from "../domain/planAnnotations";
+import { getPaperRasterSpec, PAPER_RASTER_SPECS } from "../domain/paperRaster";
 import {
-  A0_LANDSCAPE_HEIGHT, A0_LANDSCAPE_WIDTH, clampElementToPage, createBlockAreaElement,
+  A0_LANDSCAPE_HEIGHT, A0_LANDSCAPE_WIDTH, clampElementToPage, constrainLayoutToMargins, createBlockAreaElement,
   createSectionElement, CSS_PIXELS_PER_LAYOUT_UNIT, findNextFreeBlockPosition, findNextFreeNonBlockPosition,
-  fitBlocksInArea, getBlockArea, minimumElementSize, reconcilePlanSectionsWithCatalog,
+  fitBlocksInArea, getBlockArea, getUsableCanvasBounds, layoutUnitsToMillimetres, millimetresToLayoutUnits, minimumElementSize, reconcilePlanSectionsWithCatalog,
   resizeElementFromCssMeasurement, snapToGrid, calculateBlockPresentationMetrics, calculateSectionPresentationMetrics,
   type ElementResizeMeasurement,
 } from "../domain/planLayout";
 import { BLOCK_LAYOUT_VALIDATION_RULE_CODES, createPlanValidationIssues, type PlanValidationIssue } from "../domain/planValidation";
-import type { BlockLayoutMode, BuildingBlockCategory, DocumentTemplate, Plan, PlanAnnotationStyle, PlanBlockElement, PlanConnectorPoint, PlanElement, PlanItem, PlanSection, PlanSectionElement, PlanShapeElement, PlanTextElement, Project } from "../domain/types";
+import type { BlockLayoutMode, BuildingBlockCategory, DocumentTemplate, Plan, PlanAnnotationStyle, PlanBlockElement, PlanConnectorPoint, PlanElement, PlanItem, PlanMargins, PlanPaperRaster, PlanSection, PlanSectionElement, PlanShapeElement, PlanTextElement, Project } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
 import { translate } from "../i18n/translations";
 import { newId, useApp } from "../state/AppProvider";
@@ -96,11 +98,13 @@ function isStyledAnnotationElement(element: PlanElement | undefined): element is
 
 export function PlanEditorPage() {
   const { projectId = "" } = useParams();
-  const { database, getProject, getPlanForProject, updatePlan, publishPlan, addGeneratedDocument } = useApp();
+  const { database, getProject, getPlanForProject, beginAssessment, createPlan, updatePlan, publishPlan, addGeneratedDocument } = useApp();
   const { locale, t } = useI18n();
+  const navigate = useNavigate();
   const project = getProject(projectId);
   const storedPlan = getPlanForProject(projectId);
   const [plan, setPlan] = useState<Plan | null>(storedPlan ? structuredClone(storedPlan) : null);
+  const [planCreationOpen, setPlanCreationOpen] = useState(false);
   const [past, setPast] = useState<Plan[]>([]);
   const [future, setFuture] = useState<Plan[]>([]);
   const [selected, setSelected] = useState<SelectedBlock | null>(null);
@@ -116,6 +120,7 @@ export function PlanEditorPage() {
   const [validationOpen, setValidationOpen] = useState(false);
   const [insertOpen, setInsertOpen] = useState(false);
   const [styleOpen, setStyleOpen] = useState(false);
+  const [canvasSettingsOpen, setCanvasSettingsOpen] = useState(false);
   const [activeInsertTool, setActiveInsertTool] = useState<AnnotationInsertTool | null>(null);
   const [blockFitMessage, setBlockFitMessage] = useState("");
   const [wordPlanGenerating, setWordPlanGenerating] = useState(false);
@@ -199,17 +204,18 @@ export function PlanEditorPage() {
   }, [setZoomAroundPoint, zoom]);
 
   useEffect(() => {
-    if (!validationOpen && !insertOpen && !styleOpen) return undefined;
+    if (!validationOpen && !insertOpen && !styleOpen && !canvasSettingsOpen) return undefined;
     const dismiss = (event: PointerEvent) => {
       if (!(event.target as HTMLElement | null)?.closest("[data-toolbar-popover]")) {
         setValidationOpen(false);
         setInsertOpen(false);
         setStyleOpen(false);
+        setCanvasSettingsOpen(false);
       }
     };
     document.addEventListener("pointerdown", dismiss);
     return () => document.removeEventListener("pointerdown", dismiss);
-  }, [insertOpen, styleOpen, validationOpen]);
+  }, [canvasSettingsOpen, insertOpen, styleOpen, validationOpen]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => moveableRef.current?.updateRect());
@@ -248,10 +254,11 @@ export function PlanEditorPage() {
           setActiveInsertTool(null);
           return;
         }
-        if (insertOpen || styleOpen) {
+        if (insertOpen || styleOpen || canvasSettingsOpen) {
           event.preventDefault();
           setInsertOpen(false);
           setStyleOpen(false);
+          setCanvasSettingsOpen(false);
           return;
         }
         if (validationOpenRef.current) {
@@ -343,7 +350,30 @@ export function PlanEditorPage() {
   });
 
   if (!project) return <NotFoundPage />;
-  if (!plan) return <div className="workspace-page"><EmptyState icon={<ShieldCheck />} title={t("project.noPlan")} text={t("project.noPlanText")} /></div>;
+  const projectRevisions = database.revisions.filter((revision) => revision.projectId === project.id);
+  const activateCreatedPlan = (createdPlan: Plan) => {
+    setPlan(structuredClone(createdPlan));
+    setPast([]);
+    setFuture([]);
+    setSelected(null);
+    setSelectedElementId(null);
+    setSelectedElementIds([]);
+    setPublishedIndex("");
+  };
+  const planCreationDialog = <PlanCreationDialog
+    open={planCreationOpen}
+    hasCurrentPlan={Boolean(plan)}
+    revisions={projectRevisions}
+    onClose={() => setPlanCreationOpen(false)}
+    onStartAssessment={(reason) => {
+      const run = beginAssessment(project.id, reason);
+      navigate(`/projects/${project.id}/assessment?assessmentRunId=${run.id}`);
+    }}
+    onCopyCurrent={(reason) => activateCreatedPlan(createPlan(project.id, { method: "current_plan", reason }))}
+    onCreateBlank={(reason) => activateCreatedPlan(createPlan(project.id, { method: "blank", reason }))}
+    onCreateFromRevision={(revisionId, reason) => activateCreatedPlan(createPlan(project.id, { method: "revision", revisionId, reason }))}
+  />;
+  if (!plan) return <div className="workspace-page"><EmptyState icon={<ShieldCheck />} title={t("project.noPlan")} text={t("project.noPlanText")} action={<Button onClick={() => setPlanCreationOpen(true)}><FilePlus2 size={16} />{t("planCreation.createAction")}</Button>} />{planCreationDialog}</div>;
 
   const presentBlockIds = new Set(plan.sections.flatMap((section) => section.items.map((item) => item.blockId)));
   const normalizedSearch = search.trim().toLocaleLowerCase(locale);
@@ -363,6 +393,7 @@ export function PlanEditorPage() {
   });
   const blockingValidationIssues = validationIssues.filter((issue) => issue.severity === "error");
   const warningValidationIssues = validationIssues.filter((issue) => issue.severity === "warning");
+  const usableCanvasBounds = getUsableCanvasBounds(plan.layout);
 
   const projectDocumentConfigurations = database.documentConfigurations.filter(
     (configuration) => configuration.projectId === project.id,
@@ -527,13 +558,22 @@ export function PlanEditorPage() {
       setSelected(null); setSelectedElementId(existingArea.id); setSelectedElementIds([existingArea.id]);
       return;
     }
-    const newArea = createBlockAreaElement();
+    const newArea = createBlockAreaElement("best_fit", plan.layout);
     applyPlan({ ...plan, layout: { ...plan.layout, elements: [newArea, ...plan.layout.elements] } });
     setSelected(null); setSelectedElementId(newArea.id); setSelectedElementIds([newArea.id]); setBlockFitMessage("");
   };
   const updateBlockLayoutMode = (layoutMode: BlockLayoutMode) => {
     if (!blockArea) return;
     updateElement(blockArea.id, { layoutMode } as Partial<PlanElement>);
+    setBlockFitMessage("");
+  };
+  const updatePaperRaster = (paperRaster: PlanPaperRaster) => {
+    applyPlan({ ...plan, layout: { ...plan.layout, paperRaster } });
+  };
+  const updatePlanMargins = (margins: PlanMargins) => {
+    const constrainedLayout = constrainLayoutToMargins({ ...plan.layout, margins }, margins);
+    applyPlan({ ...plan, layout: constrainedLayout });
+    setMoveableRevision((revision) => revision + 1);
     setBlockFitMessage("");
   };
   const fitBlocks = () => {
@@ -738,6 +778,10 @@ export function PlanEditorPage() {
       <div className="editor-toolbar-leading">
         <button className="icon-button" onClick={() => setLibraryOpen((open) => !open)} aria-label={t("editor.toggleLibrary")} title={t("editor.toggleLibrary")}>{libraryOpen ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />}</button>
         <div className="editor-toolbar-title"><strong>{t("editor.plan")}</strong><span>{t("editor.blocks", { count: presentBlockIds.size })} · A0 {t("editor.landscape")}</span></div>
+        <div className="toolbar-popover-wrap canvas-settings-control" data-toolbar-popover>
+          <Button variant="ghost" size="small" onClick={() => { setCanvasSettingsOpen((open) => !open); setInsertOpen(false); setStyleOpen(false); setValidationOpen(false); }} aria-expanded={canvasSettingsOpen} aria-label={t("editor.canvasSettings")} title={t("editor.canvasSettings")}><Ruler size={15} /><span className="toolbar-action-label">{t("editor.canvasSettings")}</span></Button>
+          {canvasSettingsOpen && <CanvasSettingsPopover layout={plan.layout} onRasterChange={updatePaperRaster} onMarginsChange={updatePlanMargins} t={t} />}
+        </div>
       </div>
       <div className="toolbar-selection-slot">
         {selectedElementIds.length > 0 && <div className="editor-toolbar-group selection-tools">
@@ -745,7 +789,7 @@ export function PlanEditorPage() {
           {selectedElementIds.length >= 2 && <><button className="icon-button" onClick={() => alignSelected("x")} aria-label={t("editor.alignHorizontal")} title={t("editor.alignHorizontal")}><AlignCenterHorizontal size={16} /></button><button className="icon-button" onClick={() => alignSelected("y")} aria-label={t("editor.alignVertical")} title={t("editor.alignVertical")}><AlignCenterVertical size={16} /></button></>}
           {selectedElementIds.length >= 3 && <><button className="icon-button" onClick={() => distributeSelected("x")} aria-label={t("editor.distributeHorizontal")} title={t("editor.distributeHorizontal")}><AlignHorizontalDistributeCenter size={16} /></button><button className="icon-button" onClick={() => distributeSelected("y")} aria-label={t("editor.distributeVertical")} title={t("editor.distributeVertical")}><AlignVerticalDistributeCenter size={16} /></button></>}
           {selectedAnnotation && <div className="toolbar-popover-wrap" data-toolbar-popover>
-            <button className="icon-button" onClick={() => { setStyleOpen((open) => !open); setInsertOpen(false); setValidationOpen(false); }} aria-expanded={styleOpen} aria-label={t("editor.formatAnnotation")} title={t("editor.formatAnnotation")}><Palette size={16} /></button>
+            <button className="icon-button" onClick={() => { setStyleOpen((open) => !open); setInsertOpen(false); setValidationOpen(false); setCanvasSettingsOpen(false); }} aria-expanded={styleOpen} aria-label={t("editor.formatAnnotation")} title={t("editor.formatAnnotation")}><Palette size={16} /></button>
             {styleOpen && <AnnotationStylePopover element={selectedAnnotation} onChange={updateSelectedAnnotationStyle} onBringToFront={() => moveSelectedAnnotationToLayerEdge("front")} onSendToBack={() => moveSelectedAnnotationToLayerEdge("back")} t={t} />}
           </div>}
           <button className="icon-button" onClick={() => updateSelectedElements((element) => ({ ...element, locked: !element.locked }))} aria-label={selectedElement?.locked ? t("editor.unlock") : t("editor.lock")} title={selectedElement?.locked ? t("editor.unlock") : t("editor.lock")}>{selectedElement?.locked ? <Unlock size={16} /> : <Lock size={16} />}</button>
@@ -755,7 +799,7 @@ export function PlanEditorPage() {
       </div>
       <div className="editor-toolbar-primary">
         <div className="toolbar-popover-wrap" data-toolbar-popover>
-          <Button className={activeInsertTool ? "is-active" : undefined} variant="secondary" size="small" onClick={() => { setInsertOpen((open) => !open); setStyleOpen(false); setValidationOpen(false); }} aria-expanded={insertOpen} aria-label={t("editor.insert")} title={t("editor.insert")}><Plus size={15} /><span className="toolbar-action-label">{t("editor.insert")}</span><ChevronDown className="toolbar-action-label" size={12} /></Button>
+          <Button className={activeInsertTool ? "is-active" : undefined} variant="secondary" size="small" onClick={() => { setInsertOpen((open) => !open); setStyleOpen(false); setValidationOpen(false); setCanvasSettingsOpen(false); }} aria-expanded={insertOpen} aria-label={t("editor.insert")} title={t("editor.insert")}><Plus size={15} /><span className="toolbar-action-label">{t("editor.insert")}</span><ChevronDown className="toolbar-action-label" size={12} /></Button>
           {insertOpen && <InsertAnnotationPopover onSelect={(tool) => { setActiveInsertTool(tool); setInsertOpen(false); setSelected(null); setSelectedElementId(null); setSelectedElementIds([]); setEditing(null); }} t={t} />}
         </div>
         <div className="editor-toolbar-group block-layout-tools">
@@ -768,9 +812,10 @@ export function PlanEditorPage() {
         <div className="editor-toolbar-group toolbar-viewport"><Button className="fit-plan-action" variant="ghost" size="small" onClick={fitPlan} title={`${t("editor.fitPlan")} · ⇧1`} aria-label={t("editor.fitPlan")}><Maximize2 size={15} /><span className="toolbar-action-label">{t("editor.fitPlan")}</span></Button><button className="icon-button" onClick={() => setZoomAroundPoint(stepCanvasZoom(zoom, "out"))} disabled={zoom <= MIN_CANVAS_ZOOM} aria-label={t("editor.zoomOut")} title={t("editor.zoomOut")}><ZoomOut size={17} /></button><Badge>{Math.round(zoom * 100)}%</Badge><button className="icon-button" onClick={() => setZoomAroundPoint(stepCanvasZoom(zoom, "in"))} disabled={zoom >= MAX_CANVAS_ZOOM} aria-label={t("editor.zoomIn")} title={t("editor.zoomIn")}><ZoomIn size={17} /></button></div>
       </div>
       <div className="editor-toolbar-trailing">
+        <Button className="toolbar-new-draft-action" variant="secondary" size="small" onClick={() => setPlanCreationOpen(true)} aria-label={t("planCreation.newDraft")} title={t("planCreation.newDraft")}><FilePlus2 size={14} /><span className="toolbar-action-label">{t("planCreation.newDraft")}</span></Button>
         <div className="editor-toolbar-group toolbar-history"><button className="icon-button" onClick={undo} disabled={!past.length} aria-label={`${t("editor.undo")} (⌘Z / Ctrl+Z)`} title={`${t("editor.undo")} (⌘Z / Ctrl+Z)`}><Undo2 size={16} /></button><button className="icon-button" onClick={redo} disabled={!future.length} aria-label={`${t("editor.redo")} (⇧⌘Z / Ctrl+Y)`} title={`${t("editor.redo")} (⇧⌘Z / Ctrl+Y)`}><Redo2 size={16} /></button></div>
         <div className="toolbar-popover-wrap" data-toolbar-popover>
-          <button ref={validationTriggerRef} className="button button-secondary button-small" onClick={() => { setValidationOpen((open) => !open); setInsertOpen(false); setStyleOpen(false); }} aria-expanded={validationOpen} aria-label={t("editor.validation")} title={t("editor.validation")}><TriangleAlert size={14} /><span className="toolbar-action-label">{t("editor.validation")}</span><Badge tone={blockingValidationIssues.length ? "danger" : warningValidationIssues.length ? "warning" : "success"}>{validationIssues.filter((issue) => issue.severity !== "information").length}</Badge></button>
+          <button ref={validationTriggerRef} className="button button-secondary button-small" onClick={() => { setValidationOpen((open) => !open); setInsertOpen(false); setStyleOpen(false); setCanvasSettingsOpen(false); }} aria-expanded={validationOpen} aria-label={t("editor.validation")} title={t("editor.validation")}><TriangleAlert size={14} /><span className="toolbar-action-label">{t("editor.validation")}</span><Badge tone={blockingValidationIssues.length ? "danger" : warningValidationIssues.length ? "warning" : "success"}>{validationIssues.filter((issue) => issue.severity !== "information").length}</Badge></button>
           {validationOpen && <ValidationPopover issues={validationIssues} onNavigate={navigateToIssue} t={t} />}
         </div>
         <Button className="toolbar-export-action" variant="secondary" size="small" aria-label="A0 PDF" title="A0 PDF" onClick={() => void import("../export/exports").then(({ exportPlanPdf }) => exportPlanPdf(project, plan, database.blocks, database.categories, locale, latestRevision))}>A0</Button>
@@ -833,7 +878,9 @@ export function PlanEditorPage() {
           useResizeObserver
           useMutationObserver
           draggable resizable throttleDrag={1} throttleResize={1} origin={false} keepRatio={false}
-          snappable snapGridWidth={2} snapGridHeight={2} verticalGuidelines={[0, A0_LANDSCAPE_WIDTH * CSS_PIXELS_PER_LAYOUT_UNIT / 2, A0_LANDSCAPE_WIDTH * CSS_PIXELS_PER_LAYOUT_UNIT]} horizontalGuidelines={[0, A0_LANDSCAPE_HEIGHT * CSS_PIXELS_PER_LAYOUT_UNIT / 2, A0_LANDSCAPE_HEIGHT * CSS_PIXELS_PER_LAYOUT_UNIT]}
+          snappable snapGridWidth={2} snapGridHeight={2}
+          verticalGuidelines={[usableCanvasBounds.x, usableCanvasBounds.x + usableCanvasBounds.width / 2, usableCanvasBounds.right].map((value) => value * CSS_PIXELS_PER_LAYOUT_UNIT)}
+          horizontalGuidelines={[usableCanvasBounds.y, usableCanvasBounds.y + usableCanvasBounds.height / 2, usableCanvasBounds.bottom].map((value) => value * CSS_PIXELS_PER_LAYOUT_UNIT)}
           onDragStart={() => { transformSnapshot.current = structuredClone(plan); }}
           onDrag={({ target, transform }) => { target.style.transform = transform; }}
           onDragEnd={({ target }) => { const bounds = readElementBounds(target); target.style.transform = ""; if (!bounds) return; flushSync(() => finishTransform(clampElementToPage({ ...selectedElement, x: bounds.x, y: bounds.y }, plan.layout))); setMoveableRevision((revision) => revision + 1); }}
@@ -844,11 +891,11 @@ export function PlanEditorPage() {
             const initialWidth = sessionElement.width * CSS_PIXELS_PER_LAYOUT_UNIT;
             const initialHeight = sessionElement.height * CSS_PIXELS_PER_LAYOUT_UNIT;
             const maximumWidth = (direction[0] < 0
-              ? sessionElement.x + sessionElement.width - plan.layout.safeMargin
-              : plan.layout.width - plan.layout.safeMargin - sessionElement.x) * CSS_PIXELS_PER_LAYOUT_UNIT;
+              ? sessionElement.x + sessionElement.width - usableCanvasBounds.x
+              : usableCanvasBounds.right - sessionElement.x) * CSS_PIXELS_PER_LAYOUT_UNIT;
             const maximumHeight = (direction[1] < 0
-              ? sessionElement.y + sessionElement.height - plan.layout.safeMargin
-              : plan.layout.height - plan.layout.safeMargin - sessionElement.y) * CSS_PIXELS_PER_LAYOUT_UNIT;
+              ? sessionElement.y + sessionElement.height - usableCanvasBounds.y
+              : usableCanvasBounds.bottom - sessionElement.y) * CSS_PIXELS_PER_LAYOUT_UNIT;
             set([initialWidth, initialHeight]);
             setMin([
               direction[0] === 0 ? initialWidth : minimum.width * CSS_PIXELS_PER_LAYOUT_UNIT,
@@ -924,6 +971,7 @@ export function PlanEditorPage() {
     </div>
     <Modal open={publishOpen} title={t("publish.title")} onClose={() => setPublishOpen(false)}><form onSubmit={handlePublish}><div className="modal-body"><p className="page-description">{t("publish.subtitle")}</p>{warningValidationIssues.length > 0 && <div className="publish-warning-list">{warningValidationIssues.map((issue) => <p key={issue.id}><TriangleAlert size={14} /><span><strong>{issue.title}</strong>{issue.description}</span></p>)}</div>}<div className="form-grid"><label className="field"><span>{t("publish.index")}</span><input required value={publishInput.index} onChange={(event) => setPublishInput((current) => ({ ...current, index: event.target.value }))} /></label><label className="field"><span>{t("publish.approver")}</span><input required value={publishInput.approvedBy} onChange={(event) => setPublishInput((current) => ({ ...current, approvedBy: event.target.value }))} /></label><label className="field span-two"><span>{t("publish.summary")}</span><textarea required value={publishInput.changeSummary} onChange={(event) => setPublishInput((current) => ({ ...current, changeSummary: event.target.value }))} /></label></div></div><div className="modal-footer"><Button type="button" variant="secondary" onClick={() => setPublishOpen(false)}>{t("common.cancel")}</Button><Button type="submit">{t("publish.confirm")}</Button></div></form></Modal>
     <Modal open={Boolean(pendingWordPlan)} title={t("documents.missingTitle")} onClose={() => setPendingWordPlan(null)}><div className="modal-body"><p>{t("documents.missingText")}</p><ul className="missing-placeholder-list">{pendingWordPlan?.missingPlaceholders.map((placeholder) => <li key={placeholder}><code>{`{{${placeholder}}}`}</code></li>)}</ul><p>{t("documents.missingChoice")}</p></div><div className="modal-footer"><Button variant="secondary" onClick={() => setPendingWordPlan(null)}>{t("documents.returnToProject")}</Button><Button disabled={wordPlanGenerating} onClick={() => void proceedWithMissingWordPlaceholders()}>{wordPlanGenerating ? t("documents.generating") : t("documents.proceedEmpty")}</Button></div></Modal>
+    {planCreationDialog}
   </div></DndContext>;
 }
 
@@ -1010,11 +1058,15 @@ const PlanCanvas = function PlanCanvas({ ref, plan, project, locale, zoom, block
     setNodeRef(node);
     if (typeof ref === "function") ref(node); else if (ref) ref.current = node;
   };
+  const usableArea = getUsableCanvasBounds(plan.layout);
   const pointFromPointer = (event: React.PointerEvent<HTMLDivElement>): AnnotationPoint => {
     const bounds = event.currentTarget.getBoundingClientRect();
+    const clampToUsableAxis = (value: number, minimum: number, maximum: number) => (
+      Math.min(maximum, Math.max(minimum, snapToGrid(value, plan.layout.gridSize)))
+    );
     return {
-      x: snapToGrid(Math.max(0, Math.min(plan.layout.width, (event.clientX - bounds.left) * plan.layout.width / bounds.width)), plan.layout.gridSize),
-      y: snapToGrid(Math.max(0, Math.min(plan.layout.height, (event.clientY - bounds.top) * plan.layout.height / bounds.height)), plan.layout.gridSize),
+      x: clampToUsableAxis((event.clientX - bounds.left) * plan.layout.width / bounds.width, usableArea.x, usableArea.right),
+      y: clampToUsableAxis((event.clientY - bounds.top) * plan.layout.height / bounds.height, usableArea.y, usableArea.bottom),
     };
   };
   const updateAnnotationDraft = (draft: AnnotationDraft | null) => {
@@ -1087,6 +1139,17 @@ const PlanCanvas = function PlanCanvas({ ref, plan, project, locale, zoom, block
     }}
     onPointerDown={(event) => { if (!activeInsertTool && event.target === event.currentTarget) onClearSelection(); }}
   >
+    <PaperRasterLayer format={plan.layout.paperRaster} t={t} />
+    {(plan.layout.margins.top > 0 || plan.layout.margins.right > 0 || plan.layout.margins.bottom > 0 || plan.layout.margins.left > 0) && <div
+      className="canvas-usable-area-guide"
+      aria-hidden="true"
+      style={{
+        left: usableArea.x * CSS_PIXELS_PER_LAYOUT_UNIT,
+        top: usableArea.y * CSS_PIXELS_PER_LAYOUT_UNIT,
+        width: usableArea.width * CSS_PIXELS_PER_LAYOUT_UNIT,
+        height: usableArea.height * CSS_PIXELS_PER_LAYOUT_UNIT,
+      }}
+    />}
     {plan.layout.elements.filter((element) => !element.hidden).map((element) => <PlanElementView
       key={element.id}
       element={element}
@@ -1107,6 +1170,23 @@ const PlanCanvas = function PlanCanvas({ ref, plan, project, locale, zoom, block
     {activeInsertTool && previewBounds && <AnnotationInsertPreview tool={activeInsertTool} bounds={previewBounds} />}
   </div>;
 };
+
+function PaperRasterLayer({ format, t }: { format: PlanPaperRaster; t: (key: string) => string }) {
+  const spec = getPaperRasterSpec(format);
+  if (!spec) return null;
+  const tileCount = spec.columns * spec.rows;
+  return <div
+    className="paper-size-raster"
+    data-paper-raster={spec.format}
+    aria-hidden="true"
+    style={{
+      gridTemplateColumns: `repeat(${spec.columns}, minmax(0, 1fr))`,
+      gridTemplateRows: `repeat(${spec.rows}, minmax(0, 1fr))`,
+    }}
+  >
+    {Array.from({ length: tileCount }, (_, index) => <span key={index}><small>{spec.format} · {t(`editor.${spec.orientation}`)}</small></span>)}
+  </div>;
+}
 
 function AnnotationInsertPreview({ tool, bounds }: { tool: AnnotationInsertTool; bounds: AnnotationBounds }) {
   const style: React.CSSProperties = {
@@ -1240,6 +1320,58 @@ function InsertAnnotationPopover({ onSelect, t }: { onSelect: (tool: AnnotationI
   return <div className="toolbar-popover insert-popover" role="menu" aria-label={t("editor.insert")}>
     <div className="toolbar-popover-heading"><strong>{t("editor.insert")}</strong><span>{t("editor.insertHelp")}</span></div>
     <div className="insert-tool-list">{tools.map(({ tool, icon, shortcut }) => <button type="button" role="menuitem" key={tool} onClick={() => onSelect(tool)}>{icon}<span>{t(`editor.shape.${tool}`)}</span>{shortcut && <kbd>{shortcut}</kbd>}</button>)}</div>
+  </div>;
+}
+
+const PLAN_MARGIN_SIDES: Array<keyof PlanMargins> = ["top", "right", "bottom", "left"];
+
+function CanvasSettingsPopover({ layout, onRasterChange, onMarginsChange, t }: {
+  layout: Plan["layout"];
+  onRasterChange: (paperRaster: PlanPaperRaster) => void;
+  onMarginsChange: (margins: PlanMargins) => void;
+  t: (key: string, params?: Record<string, string | number>) => string;
+}) {
+  const [marginsLinked, setMarginsLinked] = useState(
+    PLAN_MARGIN_SIDES.every((side) => layout.margins[side] === layout.margins.top),
+  );
+  const updateMargin = (side: keyof PlanMargins, rawMillimetres: string) => {
+    const millimetres = Number(rawMillimetres);
+    if (!Number.isFinite(millimetres)) return;
+    const layoutUnits = millimetresToLayoutUnits(Math.max(0, millimetres));
+    if (marginsLinked) {
+      onMarginsChange({ top: layoutUnits, right: layoutUnits, bottom: layoutUnits, left: layoutUnits });
+      return;
+    }
+    onMarginsChange({ ...layout.margins, [side]: layoutUnits });
+  };
+
+  return <div className="toolbar-popover canvas-settings-popover" role="dialog" aria-label={t("editor.canvasSettings")}>
+    <div className="toolbar-popover-heading"><strong>{t("editor.canvasSettings")}</strong><span>{t("editor.canvasSettingsHelp")}</span></div>
+    <section className="canvas-settings-section">
+      <div className="canvas-settings-section-heading"><Grid3X3 size={15} /><span><strong>{t("editor.paperRaster")}</strong><small>{t("editor.paperRasterHelp")}</small></span></div>
+      <select value={layout.paperRaster} onChange={(event) => onRasterChange(event.target.value as PlanPaperRaster)} aria-label={t("editor.paperRaster")}>
+        <option value="none">{t("editor.paperRasterNone")}</option>
+        {PAPER_RASTER_SPECS.map((spec) => <option key={spec.format} value={spec.format}>{t("editor.paperRasterOption", {
+          format: spec.format,
+          orientation: t(`editor.${spec.orientation}`),
+          columns: spec.columns,
+          rows: spec.rows,
+        })}</option>)}
+      </select>
+    </section>
+    <section className="canvas-settings-section">
+      <div className="canvas-settings-section-heading"><Ruler size={15} /><span><strong>{t("editor.pageMargins")}</strong><small>{t("editor.pageMarginsHelp")}</small></span><button type="button" className={marginsLinked ? "is-active" : ""} aria-pressed={marginsLinked} aria-label={t("editor.linkMargins")} title={t("editor.linkMargins")} onClick={() => setMarginsLinked((linked) => !linked)}><Link2 size={14} /></button></div>
+      <div className="page-margin-fields">
+        {PLAN_MARGIN_SIDES.map((side) => <label key={side}><span>{t(`editor.margin.${side}`)}</span><span className="margin-input-shell"><input
+          type="number"
+          min="0"
+          step="1"
+          value={Number(layoutUnitsToMillimetres(layout.margins[side]).toFixed(1))}
+          onChange={(event) => updateMargin(side, event.target.value)}
+          aria-label={`${t(`editor.margin.${side}`)} (${t("editor.millimetres")})`}
+        /><small>{t("editor.millimetres")}</small></span></label>)}
+      </div>
+    </section>
   </div>;
 }
 

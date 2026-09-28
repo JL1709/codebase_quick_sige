@@ -20,7 +20,7 @@ export function DashboardPage() {
   }), [database.projects, query, status]);
 
   const activeCount = database.projects.filter((project) => project.status !== "archived").length;
-  const draftCount = database.plans.filter((plan) => plan.status === "draft").length;
+  const draftCount = database.plans.filter((plan) => plan.status === "draft" && !plan.supersededAt).length;
   const stats = [
     { label: t("dashboard.stat.active"), value: activeCount, icon: FolderKanban },
     { label: t("dashboard.stat.drafts"), value: draftCount, icon: ClipboardList },

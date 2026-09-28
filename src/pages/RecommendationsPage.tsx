@@ -1,6 +1,6 @@
 import { ArrowLeft, ArrowRight, CheckCircle2, ShieldAlert, TriangleAlert } from "lucide-react";
 import { useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { BlockVisual } from "../components/BlockVisual";
 import { Badge, Button, PageHeader, Toggle } from "../components/Ui";
 import { blockHierarchyColor } from "../domain/categoryTree";
@@ -18,26 +18,30 @@ function strengthTone(strength: RecommendationStrength): "danger" | "warning" | 
 
 export function RecommendationsPage() {
   const { projectId = "" } = useParams();
-  const { database, getProject, getAssessment, createPlan } = useApp();
+  const { database, getProject, getAssessmentRun, getLatestAssessmentRun, createPlan } = useApp();
   const { locale, t } = useI18n();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const project = getProject(projectId);
-  const assessment = getAssessment(projectId);
-  const initialRecommendations = useMemo(() => project ? generateRecommendations(project, assessment) : [], [project, assessment]);
+  const requestedRun = getAssessmentRun(searchParams.get("assessmentRunId") ?? "");
+  const assessmentRun = requestedRun?.projectId === projectId ? requestedRun : getLatestAssessmentRun(projectId);
+  const assessment = assessmentRun?.answers;
+  const initialRecommendations = useMemo(() => project && assessment ? generateRecommendations(project, assessment) : [], [project, assessment]);
   const [recommendations, setRecommendations] = useState(initialRecommendations);
   if (!project) return <NotFoundPage />;
+  if (!assessmentRun?.completedAt || !assessment) return <NotFoundPage />;
   const requirement = assessRequirements(project, assessment);
   const blockMap = new Map(database.blocks.map((block) => [block.id, block]));
   const includedCount = recommendations.filter((recommendation) => recommendation.included).length;
 
   const handleCreate = () => {
-    createPlan(project.id, recommendations);
+    createPlan(project.id, { method: "guided_assessment", assessmentRunId: assessmentRun.id, recommendations });
     navigate(`/projects/${project.id}/plan`);
   };
 
   return (
     <div className="page page-narrow">
-      <PageHeader eyebrow={t("recommendations.eyebrow")} title={t("recommendations.title")} description={t("recommendations.subtitle", { count: recommendations.length })} action={<Link to={`/projects/${project.id}/assessment`}><Button variant="ghost"><ArrowLeft size={16} />{t("common.back")}</Button></Link>} />
+      <PageHeader eyebrow={t("recommendations.eyebrow")} title={t("recommendations.title")} description={t("recommendations.subtitle", { count: recommendations.length })} action={<Link to={`/projects/${project.id}/assessment?assessmentRunId=${assessmentRun.id}`}><Button variant="ghost"><ArrowLeft size={16} />{t("common.back")}</Button></Link>} />
       <section className="requirement-card">
         <div><h3>{t("recommendations.requirementTitle")}</h3><p>{t("recommendations.indicative")}</p></div>
         <div className="requirement-flags">

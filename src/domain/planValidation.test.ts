@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createSeedDatabase } from "../data/seed";
 import { BLOCK_LAYOUT_VALIDATION_RULE_CODES, createPlanValidationIssues } from "./planValidation";
-import { fitBlocksInArea, reconcilePlanSectionsWithCatalog } from "./planLayout";
+import { fitBlocksInArea, getUsableCanvasBounds, reconcilePlanSectionsWithCatalog } from "./planLayout";
 
 const t = (key: string, params?: Record<string, string | number>) => `${key}${params ? `:${Object.values(params).join(":")}` : ""}`;
 
@@ -58,7 +58,7 @@ describe("plan validation", () => {
     element.x = -100;
     const before = createPlanValidationIssues({ plan, project: database.projects[0], blocks: database.blocks, documentConfigurations: database.documentConfigurations, documentTemplates: database.documentTemplates, locale: database.user.preferredLocale, t });
     expect(before.some((issue) => issue.id === `LAYOUT_OUTSIDE_SAFE_AREA:${element.id}`)).toBe(true);
-    element.x = plan.layout.safeMargin;
+    element.x = getUsableCanvasBounds(plan.layout).x;
     const after = createPlanValidationIssues({ plan, project: database.projects[0], blocks: database.blocks, documentConfigurations: database.documentConfigurations, documentTemplates: database.documentTemplates, locale: database.user.preferredLocale, t });
     expect(after.some((issue) => issue.id === `LAYOUT_OUTSIDE_SAFE_AREA:${element.id}`)).toBe(false);
     expect(after.some((issue) => issue.id === "PLAN_REVIEW_REQUIRED")).toBe(true);

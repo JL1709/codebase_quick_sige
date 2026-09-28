@@ -119,6 +119,7 @@ export function createPlanFromAssessment(
   blocks: BuildingBlock[],
   categories: BuildingBlockCategory[],
   existingRecommendations?: Recommendation[],
+  provenance: Plan["provenance"] = { method: "guided_assessment", createdByName: "" },
 ): Plan {
   const now = new Date().toISOString();
   const recommendations = existingRecommendations ?? generateRecommendations(project, answers);
@@ -140,6 +141,7 @@ export function createPlanFromAssessment(
     id: `plan-${project.id}`,
     projectId: project.id,
     status: "draft",
+    provenance,
     sections,
     layout: createLayoutFromSections(sections, categories, blocks),
     recommendations,

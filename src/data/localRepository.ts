@@ -5,6 +5,7 @@ import { categoryPlacementIds, normalizeCategoryColorOwnership } from "../domain
 import { legacyProjectOverviewSections } from "../domain/projectOverview";
 import type {
   AppDatabase,
+  AssessmentAnswers,
   BuildingBlock,
   BuildingBlockCategory,
   CustomField,
@@ -15,6 +16,7 @@ import type {
   Participant,
   Plan,
   Project,
+  ProjectAssessmentRun,
 } from "../domain/types";
 import { z } from "zod";
 
@@ -22,13 +24,16 @@ export const STORAGE_KEY = "quicksige.database.v3";
 const LEGACY_STORAGE_KEYS = ["quicksige.prototype.database.v2"];
 export const BACKUP_KEY = "quicksige.database.migration-backup.v2";
 export const MIGRATION_ERROR_KEY = "quicksige.database.migration-error";
-export const CURRENT_SCHEMA_VERSION = 23;
+export const CURRENT_SCHEMA_VERSION = 25;
+const CATEGORY_HIERARCHY_SCHEMA_VERSION = 24;
+const MIGRATION_FALLBACK_TIMESTAMP = new Date(0).toISOString();
 
 const persistedDatabaseSchema = z.object({
   schemaVersion: z.number().int().nonnegative(),
   organization: z.object({ id: z.string(), name: z.string(), accentColor: z.string() }),
   user: z.object({ id: z.string(), organizationId: z.string(), name: z.string(), email: z.string(), role: z.enum(["owner", "admin", "editor", "viewer"]), preferredLocale: z.enum(["de", "en"]) }),
   projects: z.array(z.object({ id: z.string() }).passthrough()),
+  assessmentRuns: z.array(z.object({ id: z.string(), projectId: z.string() }).passthrough()),
   blocks: z.array(z.object({ id: z.string() }).passthrough()),
   categories: z.array(z.object({ id: z.string() }).passthrough()),
   plans: z.array(z.object({ id: z.string(), projectId: z.string() }).passthrough()),
@@ -58,7 +63,16 @@ type PersistedBuildingBlock = BuildingBlock & {
 };
 
 type PersistedProject = Project & { documentLocale?: Locale };
-type PersistedPlan = Plan & { documentLocale?: Locale; title?: string };
+type PersistedPlan = Omit<Plan, "provenance"> & {
+  documentLocale?: Locale;
+  title?: string;
+  provenance?: Plan["provenance"];
+};
+
+type PersistedDatabase = Omit<AppDatabase, "assessmentRuns"> & {
+  assessmentRuns?: ProjectAssessmentRun[];
+  assessments?: Record<string, AssessmentAnswers>;
+};
 
 type PersistedOverviewTemplate = Partial<OverviewTemplate> & Pick<OverviewTemplate, "id" | "organizationId" | "name" | "createdAt" | "updatedAt"> & {
   kind?: "project_details" | "emergency_contacts" | "participants" | "custom_section";
@@ -113,12 +127,17 @@ function migrateProject(project: PersistedProject, locale: Locale): Project {
   };
 }
 
-function migratePlan(plan: PersistedPlan): Plan {
+function migratePlan(plan: PersistedPlan, createdByName = "", sourceAssessmentRunId?: string): Plan {
   const planWithoutLegacyLocale = { ...plan };
   Reflect.deleteProperty(planWithoutLegacyLocale, "documentLocale");
   Reflect.deleteProperty(planWithoutLegacyLocale, "title");
   return ensurePlanLayout({
     ...planWithoutLegacyLocale,
+    provenance: plan.provenance ?? {
+      method: "guided_assessment",
+      createdByName,
+      sourceAssessmentRunId,
+    },
     supportingDocuments: plan.supportingDocuments ?? [],
     includedAssetIds: plan.includedAssetIds ?? [],
   });
@@ -130,7 +149,7 @@ function migratePlanCategoryHierarchy(
   blocks: BuildingBlock[],
   sourceSchemaVersion: number,
 ): Plan {
-  if (sourceSchemaVersion >= CURRENT_SCHEMA_VERSION) return plan;
+  if (sourceSchemaVersion >= CATEGORY_HIERARCHY_SCHEMA_VERSION) return plan;
   const sections = reconcilePlanSectionsWithCatalog(plan.sections, categories, blocks);
   const fitted = fitBlocksInArea(plan.layout, sections, categories, blocks);
   return {
@@ -287,12 +306,37 @@ function normalizeBlockPlacement(block: BuildingBlock, categories: BuildingBlock
 
 export function migrateDatabase(value: unknown): AppDatabase | null {
   if (!isDatabase(value)) return null;
-  const source = value as AppDatabase;
+  const source = value as PersistedDatabase;
   const defaults = createSeedDatabase();
   const locale = source.user?.preferredLocale ?? defaults.user.preferredLocale;
   const organization = { ...defaults.organization, ...source.organization } as typeof source.organization & { defaultLocale?: Locale };
   Reflect.deleteProperty(organization, "defaultLocale");
   const projects = source.projects.map((project) => migrateProject(project as PersistedProject, locale));
+  const projectById = new Map(projects.map((project) => [project.id, project]));
+  const legacyAssessments = source.assessments ?? {};
+  const assessmentRuns = (source.assessmentRuns?.length
+    ? source.assessmentRuns
+    : Object.entries(legacyAssessments).map(([projectId, answers]): ProjectAssessmentRun => {
+      const project = projectById.get(projectId);
+      return {
+        id: `assessment-${projectId}-legacy`,
+        projectId,
+        definitionVersion: 1,
+        answers,
+        createdByName: source.user?.name ?? defaults.user.name,
+        createdAt: project?.createdAt ?? MIGRATION_FALLBACK_TIMESTAMP,
+        updatedAt: project?.updatedAt ?? MIGRATION_FALLBACK_TIMESTAMP,
+        completedAt: project?.updatedAt ?? MIGRATION_FALLBACK_TIMESTAMP,
+      };
+    }))
+    .filter((run) => projectById.has(run.projectId))
+    .map((run) => ({
+      ...run,
+      definitionVersion: run.definitionVersion ?? 1,
+      createdByName: run.createdByName ?? source.user?.name ?? defaults.user.name,
+      createdAt: run.createdAt ?? projectById.get(run.projectId)?.createdAt ?? MIGRATION_FALLBACK_TIMESTAMP,
+      updatedAt: run.updatedAt ?? run.createdAt ?? projectById.get(run.projectId)?.updatedAt ?? MIGRATION_FALLBACK_TIMESTAMP,
+    }));
   const sourceCategories = (source.categories ?? []).map(migrateCategory);
   const sourceCategoryIds = new Set(sourceCategories.map((category) => category.id));
   const categories = [...sourceCategories, ...defaults.categories.filter((category) => !sourceCategoryIds.has(category.id))];
@@ -300,9 +344,21 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
     .map(migrateBlock)
     .map((block) => correctDefaultCategoryAssignment(block, source.schemaVersion ?? 0))
     .map((block) => normalizeBlockPlacement(block, categories));
-  const plans = (source.plans ?? [])
-    .map((plan) => migratePlan(plan as PersistedPlan))
+  const migratedPlans = (source.plans ?? [])
+    .map((plan) => migratePlan(
+      plan as PersistedPlan,
+      source.user?.name ?? defaults.user.name,
+      assessmentRuns.find((run) => run.projectId === plan.projectId && run.completedAt)?.id,
+    ))
     .map((plan) => migratePlanCategoryHierarchy(plan, categories, blocks, source.schemaVersion ?? 0));
+  const activeProjectIds = new Set<string>();
+  const plans = migratedPlans.map((plan) => {
+    if (plan.supersededAt || !activeProjectIds.has(plan.projectId)) {
+      if (!plan.supersededAt) activeProjectIds.add(plan.projectId);
+      return plan;
+    }
+    return { ...plan, supersededAt: plan.updatedAt };
+  });
   const documentTemplates = (source.documentTemplates ?? defaults.documentTemplates)
     .filter((template) => template.origin === "custom" || template.documentType === "a4_plan")
     .map((template) => ({
@@ -312,12 +368,15 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
       revision: template.revision ?? 1,
     }));
   const documentTemplateIds = new Set(documentTemplates.map((template) => template.id));
+  const sourceWithoutLegacyAssessments = { ...source };
+  Reflect.deleteProperty(sourceWithoutLegacyAssessments, "assessments");
   const migrated: AppDatabase = {
     ...defaults,
-    ...source,
+    ...sourceWithoutLegacyAssessments,
     schemaVersion: CURRENT_SCHEMA_VERSION,
     organization,
     projects,
+    assessmentRuns,
     blocks,
     categories,
     plans,
@@ -326,7 +385,7 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
       const snapshotBlocks = (revision.snapshot.blocks ?? source.blocks)
         .map(migrateBlock)
         .map((block) => normalizeBlockPlacement(block, snapshotCategories));
-      const snapshotPlan = migratePlan(revision.snapshot.plan as PersistedPlan);
+      const snapshotPlan = migratePlan(revision.snapshot.plan as PersistedPlan, source.user?.name ?? defaults.user.name);
       return {
         ...revision,
         snapshot: {
@@ -351,12 +410,12 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
     documentConfigurations: (source.documentConfigurations ?? []).filter((configuration) => documentTemplateIds.has(configuration.templateId)),
     generatedDocuments: (source.generatedDocuments ?? []).map((document) => {
       const project = projects.find((candidate) => candidate.id === document.projectId) ?? projects[0];
-      const plan = plans.find((candidate) => candidate.projectId === document.projectId);
+      const plan = plans.find((candidate) => candidate.projectId === document.projectId && !candidate.supersededAt);
       return {
         ...document,
         templateRevision: document.templateRevision ?? 1,
         projectSnapshot: migrateProject((document.projectSnapshot ?? structuredClone(project)) as PersistedProject, locale),
-        planSnapshot: document.planSnapshot ? migratePlan(document.planSnapshot as PersistedPlan) : plan ? structuredClone(plan) : undefined,
+        planSnapshot: document.planSnapshot ? migratePlan(document.planSnapshot as PersistedPlan, source.user?.name ?? defaults.user.name) : plan ? structuredClone(plan) : undefined,
         language: document.language ?? locale,
         dependencyFingerprint: document.dependencyFingerprint ?? "legacy",
         stale: document.stale ?? true,

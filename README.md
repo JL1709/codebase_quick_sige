@@ -21,9 +21,9 @@ The browser starts with the supplied project **Logistikzentrum West**. Structure
 ## Suggested acceptance walkthrough
 
 1. Open **Logistikzentrum West** and review the project facts, participants, and contact data.
-2. Open **Guided assessment**, change a few hazards, and save the answers.
-3. Review the automatic recommendations. Each suggestion includes its reason and can be included or excluded.
-4. Generate the plan and open the editor.
+2. Open **Safety plan** and choose **Create new draft → Guided project assessment**.
+3. Change a few hazards and review the automatic recommendations. Each suggestion includes its reason and can be included or excluded.
+4. Generate the plan and continue in the editor. The same dialog can also start empty, copy the current plan, or create a draft from a published revision.
 5. Add emergency contacts and open **Documents** to attach a validated PNG, JPG, or PDF project file to the plan.
 6. Search the categorized block library, drag blocks to exact A0 positions, resize them, and edit their visible title or description without changing the catalog default.
 7. Run validation and publish a named revision.
@@ -39,6 +39,8 @@ You can also create a completely new project from the dashboard. The seeded data
 - Independent UI and document languages
 - Recursive German/English building-block categories, multi-category assignment, and full catalog management
 - Adaptive project assessment and indicative BaustellV requirement evaluation
+- Versioned assessment runs and traceable plan origins without a separate assessment workspace tab
+- One active working plan per project with preserved superseded drafts and immutable published revisions
 - Deterministic, explainable recommendation engine
 - Automatic plan composition followed by a physical A0 WYSIWYG editor with drag, resize, snapping, and undo/redo
 - Validated PNG/JPG/PDF project assets and real document elements that can be positioned on the A0 page

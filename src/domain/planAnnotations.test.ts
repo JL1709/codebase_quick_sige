@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createLayoutFromSections } from "./planLayout";
+import { createLayoutFromSections, getUsableCanvasBounds } from "./planLayout";
 import { annotationBoundsFromDrag, createAnnotationElement, isMeaningfulAnnotationDrag } from "./planAnnotations";
 
 describe("plan annotations", () => {
@@ -48,10 +48,11 @@ describe("plan annotations", () => {
 
   it("creates styled annotations within the physical page", () => {
     const layout = createLayoutFromSections([]);
+    const usableArea = getUsableCanvasBounds(layout);
     const element = createAnnotationElement("callout", "callout-1", layout, { x: 11_000, y: 8_000, width: 2_000, height: 900 });
     expect(element.kind).toBe("shape");
-    expect(element.x + element.width).toBeLessThanOrEqual(layout.width - layout.safeMargin);
-    expect(element.y + element.height).toBeLessThanOrEqual(layout.height - layout.safeMargin);
+    expect(element.x + element.width).toBeLessThanOrEqual(usableArea.right);
+    expect(element.y + element.height).toBeLessThanOrEqual(usableArea.bottom);
     expect(element.fillColor).toBe("#fff4b8");
   });
 
@@ -65,12 +66,14 @@ describe("plan annotations", () => {
     expect(element.connectorEnd).toEqual({ x: 0, y: 1 });
   });
 
-  it("limits oversized drag bounds to the printable page", () => {
-    const layout = createLayoutFromSections([]);
+  it("limits oversized drag bounds to the configured usable area", () => {
+    const source = createLayoutFromSections([]);
+    const layout = { ...source, margins: { top: 100, right: 200, bottom: 300, left: 400 } };
+    const usableArea = getUsableCanvasBounds(layout);
     const element = createAnnotationElement("rectangle", "rectangle-1", layout, { x: 0, y: 0, width: layout.width, height: layout.height });
-    expect(element.width).toBe(layout.width - layout.safeMargin * 2);
-    expect(element.height).toBe(layout.height - layout.safeMargin * 2);
-    expect(element.x).toBe(layout.safeMargin);
-    expect(element.y).toBe(layout.safeMargin);
+    expect(element.width).toBe(usableArea.width);
+    expect(element.height).toBe(usableArea.height);
+    expect(element.x).toBe(usableArea.x);
+    expect(element.y).toBe(usableArea.y);
   });
 });
