@@ -1333,7 +1333,13 @@ test("responsive plan toolbar stays contained and selection keeps the canvas sta
   const selectionTools = page.locator(".selection-tools");
   await expect(selectionTools).toBeVisible();
   await expect(selectionTools).toHaveText("");
-  expect((await selectionTools.boundingBox())?.width ?? Number.POSITIVE_INFINITY).toBeLessThan(160);
+  const selectionToolsBounds = await selectionTools.boundingBox();
+  const selectedCanvasLayoutBounds = await canvasLayoutButton.boundingBox();
+  expect(selectionToolsBounds?.width ?? Number.POSITIVE_INFINITY).toBeLessThan(160);
+  expect(selectionToolsBounds).not.toBeNull();
+  expect(selectedCanvasLayoutBounds).not.toBeNull();
+  expect(selectionToolsBounds!.x + selectionToolsBounds!.width).toBeLessThanOrEqual(selectedCanvasLayoutBounds!.x + 1);
+  await expect(primaryToolbar.locator(":scope > .selection-tools")).toBeVisible();
   const firstSelection = await readCanvasViewport();
   await blocks.nth(1).click({ force: true });
   await settleLayout();

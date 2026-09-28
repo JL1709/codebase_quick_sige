@@ -801,13 +801,12 @@ button.plan-creation-option:hover { background: white; border-color: #9fb8ae; tr
 /* Physical A0 WYSIWYG editor */
 .project-workspace-content:has(.editor-page) { min-width: 0; overflow: hidden; container: plan-workspace / inline-size; }
 .editor-page { --editor-toolbar-height: 58px; min-width: 0; height: calc(100vh - 115px); grid-template-rows: var(--editor-toolbar-height) minmax(0, 1fr); }
-.editor-toolbar { width: 100%; max-width: 100%; min-width: 0; height: var(--editor-toolbar-height); display: grid; grid-template-areas: "leading selection primary trailing"; grid-template-columns: minmax(175px, 1fr) minmax(0, 450px) max-content max-content; align-items: center; gap: 7px; padding-inline: 12px; overflow: visible; }
+.editor-toolbar { width: 100%; max-width: 100%; min-width: 0; height: var(--editor-toolbar-height); display: grid; grid-template-areas: "leading primary trailing"; grid-template-columns: minmax(175px, 1fr) max-content max-content; align-items: center; gap: 7px; padding-inline: 12px; overflow: visible; }
 .editor-toolbar .button { white-space: nowrap; }
 .editor-toolbar-leading { min-width: 0; display: flex; grid-area: leading; align-items: center; gap: 7px; }
 .editor-toolbar-leading .editor-toolbar-title { min-width: 0; flex: 1 1 auto; max-width: none; margin: 0; }
 .toolbar-history { flex: 0 0 auto; }
-.toolbar-selection-slot { width: 100%; max-width: 450px; min-width: 0; min-height: 42px; display: flex; grid-area: selection; align-items: center; }
-.editor-toolbar-primary { min-width: 0; display: flex; grid-area: primary; align-items: center; gap: 7px; }
+.editor-toolbar-primary { min-width: 0; display: flex; grid-area: primary; align-items: center; justify-content: flex-end; gap: 7px; }
 .editor-toolbar-trailing { min-width: 0; display: flex; grid-area: trailing; align-items: center; justify-content: flex-end; gap: 6px; }
 .toolbar-export-action { min-width: 38px !important; padding-inline: 9px !important; font-weight: 850; letter-spacing: .025em; }
 .block-layout-tools { padding: 3px; background: #f2f6f4; border-radius: 9px; }
@@ -885,10 +884,9 @@ textarea.canvas-inline-editor { min-height: 34px; resize: none; }
 .editor-word-message { top: calc(var(--editor-toolbar-height) + 16px); }
 
 @container plan-workspace (max-width: 1900px) {
-  .editor-toolbar { grid-template-columns: minmax(145px, 1fr) minmax(0, 260px) max-content max-content; gap: 5px; padding-inline: 8px; }
+  .editor-toolbar { grid-template-columns: minmax(145px, 1fr) max-content max-content; gap: 5px; padding-inline: 8px; }
   .editor-toolbar .toolbar-action-label { display: none; }
   .editor-toolbar .button-small { min-width: 32px; justify-content: center; padding-inline: 8px; }
-  .toolbar-selection-slot { max-width: 260px; }
   .block-layout-mode-select { max-width: 120px; }
 }
 
@@ -896,38 +894,28 @@ textarea.canvas-inline-editor { min-height: 34px; resize: none; }
   .editor-page { --editor-toolbar-height: 100px; }
   .editor-toolbar {
     grid-template-areas:
-      "leading primary trailing"
-      "selection selection selection";
-    grid-template-columns: minmax(145px, 1fr) max-content max-content;
+      "leading trailing"
+      "primary primary";
+    grid-template-columns: minmax(145px, 1fr) max-content;
     grid-template-rows: 42px 42px;
     align-content: center;
     row-gap: 4px;
   }
-  .toolbar-selection-slot { max-width: none; }
 }
 
 @container plan-workspace (max-width: 900px) {
-  .editor-page { --editor-toolbar-height: 142px; }
-  .editor-toolbar {
-    grid-template-areas:
-      "leading trailing"
-      "primary primary"
-      "selection selection";
-    grid-template-columns: minmax(130px, 1fr) max-content;
-    grid-template-rows: repeat(3, 42px);
-  }
+  .editor-toolbar { grid-template-columns: minmax(130px, 1fr) max-content; }
 }
 
 @container plan-workspace (max-width: 560px) {
-  .editor-page { --editor-toolbar-height: 226px; }
+  .editor-page { --editor-toolbar-height: 184px; }
   .editor-toolbar {
     grid-template-areas:
       "leading"
       "trailing"
-      "primary"
-      "selection";
+      "primary";
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: 42px 42px 84px 42px;
+    grid-template-rows: 42px 42px 84px;
   }
   .editor-toolbar-primary { flex-wrap: wrap; align-content: center; gap: 4px; }
   .editor-toolbar-trailing { justify-content: flex-start; }

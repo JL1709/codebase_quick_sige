@@ -831,7 +831,7 @@ export function PlanEditorPage() {
         <button className="icon-button" onClick={() => setLibraryOpen((open) => !open)} aria-label={t("editor.toggleLibrary")} title={t("editor.toggleLibrary")}>{libraryOpen ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />}</button>
         <div className="editor-toolbar-title"><strong>{t("editor.plan")}</strong><span>{t("editor.blocks", { count: presentBlockIds.size })} · A0 {t("editor.landscape")}</span></div>
       </div>
-      <div className="toolbar-selection-slot">
+      <div className="editor-toolbar-primary">
         {selectedElementIds.length > 0 && <div className="editor-toolbar-group selection-tools" role="toolbar" aria-label={selectedElementIds.length === 1 ? selectedElementLabel : t("editor.selectedCount", { count: selectedElementIds.length })}>
           {selectedElementIds.length >= 2 && <><button className="icon-button" onClick={() => alignSelected("x")} aria-label={t("editor.alignHorizontal")} title={t("editor.alignHorizontal")}><AlignCenterHorizontal size={16} /></button><button className="icon-button" onClick={() => alignSelected("y")} aria-label={t("editor.alignVertical")} title={t("editor.alignVertical")}><AlignCenterVertical size={16} /></button></>}
           {selectedElementIds.length >= 3 && <><button className="icon-button" onClick={() => distributeSelected("x")} aria-label={t("editor.distributeHorizontal")} title={t("editor.distributeHorizontal")}><AlignHorizontalDistributeCenter size={16} /></button><button className="icon-button" onClick={() => distributeSelected("y")} aria-label={t("editor.distributeVertical")} title={t("editor.distributeVertical")}><AlignVerticalDistributeCenter size={16} /></button></>}
@@ -843,8 +843,6 @@ export function PlanEditorPage() {
           <button className="icon-button" onClick={duplicateSelectedElements} aria-label={t("common.duplicate")} title={t("common.duplicate")}><Copy size={16} /></button>
           <button className="icon-button" onClick={removeSelectedElements} disabled={selectedElementIds.every((id) => plan.layout.elements.find((candidate) => candidate.id === id)?.kind === "title_block")} aria-label={t("editor.remove")} title={t("editor.remove")}><Trash2 size={16} /></button>
         </div>}
-      </div>
-      <div className="editor-toolbar-primary">
         <div className="toolbar-popover-wrap canvas-settings-control" data-toolbar-popover>
           <Button variant="ghost" size="small" onClick={() => { setCanvasSettingsOpen((open) => !open); setInsertOpen(false); setStyleOpen(false); setValidationOpen(false); }} aria-expanded={canvasSettingsOpen} aria-label={t("editor.canvasSettings")} title={t("editor.canvasSettings")}><Ruler size={15} /><span className="toolbar-action-label">{t("editor.canvasSettings")}</span></Button>
           {canvasSettingsOpen && <CanvasSettingsPopover layout={plan.layout} onRasterChange={updatePaperRaster} onMarginsChange={updatePlanMargins} t={t} />}
