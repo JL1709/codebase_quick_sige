@@ -18,7 +18,9 @@ import { renderPdfPage } from "../documents/pdfPreview";
 import { hydrateBlockImages } from "../domain/blockImages";
 import { calculateAnchoredScroll, calculateFitZoom, clampCanvasZoom, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, stepCanvasZoom } from "../domain/canvasViewport";
 import { readableTextColor } from "../domain/colorContrast";
+import { createCanvasClipboard, pasteCanvasClipboard, type CanvasClipboardSnapshot } from "../domain/planClipboard";
 import { PLAN_PRESENTATION } from "../domain/planPresentation";
+import { normalizedPdfPageNumbers, pdfPageMetadata, projectAssetPlacementDimensions } from "../domain/projectAssetPlacement";
 import { blockHierarchyColor, categoryDescendantIds, categoryHierarchyColor } from "../domain/categoryTree";
 import { annotationBoundsFromDrag, createAnnotationElement, isMeaningfulAnnotationDrag, type AnnotationBounds, type AnnotationInsertTool, type AnnotationPoint } from "../domain/planAnnotations";
 import { getPaperRasterSpec, PAPER_RASTER_SPECS } from "../domain/paperRaster";
@@ -30,7 +32,7 @@ import {
   type ElementResizeMeasurement,
 } from "../domain/planLayout";
 import { BLOCK_LAYOUT_VALIDATION_RULE_CODES, createPlanValidationIssues, type PlanValidationIssue } from "../domain/planValidation";
-import type { BlockLayoutMode, BuildingBlockCategory, DocumentTemplate, Plan, PlanAnnotationStyle, PlanBlockElement, PlanConnectorPoint, PlanElement, PlanItem, PlanMargins, PlanPaperRaster, PlanSection, PlanSectionElement, PlanShapeElement, PlanTextElement, Project } from "../domain/types";
+import type { BlockLayoutMode, BuildingBlockCategory, DocumentTemplate, Plan, PlanAnnotationStyle, PlanAssetElement, PlanBlockElement, PlanConnectorPoint, PlanElement, PlanItem, PlanMargins, PlanPaperRaster, PlanSection, PlanSectionElement, PlanShapeElement, PlanTextElement, Project, ProjectAsset } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
 import { translate } from "../i18n/translations";
 import { newId, useApp } from "../state/AppProvider";
@@ -135,6 +137,7 @@ export function PlanEditorPage() {
   });
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const canvasShellRef = useRef<HTMLElement | null>(null);
+  const canvasClipboardRef = useRef<CanvasClipboardSnapshot | null>(null);
   const moveableRef = useRef<{ updateRect: () => void } | null>(null);
   const validationTriggerRef = useRef<HTMLButtonElement | null>(null);
   const validationOpenRef = useRef(validationOpen);
@@ -241,12 +244,37 @@ export function PlanEditorPage() {
     if (!plan || !future.length) return;
     const next = future[0]; setFuture((items) => items.slice(1)); setPast((items) => [...items, structuredClone(plan)]); setPlan(next); updatePlan(next); setSelected(null); setSelectedElementId(null); setSelectedElementIds([]);
   };
+  const copySelectedCanvasElements = () => {
+    if (!plan) return false;
+    const clipboard = createCanvasClipboard(plan, selectedElementIds);
+    if (!clipboard) return false;
+    canvasClipboardRef.current = clipboard;
+    return true;
+  };
+  const pasteCopiedCanvasElements = () => {
+    if (!plan || !canvasClipboardRef.current) return false;
+    const result = pasteCanvasClipboard(plan, canvasClipboardRef.current, newId);
+    if (!result) return false;
+    canvasClipboardRef.current = result.clipboard;
+    applyPlan(result.plan);
+    const primary = result.plan.layout.elements.find((element) => element.id === result.pastedElementIds.at(-1));
+    setEditing(null);
+    setSelectedElementIds(result.pastedElementIds);
+    setSelectedElementId(primary?.id ?? null);
+    setSelected(primary?.kind === "block"
+      ? { sectionId: primary.sectionId, itemId: primary.itemId, elementId: primary.id }
+      : null);
+    return true;
+  };
+  const duplicateSelectedElements = () => {
+    if (copySelectedCanvasElements()) pasteCopiedCanvasElements();
+  };
   useEffect(() => { window.localStorage.setItem("quicksige.plan-library.expanded", JSON.stringify([...expandedCategories])); }, [expandedCategories]);
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const command = event.metaKey || event.ctrlKey;
       const target = event.target as HTMLElement | null;
-      if (target?.matches("input, textarea, select, [contenteditable='true']")) return;
+      if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
       const key = event.key.toLowerCase();
       if (event.key === "Escape") {
         if (activeInsertTool) {
@@ -270,6 +298,14 @@ export function PlanEditorPage() {
         if (publishOpen) return;
         if (selectedElementIds.length || editing) event.preventDefault();
         setEditing(null); setSelected(null); setSelectedElementId(null); setSelectedElementIds([]);
+        return;
+      }
+      if (command && key === "c") {
+        if (copySelectedCanvasElements()) event.preventDefault();
+        return;
+      }
+      if (command && key === "v") {
+        if (pasteCopiedCanvasElements()) event.preventDefault();
         return;
       }
       if (command && (key === "z" || key === "y")) {
@@ -352,6 +388,7 @@ export function PlanEditorPage() {
   if (!project) return <NotFoundPage />;
   const projectRevisions = database.revisions.filter((revision) => revision.projectId === project.id);
   const activateCreatedPlan = (createdPlan: Plan) => {
+    canvasClipboardRef.current = null;
     setPlan(structuredClone(createdPlan));
     setPast([]);
     setFuture([]);
@@ -519,12 +556,48 @@ export function PlanEditorPage() {
     setSelectedElementId(element.id);
     setSelectedElementIds([element.id]);
   };
-  const addAsset = (assetId: string, requestedPosition?: { x: number; y: number }) => {
+  const addAssetPages = (assetId: string, requestedPageNumbers: number[], requestedCenter?: { x: number; y: number }) => {
     const asset = project.assets.find((candidate) => candidate.id === assetId); if (!asset) return;
-    const free = findNextFreeNonBlockPosition(plan.layout, 2_500, 1_600);
-    const element = clampElementToPage({ id: newId("layout-asset"), kind: asset.mimeType === "application/pdf" ? "pdf_page" : "image", assetId, pageNumber: asset.mimeType === "application/pdf" ? 1 : undefined, x: requestedPosition?.x ?? free.x, y: requestedPosition?.y ?? free.y, width: free.width, height: free.height, zIndex: 700 + plan.layout.elements.length, semanticOrder: Math.max(0, ...plan.layout.elements.map((candidate) => candidate.semanticOrder ?? 0)) + 1 }, plan.layout);
-    applyPlan({ ...plan, includedAssetIds: [...new Set([...plan.includedAssetIds, assetId])], layout: { ...plan.layout, elements: [...plan.layout.elements, element] } });
-    setSelectedElementId(element.id); setSelectedElementIds([element.id]); setSelected(null);
+    const pageNumbers = asset.mimeType === "application/pdf"
+      ? normalizedPdfPageNumbers(asset, requestedPageNumbers)
+      : [undefined];
+    if (pageNumbers.length === 0) return;
+    const startingSemanticOrder = Math.max(0, ...plan.layout.elements.map((candidate) => candidate.semanticOrder ?? 0));
+    const insertedElements: PlanAssetElement[] = [];
+    let workingLayout = plan.layout;
+    pageNumbers.forEach((pageNumber, index) => {
+      const dimensions = projectAssetPlacementDimensions(asset, pageNumber);
+      const free = findNextFreeNonBlockPosition(workingLayout, dimensions.width, dimensions.height);
+      const requestedPosition = index === 0 && requestedCenter
+        ? { x: requestedCenter.x - dimensions.width / 2, y: requestedCenter.y - dimensions.height / 2 }
+        : undefined;
+      const element = clampElementToPage({
+        id: newId("layout-asset"),
+        kind: asset.mimeType === "application/pdf" ? "pdf_page" : "image",
+        assetId,
+        pageNumber,
+        fitMode: "contain",
+        x: snapToGrid(requestedPosition?.x ?? free.x),
+        y: snapToGrid(requestedPosition?.y ?? free.y),
+        width: free.width,
+        height: free.height,
+        zIndex: 700 + plan.layout.elements.length + index,
+        semanticOrder: startingSemanticOrder + index + 1,
+      }, workingLayout) as PlanAssetElement;
+      insertedElements.push(element);
+      workingLayout = { ...workingLayout, elements: [...workingLayout.elements, element] };
+    });
+    applyPlan({
+      ...plan,
+      includedAssetIds: [...new Set([...plan.includedAssetIds, assetId])],
+      layout: workingLayout,
+    });
+    setSelectedElementId(insertedElements.at(-1)?.id ?? null);
+    setSelectedElementIds(insertedElements.map((element) => element.id));
+    setSelected(null);
+  };
+  const addAsset = (assetId: string, requestedCenter?: { x: number; y: number }) => {
+    addAssetPages(assetId, [1], requestedCenter);
   };
   const addAnnotation = (tool: AnnotationInsertTool, bounds?: AnnotationBounds) => {
     const element = createAnnotationElement(tool, newId(`layout-${tool}`), plan.layout, bounds);
@@ -537,9 +610,10 @@ export function PlanEditorPage() {
     }
   };
   const addLibraryItem = (id: string, position?: { x: number; y: number }) => {
-    const [kind, value] = id.split(":", 2);
+    const [kind, value, page] = id.split(":", 3);
     if (kind === "block") addBlock(value);
     else if (kind === "asset") addAsset(value, position);
+    else if (kind === "pdf-page") addAssetPages(value, [Number(page)], position);
   };
   const handleDragEnd = (event: DragEndEvent) => {
     if (event.over?.id !== "plan-canvas" || !event.active.rect.current.translated || !canvasRef.current) return;
@@ -547,7 +621,7 @@ export function PlanEditorPage() {
     const translated = event.active.rect.current.translated;
     const x = (translated.left + translated.width / 2 - canvasRect.left) * plan.layout.width / canvasRect.width;
     const y = (translated.top + translated.height / 2 - canvasRect.top) * plan.layout.height / canvasRect.height;
-    addLibraryItem(String(event.active.id), { x: snapToGrid(x - 1_150), y: snapToGrid(y - 360) });
+    addLibraryItem(String(event.active.id), { x: snapToGrid(x), y: snapToGrid(y) });
   };
   const updateElement = (elementId: string, patch: Partial<PlanElement>) => {
     applyPlan({ ...plan, layout: { ...plan.layout, elements: plan.layout.elements.map((element) => element.id === elementId ? { ...element, ...patch } as PlanElement : element) } });
@@ -729,25 +803,6 @@ export function PlanEditorPage() {
       : Math.max(1, Math.min(700, ...otherElements.map((element) => element.zIndex)) - 1);
     updateElement(selectedAnnotation.id, { zIndex: nextZIndex });
   };
-  const duplicateSelectedElements = () => {
-    const selectedElements = plan.layout.elements.filter((element) => selectedElementIds.includes(element.id));
-    if (!selectedElements.length) return;
-    let sections = plan.sections;
-    const duplicates: PlanElement[] = [];
-    selectedElements.forEach((element) => {
-      if (element.kind === "block") {
-        const item = sections.find((section) => section.id === element.sectionId)?.items.find((candidate) => candidate.id === element.itemId);
-        if (!item) return;
-        const duplicateItem = { ...structuredClone(item), id: newId("item") };
-        sections = sections.map((section) => section.id === element.sectionId ? { ...section, items: [...section.items, duplicateItem] } : section);
-        duplicates.push(clampElementToPage({ ...element, id: newId("layout-block"), itemId: duplicateItem.id, x: element.x + plan.layout.gridSize * 4, y: element.y + plan.layout.gridSize * 4, zIndex: element.zIndex + 1 }, plan.layout));
-      } else if (element.kind !== "title_block" && element.kind !== "header" && element.kind !== "block_area") {
-        duplicates.push(clampElementToPage({ ...structuredClone(element), id: newId(`layout-${element.kind}`), x: element.x + plan.layout.gridSize * 4, y: element.y + plan.layout.gridSize * 4, zIndex: element.zIndex + 1 }, plan.layout));
-      }
-    });
-    applyPlan({ ...plan, sections, layout: { ...plan.layout, elements: [...plan.layout.elements, ...duplicates] } });
-    setSelectedElementIds(duplicates.map((element) => element.id)); setSelectedElementId(duplicates.at(-1)?.id ?? null);
-  };
   const alignSelected = (axis: "x" | "y") => {
     const elements = plan.layout.elements.filter((element) => selectedElementIds.includes(element.id) && !element.locked); if (elements.length < 2) return;
     const center = elements.reduce((total, element) => total + (axis === "x" ? element.x + element.width / 2 : element.y + element.height / 2), 0) / elements.length;
@@ -826,7 +881,7 @@ export function PlanEditorPage() {
     {publishedIndex && <span className="save-indicator is-published"><CheckCircle2 size={13} />{t("publish.success", { index: publishedIndex })}</span>}
     {wordPlanMessage && <div className={`asset-message editor-word-message is-${wordPlanMessage.tone}`} role={wordPlanMessage.tone === "danger" ? "alert" : "status"}>{wordPlanMessage.text}</div>}
     <div className="editor-workspace">
-      {libraryOpen && <aside className="editor-sidebar"><div className="editor-pane-header"><div className="editor-pane-heading"><h2>{t("editor.catalog")}</h2></div><div className="search-shell"><Search size={15} /><input className="search-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("editor.searchBlocks")} aria-label={t("editor.searchBlocks")} /></div></div><div className="editor-library"><CategoryLibrary categories={database.categories.filter((category) => category.lifecycle === "active")} blocks={activeBlocks} expanded={expandedCategories} locale={locale} presentBlockIds={presentBlockIds} onToggle={(id) => setExpandedCategories((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; })} onAdd={(id) => addBlock(id)} t={t} /><LibraryGroup title={t("editor.projectFiles")} defaultOpen>{project.assets.filter((asset) => asset.mimeType.startsWith("image/") || asset.mimeType === "application/pdf").map((asset) => <DraggableLibraryItem key={asset.id} id={`asset:${asset.id}`} title={asset.filename} subtitle={asset.mimeType === "application/pdf" ? t("editor.pdfPageOne") : t("editor.imageFile")} icon={asset.mimeType === "application/pdf" ? <FileOutput size={16} /> : <Image size={16} />} onAdd={() => addAsset(asset.id)} addLabel={t("common.add")} />)}</LibraryGroup></div></aside>}
+      {libraryOpen && <aside className="editor-sidebar"><div className="editor-pane-header"><div className="editor-pane-heading"><h2>{t("editor.catalog")}</h2></div><div className="search-shell"><Search size={15} /><input className="search-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("editor.searchBlocks")} aria-label={t("editor.searchBlocks")} /></div></div><div className="editor-library"><CategoryLibrary categories={database.categories.filter((category) => category.lifecycle === "active")} blocks={activeBlocks} expanded={expandedCategories} locale={locale} presentBlockIds={presentBlockIds} onToggle={(id) => setExpandedCategories((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; })} onAdd={(id) => addBlock(id)} t={t} /><LibraryGroup title={t("editor.projectFiles")} defaultOpen><ProjectDocumentsLibrary assets={project.assets.filter((asset) => asset.mimeType.startsWith("image/") || asset.mimeType === "application/pdf")} onAddAsset={addAsset} onAddPdfPages={addAssetPages} t={t} /></LibraryGroup></div></aside>}
       <main ref={canvasShellRef} className="editor-canvas-shell">
         {blockFitMessage && <div className="block-fit-message" role="status"><TriangleAlert size={14} />{blockFitMessage}</div>}
         <div className="canvas-stage" style={{ width: A0_LANDSCAPE_WIDTH * CSS_PIXELS_PER_LAYOUT_UNIT * zoom, height: A0_LANDSCAPE_HEIGHT * CSS_PIXELS_PER_LAYOUT_UNIT * zoom }}>
@@ -1019,6 +1074,102 @@ function CategoryLibrary({ categories, blocks, expanded, locale, presentBlockIds
 }
 
 function LibraryGroup({ title, children, defaultOpen = false }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) { const [open, setOpen] = useState(defaultOpen); return <div className="library-group"><button className="library-category-header" onClick={() => setOpen((value) => !value)}>{open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<strong>{title}</strong></button>{open && <div className="library-category-blocks">{children}</div>}</div>; }
+
+function ProjectDocumentsLibrary({ assets, onAddAsset, onAddPdfPages, t }: {
+  assets: ProjectAsset[];
+  onAddAsset: (assetId: string) => void;
+  onAddPdfPages: (assetId: string, pageNumbers: number[]) => void;
+  t: (key: string, params?: Record<string, string | number>) => string;
+}) {
+  return <>{assets.map((asset) => {
+    if (asset.mimeType !== "application/pdf") {
+      return <DraggableLibraryItem key={asset.id} id={`asset:${asset.id}`} title={asset.filename} subtitle={t("editor.imageFile")} icon={<Image size={16} />} onAdd={() => onAddAsset(asset.id)} addLabel={t("common.add")} />;
+    }
+    if ((asset.pageCount ?? 1) <= 1) {
+      return <DraggableLibraryItem key={asset.id} id={`pdf-page:${asset.id}:1`} title={asset.filename} subtitle={t("editor.singlePagePdf")} icon={<FileOutput size={16} />} onAdd={() => onAddPdfPages(asset.id, [1])} addLabel={t("common.add")} />;
+    }
+    return <PdfDocumentLibraryItem key={asset.id} asset={asset} onAddPages={(pages) => onAddPdfPages(asset.id, pages)} t={t} />;
+  })}</>;
+}
+
+function PdfDocumentLibraryItem({ asset, onAddPages, t }: {
+  asset: ProjectAsset;
+  onAddPages: (pageNumbers: number[]) => void;
+  t: (key: string, params?: Record<string, string | number>) => string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [selectedPages, setSelectedPages] = useState<Set<number>>(new Set());
+  const pageNumbers = Array.from({ length: Math.max(1, asset.pageCount ?? 1) }, (_, index) => index + 1);
+  const togglePage = (pageNumber: number) => setSelectedPages((current) => {
+    const next = new Set(current);
+    if (next.has(pageNumber)) next.delete(pageNumber); else next.add(pageNumber);
+    return next;
+  });
+  const placeSelectedPages = () => {
+    const pages = [...selectedPages].sort((first, second) => first - second);
+    if (pages.length === 0) return;
+    onAddPages(pages);
+    setSelectedPages(new Set());
+  };
+  return <section className={`pdf-library-document ${open ? "is-open" : ""}`}>
+    <button type="button" className="pdf-library-document-toggle" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+      {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+      <FileOutput size={16} />
+      <span><strong>{asset.filename}</strong><small>{t("editor.pageCount", { count: pageNumbers.length })}</small></span>
+    </button>
+    {open && <div className="pdf-page-picker">
+      <div className="pdf-page-picker-actions">
+        <Button variant="ghost" size="small" onClick={() => setSelectedPages(new Set(pageNumbers))}>{t("editor.selectAllPages")}</Button>
+        <Button variant="secondary" size="small" disabled={selectedPages.size === 0} onClick={placeSelectedPages}>{t("editor.placeSelectedPages", { count: selectedPages.size })}</Button>
+      </div>
+      <div className="pdf-page-list">
+        {pageNumbers.map((pageNumber) => <PdfPageLibraryItem key={pageNumber} asset={asset} pageNumber={pageNumber} selected={selectedPages.has(pageNumber)} onToggle={() => togglePage(pageNumber)} onAdd={() => onAddPages([pageNumber])} t={t} />)}
+      </div>
+      <Button className="pdf-place-all" variant="secondary" size="small" onClick={() => onAddPages(pageNumbers)}>{t("editor.placeAllPages", { count: pageNumbers.length })}</Button>
+    </div>}
+  </section>;
+}
+
+function PdfPageLibraryItem({ asset, pageNumber, selected, onToggle, onAdd, t }: {
+  asset: ProjectAsset;
+  pageNumber: number;
+  selected: boolean;
+  onToggle: () => void;
+  onAdd: () => void;
+  t: (key: string, params?: Record<string, string | number>) => string;
+}) {
+  const draggableId = `pdf-page:${asset.id}:${pageNumber}`;
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: draggableId });
+  const page = pdfPageMetadata(asset, pageNumber);
+  const orientation = page && page.width > page.height ? t("editor.landscape") : t("editor.portrait");
+  return <article ref={setNodeRef} className={`pdf-page-item ${selected ? "is-selected" : ""} ${isDragging ? "is-dragging" : ""}`} style={{ transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined }}>
+    <label className="pdf-page-selector"><input type="checkbox" checked={selected} onChange={onToggle} aria-label={t("editor.selectPdfPage", { page: pageNumber, name: asset.filename })} /></label>
+    <button type="button" className="pdf-page-drag-handle" {...attributes} {...listeners}>
+      <PdfPageThumbnail asset={asset} pageNumber={pageNumber} t={t} />
+      <span><strong>{t("editor.pageLabel", { page: pageNumber })}</strong><small>{orientation}</small></span>
+    </button>
+    <button type="button" className="icon-button" onClick={onAdd} aria-label={t("editor.addPdfPage", { page: pageNumber, name: asset.filename })} title={t("editor.addPdfPage", { page: pageNumber, name: asset.filename })}><Plus size={13} /></button>
+  </article>;
+}
+
+function PdfPageThumbnail({ asset, pageNumber, t }: { asset: ProjectAsset; pageNumber: number; t: (key: string) => string }) {
+  const containerRef = useRef<HTMLSpanElement | null>(null);
+  const [visible, setVisible] = useState(() => typeof IntersectionObserver === "undefined");
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || visible || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (!entry?.isIntersecting) return;
+      setVisible(true);
+      observer.disconnect();
+    }, { rootMargin: "80px" });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [visible]);
+  return <span ref={containerRef} className="pdf-page-thumbnail">
+    {visible ? <CanvasAssetImage asset={asset} pdfPage pageNumber={pageNumber} previewWidth={180} t={t} /> : <FileOutput size={14} />}
+  </span>;
+}
 
 function DraggableLibraryItem({ id, title, subtitle, icon, compact = false, indent, added = false, onAdd, addLabel, addedLabel = addLabel }: { id: string; title: string; subtitle?: string; icon?: React.ReactNode; compact?: boolean; indent?: number; added?: boolean; onAdd: () => void; addLabel: string; addedLabel?: string }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id, disabled: added });
@@ -1420,17 +1571,21 @@ function ValidationPopover({ issues, onNavigate, t }: { issues: PlanValidationIs
   </div>;
 }
 
-function CanvasAssetImage({ asset, pdfPage, pageNumber, fitMode, crop, t }: { asset: Project["assets"][number]; pdfPage: boolean; pageNumber?: number; fitMode?: "contain" | "cover"; crop?: { x: number; y: number; width: number; height: number }; t: (key: string) => string }) {
+function CanvasAssetImage({ asset, pdfPage, pageNumber, fitMode, crop, previewWidth = 1_200, t }: { asset: Project["assets"][number]; pdfPage: boolean; pageNumber?: number; fitMode?: "contain" | "cover"; crop?: { x: number; y: number; width: number; height: number }; previewWidth?: number; t: (key: string) => string }) {
   const [url, setUrl] = useState(pdfPage ? asset.previewDataUrl : asset.dataUrl);
   useEffect(() => {
     let active = true;
     let objectUrl: string | undefined;
     const resolvePreview = async () => {
-      if (pdfPage && asset.blobId && (pageNumber ?? 1) > 1) {
-        const blob = await getBlob(asset.blobId); if (blob) return renderPdfPage(blob, pageNumber ?? 1);
+      const requestedPdfPage = pageNumber ?? 1;
+      if (pdfPage && requestedPdfPage === 1 && (asset.previewBlobId || asset.previewDataUrl)) {
+        return blobObjectUrl(asset.previewBlobId, asset.previewDataUrl);
       }
-      if (pdfPage && asset.dataUrl && (pageNumber ?? 1) > 1) {
-        return renderPdfPage(await (await fetch(asset.dataUrl)).blob(), pageNumber ?? 1);
+      if (pdfPage && asset.blobId) {
+        const blob = await getBlob(asset.blobId); if (blob) return renderPdfPage(blob, pageNumber ?? 1, previewWidth);
+      }
+      if (pdfPage && asset.dataUrl) {
+        return renderPdfPage(await (await fetch(asset.dataUrl)).blob(), pageNumber ?? 1, previewWidth);
       }
       return blobObjectUrl(pdfPage ? asset.previewBlobId : asset.blobId, pdfPage ? asset.previewDataUrl : asset.dataUrl);
     };
@@ -1439,6 +1594,6 @@ function CanvasAssetImage({ asset, pdfPage, pageNumber, fitMode, crop, t }: { as
       objectUrl = next; setUrl(next);
     });
     return () => { active = false; if (objectUrl?.startsWith("blob:")) URL.revokeObjectURL(objectUrl); };
-  }, [asset, pdfPage, pageNumber]);
+  }, [asset, pdfPage, pageNumber, previewWidth]);
   return url ? <img src={url} alt={asset.filename} style={{ objectFit: fitMode ?? "contain", objectPosition: `${crop?.x ?? 50}% ${crop?.y ?? 50}%` }} /> : <div className="pdf-page-placeholder"><FileOutput size={28} /><strong>{asset.filename}</strong><span>PDF · {t("editor.page")} {pageNumber ?? 1}</span></div>;
 }

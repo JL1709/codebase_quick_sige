@@ -72,9 +72,17 @@ export interface ProjectAsset {
   dataUrl?: string;
   previewDataUrl?: string;
   pageCount?: number;
+  /** Native PDF page dimensions. They preserve page orientation and aspect ratio without rasterizing the source. */
+  pdfPages?: PdfPageMetadata[];
   width?: number;
   height?: number;
   createdAt: string;
+}
+
+export interface PdfPageMetadata {
+  pageNumber: number;
+  width: number;
+  height: number;
 }
 
 export interface ProjectDocumentFolder {

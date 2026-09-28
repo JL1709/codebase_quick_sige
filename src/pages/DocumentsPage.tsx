@@ -120,6 +120,7 @@ export function DocumentsPage() {
         blobId,
         previewBlobId,
         pageCount: pdfInspection?.pageCount,
+        pdfPages: pdfInspection?.pages,
         createdAt: new Date().toISOString(),
       };
       updateProject({ ...project, assets: [asset, ...project.assets] });

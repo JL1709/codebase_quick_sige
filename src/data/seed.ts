@@ -477,7 +477,19 @@ const demoProject: Project = {
   overviewSections: [],
   assets: [
     { id: "asset-site-image", filename: "baustellenlage.png", mimeType: "image/png", byteSize: 70, dataUrl: demoImageDataUrl, width: 800, height: 450, createdAt },
-    { id: "asset-multipage-plan", filename: "lageplan-zweiseitig.pdf", mimeType: "application/pdf", byteSize: 3_600, dataUrl: demoPdfDataUrl, pageCount: 2, createdAt },
+    {
+      id: "asset-multipage-plan",
+      filename: "lageplan-zweiseitig.pdf",
+      mimeType: "application/pdf",
+      byteSize: 3_600,
+      dataUrl: demoPdfDataUrl,
+      pageCount: 2,
+      pdfPages: [
+        { pageNumber: 1, width: 595.28, height: 841.89 },
+        { pageNumber: 2, width: 595.28, height: 841.89 },
+      ],
+      createdAt,
+    },
   ],
   documentFolders: [],
   createdAt,

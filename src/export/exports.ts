@@ -17,6 +17,7 @@ import { hydrateBlockImages } from "../domain/blockImages";
 import { blockHierarchyColor, categoryHierarchyColor } from "../domain/categoryTree";
 import { calculateBlockPresentationMetrics, calculateSectionPresentationMetrics } from "../domain/planLayout";
 import { PLAN_MILLIMETRES_PER_CANVAS_PIXEL, PLAN_PRESENTATION } from "../domain/planPresentation";
+import { containDimensions } from "../domain/projectAssetPlacement";
 import type {
   BuildingBlock,
   BuildingBlockCategory,
@@ -31,6 +32,9 @@ const ARROW_HEAD_LENGTH_MM = 8;
 const ARROW_HEAD_HALF_ANGLE_RADIANS = Math.PI / 6;
 const PDF_POINT_TO_MILLIMETRES = 25.4 / 72;
 const PDF_POINTS_PER_MILLIMETRE = 1 / PDF_POINT_TO_MILLIMETRES;
+const PDF_EXPORT_RASTER_DPI = 300;
+const MINIMUM_PDF_EXPORT_WIDTH_PX = 1_200;
+const MAXIMUM_PDF_EXPORT_WIDTH_PX = 6_000;
 
 export function planCanvasFontSizeToPdfPoints(canvasFontSize: number): number {
   return canvasFontSize * PLAN_MILLIMETRES_PER_CANVAS_PIXEL * PDF_POINTS_PER_MILLIMETRE;
@@ -106,6 +110,7 @@ export function buildPlanPdf(
   locale: Locale,
   revision?: PlanRevision,
   assetPreviewByElement: Map<string, string> = new Map(),
+  pdfPageAspectRatioByElement: Map<string, number> = new Map(),
 ): jsPDF {
   const pdf = new jsPDF({ orientation: "landscape", unit: "mm", format: "a0", compress: true });
   const blockMap = getBlockMap(blocks);
@@ -270,7 +275,11 @@ export function buildPlanPdf(
       const asset = assets.get(element.assetId); if (!asset) continue;
       const preview = assetPreviewByElement.get(element.id) ?? asset.previewDataUrl;
       if (preview) {
-        try { pdf.addImage(preview, "PNG", x, y, width, height, undefined, "FAST"); continue; } catch { /* Fall back to a labelled placeholder for legacy assets without a decodable preview. */ }
+        const pageMetadata = asset.pdfPages?.find((page) => page.pageNumber === (element.pageNumber ?? 1));
+        const sourceAspectRatio = pdfPageAspectRatioByElement.get(element.id)
+          ?? (pageMetadata ? pageMetadata.width / pageMetadata.height : 1 / Math.SQRT2);
+        const contained = containDimensions(width, height, sourceAspectRatio);
+        try { pdf.addImage(preview, "PNG", x + contained.x, y + contained.y, contained.width, contained.height, undefined, "FAST"); continue; } catch { /* Fall back to a labelled placeholder for legacy assets without a decodable preview. */ }
       }
       pdf.setDrawColor(174, 189, 183); pdf.setFillColor(244, 247, 245); pdf.roundedRect(x, y, width, height, 3, 3, "FD"); pdf.setTextColor(73, 93, 85); pdf.setFontSize(planCanvasFontSizeToPdfPoints(9)); pdf.text(pdf.splitTextToSize(asset.filename, width - 14), x + width / 2, y + height / 2, { align: "center" });
     } else if (element.kind === "document") {
@@ -350,6 +359,7 @@ export async function exportPlanPdf(
     previewDataUrl: await blobDataUrl(asset.previewBlobId, asset.previewDataUrl),
   })));
   const assetPreviewByElement = new Map<string, string>();
+  const pdfPageAspectRatioByElement = new Map<string, number>();
   const imageElements = plan.layout.elements.filter((element): element is PlanAssetElement => element.kind === "image" && element.fitMode === "cover");
   await Promise.all(imageElements.map(async (element) => {
     const asset = project.assets.find((candidate) => candidate.id === element.assetId); if (!asset) return;
@@ -364,21 +374,41 @@ export async function exportPlanPdf(
   const pdfPageElements = plan.layout.elements.filter(
     (element): element is PlanAssetElement => element.kind === "pdf_page",
   );
-  const renderPdfPage = pdfPageElements.length > 0
-    ? (await import("../documents/pdfPreview")).renderPdfPage
+  const renderPdfPagesWithMetadata = pdfPageElements.length > 0
+    ? (await import("../documents/pdfPreview")).renderPdfPagesWithMetadata
     : undefined;
-  await Promise.all(pdfPageElements.map(async (element) => {
-    const asset = project.assets.find((candidate) => candidate.id === element.assetId);
+  const pdfElementsByAsset = new Map<string, PlanAssetElement[]>();
+  pdfPageElements.forEach((element) => pdfElementsByAsset.set(
+    element.assetId,
+    [...(pdfElementsByAsset.get(element.assetId) ?? []), element],
+  ));
+  await Promise.all([...pdfElementsByAsset.entries()].map(async ([assetId, elements]) => {
+    const asset = project.assets.find((candidate) => candidate.id === assetId);
     if (!asset?.blobId && !asset?.dataUrl) return;
     const blob = asset.blobId ? await getBlob(asset.blobId) : await (await fetch(asset.dataUrl as string)).blob(); if (!blob) return;
-    if (!renderPdfPage) return;
+    if (!renderPdfPagesWithMetadata) return;
     try {
-      assetPreviewByElement.set(element.id, await renderPdfPage(blob, element.pageNumber ?? 1));
+      const renderedPages = await renderPdfPagesWithMetadata(blob, elements.map((element) => {
+        const elementWidthMillimetres = element.width / 10;
+        return {
+          pageNumber: element.pageNumber ?? 1,
+          targetWidth: Math.min(
+            MAXIMUM_PDF_EXPORT_WIDTH_PX,
+            Math.max(MINIMUM_PDF_EXPORT_WIDTH_PX, Math.ceil(elementWidthMillimetres / 25.4 * PDF_EXPORT_RASTER_DPI)),
+          ),
+        };
+      }));
+      elements.forEach((element, index) => {
+        const renderedPage = renderedPages[index];
+        if (!renderedPage) return;
+        assetPreviewByElement.set(element.id, renderedPage.dataUrl);
+        pdfPageAspectRatioByElement.set(element.id, renderedPage.width / renderedPage.height);
+      });
     } catch {
       // Keep the labelled PDF placeholder when a source page cannot be decoded.
     }
   }));
-  buildPlanPdf({ ...project, assets }, plan, blocksWithImages, categories, locale, revision, assetPreviewByElement)
+  buildPlanPdf({ ...project, assets }, plan, blocksWithImages, categories, locale, revision, assetPreviewByElement, pdfPageAspectRatioByElement)
     .save(`${safeFilename(project.projectNumber)}-sige-plan-${revision?.index ?? "draft"}.pdf`);
 }
 

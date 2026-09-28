@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { Document, Packer, Paragraph } from "docx";
+import { jsPDF } from "jspdf";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 async function useEnglishInterface(page: Page) {
@@ -1327,6 +1328,80 @@ test("contextual toolbar covers every seeded canvas element family and drag sele
   expect(Math.abs((controls!.y + controls!.height / 2) - (after!.y + after!.height / 2))).toBeLessThan(8);
 });
 
+test("multi-page project PDFs expose page previews and place selected pages independently", async ({ page }) => {
+  await useEnglishInterface(page);
+  await page.goto("/projects/project-logistics-center/documents");
+  const sourcePdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  sourcePdf.text("Portrait page", 20, 20);
+  sourcePdf.addPage("a4", "landscape");
+  sourcePdf.text("Landscape page", 20, 20);
+  sourcePdf.addPage("a4", "portrait");
+  sourcePdf.text("Second portrait page", 20, 20);
+  sourcePdf.addPage("a4", "portrait");
+  sourcePdf.text("Third portrait page", 20, 20);
+  const sourcePdfBuffer = Buffer.from(sourcePdf.output("arraybuffer"));
+  await page.locator(".overview-heading").getByRole("button", { name: "Upload file" }).click();
+  const uploadDialog = page.getByRole("dialog", { name: "Upload project file" });
+  await uploadDialog.getByLabel("File").setInputFiles({
+    name: "traffic-phasing.pdf",
+    mimeType: "application/pdf",
+    buffer: sourcePdfBuffer,
+  });
+  await uploadDialog.getByRole("button", { name: "Upload file" }).click();
+  await expect(page.getByRole("article").filter({ hasText: "traffic-phasing.pdf" })).toBeVisible();
+  const uploadedAsset = await page.evaluate(() => {
+    const database = JSON.parse(window.localStorage.getItem("quicksige.database.v3") ?? "{}") as {
+      projects?: Array<{ id: string; assets: Array<{ id: string; filename: string; pageCount?: number; pdfPages?: Array<{ pageNumber: number; width: number; height: number }> }> }>;
+    };
+    return database.projects?.find((project) => project.id === "project-logistics-center")?.assets.find((asset) => asset.filename === "traffic-phasing.pdf");
+  });
+  expect(uploadedAsset?.pageCount).toBe(4);
+  expect(uploadedAsset?.pdfPages?.map((pdfPage) => pdfPage.width > pdfPage.height ? "landscape" : "portrait")).toEqual(["portrait", "landscape", "portrait", "portrait"]);
+
+  await page.goto("/projects/project-logistics-center/plan");
+
+  const pdfDocument = page.getByRole("button", { name: /traffic-phasing\.pdf.*4 pages available/i });
+  await expect(pdfDocument).toBeVisible();
+  await pdfDocument.click();
+  await expect(page.getByRole("button", { name: "Page 1 Portrait" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Page 2 Landscape" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Page 3 Portrait" })).toBeVisible();
+  const pageListOverflow = await page.locator(".pdf-page-list").evaluate((pageList) => ({
+    clientHeight: pageList.clientHeight,
+    scrollHeight: pageList.scrollHeight,
+    clientWidth: pageList.clientWidth,
+    scrollWidth: pageList.scrollWidth,
+  }));
+  expect(pageListOverflow.scrollWidth).toBe(pageListOverflow.clientWidth);
+  expect(pageListOverflow.scrollHeight).toBeGreaterThan(pageListOverflow.clientHeight);
+  expect(pageListOverflow.clientHeight).toBeLessThanOrEqual(184);
+
+  await page.getByRole("button", { name: "Select all" }).click();
+  await page.getByRole("button", { name: "Place selected (4)" }).click();
+
+  await expect.poll(() => page.evaluate(() => {
+    const database = JSON.parse(window.localStorage.getItem("quicksige.database.v3") ?? "{}") as {
+      plans?: Array<{ projectId: string; layout: { elements: Array<{ kind: string; assetId?: string; pageNumber?: number; width: number; height: number }> } }>;
+    };
+    const project = (JSON.parse(window.localStorage.getItem("quicksige.database.v3") ?? "{}") as { projects?: Array<{ id: string; assets: Array<{ id: string; filename: string }> }> }).projects?.find((candidate) => candidate.id === "project-logistics-center");
+    const assetId = project?.assets.find((asset) => asset.filename === "traffic-phasing.pdf")?.id;
+    const plan = database.plans?.find((candidate) => candidate.projectId === "project-logistics-center");
+    return plan?.layout.elements
+      .filter((element) => element.kind === "pdf_page" && element.assetId === assetId)
+      .map((element) => ({ pageNumber: element.pageNumber, portrait: element.height > element.width }));
+  })).toEqual([
+    { pageNumber: 1, portrait: true },
+    { pageNumber: 2, portrait: false },
+    { pageNumber: 3, portrait: true },
+    { pageNumber: 4, portrait: true },
+  ]);
+
+  const insertedPdfPages = page.locator('[data-element-id^="layout-asset"]');
+  await expect(insertedPdfPages).toHaveCount(4);
+  await insertedPdfPages.first().click({ force: true });
+  await expect(page.locator(".moveable-control-box")).toBeVisible();
+});
+
 test("annotation insert tools create and format native plan elements", async ({ page }) => {
   await useEnglishInterface(page);
   await page.goto("/projects/project-logistics-center/plan");
@@ -1439,4 +1514,50 @@ test("paper-size guide tiles the A0 canvas and margins enforce the usable area",
   expect(guideOffsets.top).toBeCloseTo(100 / 8_410, 3);
   expect(guideOffsets.right).toBeCloseTo(200 / 11_890, 3);
   expect(guideOffsets.bottom).toBeCloseTo(300 / 8_410, 3);
+});
+
+test("canvas elements support keyboard copy and paste without hijacking text fields", async ({ page, browserName }) => {
+  await useEnglishInterface(page);
+  await page.goto("/projects/project-logistics-center/plan");
+  await expect(page.locator(".wysiwyg-page")).toBeVisible();
+
+  const shortcutModifier = browserName === "webkit" ? "Meta" : "Control";
+  const canvasBlocks = page.locator(".canvas-block");
+  const initialBlockCount = await canvasBlocks.count();
+  const initialItemCount = await page.evaluate(() => {
+    const database = JSON.parse(window.localStorage.getItem("quicksige.database.v3") ?? "{}") as {
+      plans?: Array<{ projectId: string; sections: Array<{ items: unknown[] }> }>;
+    };
+    return database.plans?.find((plan) => plan.projectId === "project-logistics-center")
+      ?.sections.reduce((total, section) => total + section.items.length, 0) ?? 0;
+  });
+
+  await canvasBlocks.first().click({ force: true });
+  await page.keyboard.press(`${shortcutModifier}+c`);
+  await page.keyboard.press(`${shortcutModifier}+v`);
+
+  await expect(canvasBlocks).toHaveCount(initialBlockCount + 1);
+  await expect(page.locator(".canvas-block.is-selected")).toHaveCount(1);
+  await expect.poll(() => page.evaluate(() => {
+    const database = JSON.parse(window.localStorage.getItem("quicksige.database.v3") ?? "{}") as {
+      plans?: Array<{ projectId: string; sections: Array<{ items: unknown[] }> }>;
+    };
+    return database.plans?.find((plan) => plan.projectId === "project-logistics-center")
+      ?.sections.reduce((total, section) => total + section.items.length, 0) ?? 0;
+  })).toBe(initialItemCount + 1);
+
+  await page.keyboard.press(`${shortcutModifier}+z`);
+  await expect(canvasBlocks).toHaveCount(initialBlockCount);
+
+  await canvasBlocks.first().click({ force: true });
+  const searchInput = page.getByLabel("Search blocks");
+  await searchInput.fill("access");
+  await searchInput.press(`${shortcutModifier}+a`);
+  await searchInput.press(`${shortcutModifier}+c`);
+  await searchInput.press(`${shortcutModifier}+v`);
+  await expect(canvasBlocks).toHaveCount(initialBlockCount);
+
+  await canvasBlocks.first().click({ force: true });
+  await page.getByRole("button", { name: "Duplicate" }).click();
+  await expect(canvasBlocks).toHaveCount(initialBlockCount + 1);
 });
