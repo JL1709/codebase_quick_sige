@@ -880,14 +880,13 @@ textarea.canvas-inline-editor { min-height: 34px; resize: none; }
 .canvas-element.is-validation-focus { animation: validation-focus-pulse .75s ease-in-out 2; }
 @keyframes validation-focus-pulse { 50% { box-shadow: 0 0 0 8px rgb(213 255 63 / 42%); } }
 .moveable-control-box { z-index: 2500 !important; }
-.selection-tools { width: 100%; min-width: 0; flex-wrap: nowrap; padding: 3px 5px; background: #f2f6f4; border-radius: 9px; }
-.selected-element-label { min-width: 0; flex: 1 1 auto; padding-inline: 5px; overflow: hidden; color: var(--ink-soft); font-size: 9px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+.selection-tools { width: max-content; max-width: 100%; min-width: 0; flex: 0 0 auto; flex-wrap: nowrap; padding: 3px 5px; background: #f2f6f4; border-radius: 9px; }
 .save-indicator.is-published { position: absolute; top: calc(var(--editor-toolbar-height) + 12px); right: 18px; display: inline-flex; padding: 9px 12px; color: #155e43; background: #e4f4eb; border: 1px solid #b8ddca; border-radius: 9px; box-shadow: var(--shadow-sm); z-index: 4000; }
 .editor-word-message { top: calc(var(--editor-toolbar-height) + 16px); }
 
 @container plan-workspace (max-width: 1900px) {
   .editor-toolbar { grid-template-columns: minmax(145px, 1fr) minmax(0, 260px) max-content max-content; gap: 5px; padding-inline: 8px; }
-  .editor-toolbar .toolbar-action-label, .selected-element-label { display: none; }
+  .editor-toolbar .toolbar-action-label { display: none; }
   .editor-toolbar .button-small { min-width: 32px; justify-content: center; padding-inline: 8px; }
   .toolbar-selection-slot { max-width: 260px; }
   .block-layout-mode-select { max-width: 120px; }

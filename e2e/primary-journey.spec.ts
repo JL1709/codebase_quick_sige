@@ -1295,6 +1295,15 @@ test("responsive plan toolbar stays contained and selection keeps the canvas sta
 
   await page.setViewportSize({ width: 1728, height: 1117 });
   await page.goto("/projects/project-logistics-center/plan");
+  const primaryToolbar = page.locator(".editor-toolbar-primary");
+  const canvasLayoutButton = primaryToolbar.getByRole("button", { name: "Canvas layout" });
+  const insertButton = primaryToolbar.getByRole("button", { name: "Insert" });
+  await expect(canvasLayoutButton).toBeVisible();
+  const canvasLayoutBounds = await canvasLayoutButton.boundingBox();
+  const insertBounds = await insertButton.boundingBox();
+  expect(canvasLayoutBounds).not.toBeNull();
+  expect(insertBounds).not.toBeNull();
+  expect(canvasLayoutBounds!.x + canvasLayoutBounds!.width).toBeLessThanOrEqual(insertBounds!.x + 1);
   await expect(page.getByRole("button", { name: "A0 PDF" })).toHaveText("A0");
   await expect(page.getByRole("button", { name: "Word documents" })).toHaveText("A4");
   await expect(page.getByRole("button", { name: /Undo/ }).locator("xpath=../..")).toHaveClass(/editor-toolbar-trailing/);
@@ -1321,6 +1330,10 @@ test("responsive plan toolbar stays contained and selection keeps the canvas sta
 
   await blocks.nth(0).click({ force: true });
   await settleLayout();
+  const selectionTools = page.locator(".selection-tools");
+  await expect(selectionTools).toBeVisible();
+  await expect(selectionTools).toHaveText("");
+  expect((await selectionTools.boundingBox())?.width ?? Number.POSITIVE_INFINITY).toBeLessThan(160);
   const firstSelection = await readCanvasViewport();
   await blocks.nth(1).click({ force: true });
   await settleLayout();
