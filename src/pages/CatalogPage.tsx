@@ -6,11 +6,14 @@ import { BlockVisual } from "../components/BlockVisual";
 import { Button, Modal, PageHeader } from "../components/Ui";
 import {
   blockHierarchyColor,
+  blocksInCategoryHierarchyOrder,
   categoryDescendantIds,
   categoryHierarchyColor,
   categoryPath,
   categoryPlacementIds,
   categoryTrail,
+  DEFAULT_ROOT_CATEGORY_COLOR,
+  normalizeCategoryColorOwnership,
   reorderCategoryIds,
 } from "../domain/categoryTree";
 import { readableTextColor } from "../domain/colorContrast";
@@ -57,12 +60,12 @@ export function CatalogPage() {
     if (categoryId === "all") return null;
     return categoryDescendantIds(categoryId, categories);
   }, [categories, categoryId]);
-  const blocks = database.blocks.filter((block) => {
+  const blocks = blocksInCategoryHierarchyOrder(database.blocks.filter((block) => {
     if (!showArchived && block.lifecycle !== "active") return false;
     const content = block.translations[locale] ?? block.translations.de;
     const searchable = `${content.title} ${content.shortDescription} ${content.longDescription} ${content.searchTerms.join(" ")} ${block.regulations.join(" ")}`.toLowerCase();
     return searchable.includes(query.trim().toLowerCase()) && (!descendantIds || block.categoryIds.some((id) => descendantIds.has(id)));
-  });
+  }), categories);
 
   const openBlock = (block?: BuildingBlock) => { setEditingBlock(block ?? null); setBlockOpen(true); };
   const openCategory = (category?: BuildingBlockCategory) => { setEditingCategory(category ?? null); setCategoryOpen(true); };
@@ -172,7 +175,6 @@ function BlockEditorModal({ open, block, categories, locale, onClose, onSave, on
     primaryCategoryId: initialCategoryId,
     categoryIds: initialCategoryId ? categoryPlacementIds(initialCategoryId, categories) : [],
     visualKey: "safety",
-    color: initialCategoryId ? categoryHierarchyColor(initialCategoryId, categories) : "#496f5f",
     regulations: [],
     lifecycle: "active",
     translations: { de: { ...defaultContent }, en: { ...defaultContent } },
@@ -188,7 +190,6 @@ function BlockEditorModal({ open, block, categories, locale, onClose, onSave, on
     ...current,
     primaryCategoryId: categoryId,
     categoryIds: categoryPlacementIds(categoryId, categories),
-    color: categoryHierarchyColor(categoryId, categories),
   }));
   const updateImage = (file?: File) => {
     if (!file) return;
@@ -202,7 +203,6 @@ function BlockEditorModal({ open, block, categories, locale, onClose, onSave, on
     onSave({
       ...draft,
       categoryIds: categoryPlacementIds(draft.primaryCategoryId, categories),
-      color: categoryHierarchyColor(draft.primaryCategoryId, categories),
     });
   };
   const content = draft.translations[locale];
@@ -300,17 +300,23 @@ function CategoryPlacementNodes({ categories, locale, selectedId, selectedIds, e
 function CategoryEditorModal({ open, category, categories, locale: uiLocale, onClose, onSave, onArchive, onRestore, t }: { open: boolean; category: BuildingBlockCategory | null; categories: BuildingBlockCategory[]; locale: Locale; onClose: () => void; onSave: (category: BuildingBlockCategory) => void; onArchive?: () => void; onRestore?: () => void; t: (key: string) => string }) {
   const [draft, setDraft] = useState<BuildingBlockCategory>(() => category ? structuredClone(category) : ({
     id: newId("category"),
-    color: "#496f5f",
+    color: DEFAULT_ROOT_CATEGORY_COLOR,
     sortOrder: nextCategorySortOrder(undefined, categories),
     lifecycle: "active",
     translations: { de: { name: "", description: "" }, en: { name: "", description: "" } },
   }));
+  const draftCategories = [...categories.filter((candidate) => candidate.id !== draft.id), draft];
+  const displayedColor = categoryHierarchyColor(draft.id, draftCategories);
   const unavailableParentIds = category ? categoryDescendantIds(category.id, categories) : new Set<string>();
-  const updateParent = (parentId: string | undefined) => setDraft((current) => ({
-    ...current,
-    parentId,
-    sortOrder: current.parentId === parentId ? current.sortOrder : nextCategorySortOrder(parentId, categories, current.id),
-  }));
+  const updateParent = (parentId: string | undefined) => setDraft((current) => {
+    const currentCategories = [...categories.filter((candidate) => candidate.id !== current.id), current];
+    return {
+      ...current,
+      parentId,
+      color: parentId ? undefined : current.color ?? categoryHierarchyColor(current.id, currentCategories),
+      sortOrder: current.parentId === parentId ? current.sortOrder : nextCategorySortOrder(parentId, categories, current.id),
+    };
+  });
   const updateName = (name: string) => setDraft((current) => ({
     ...current,
     translations: {
@@ -319,10 +325,10 @@ function CategoryEditorModal({ open, category, categories, locale: uiLocale, onC
     },
   }));
   return <Modal open={open} title={category ? t("catalog.editCategory") : t("catalog.addCategory")} onClose={onClose}>
-    <form onSubmit={(event) => { event.preventDefault(); onSave(draft); }}>
+    <form onSubmit={(event) => { event.preventDefault(); onSave(normalizeCategoryColorOwnership(draft)); }}>
       <div className="modal-body form-grid">
         <label className="field"><span>{t("catalog.parentCategory")}</span><select value={draft.parentId ?? ""} onChange={(event) => updateParent(event.target.value || undefined)}><option value="">—</option>{categories.filter((candidate) => candidate.lifecycle === "active" && !unavailableParentIds.has(candidate.id)).map((candidate) => <option key={candidate.id} value={candidate.id}>{categoryPath(candidate.id, categories, uiLocale)}</option>)}</select></label>
-        <label className="field"><span>{t("catalog.color")}</span><input type="color" value={draft.color} onChange={(event) => setDraft({ ...draft, color: event.target.value })} /></label>
+        <label className="field"><span>{t("catalog.color")}</span><input type="color" value={displayedColor} disabled={Boolean(draft.parentId)} onChange={(event) => setDraft({ ...draft, color: event.target.value })} /></label>
         <label className="field span-two"><span>{t("catalog.categoryName")}</span><input required value={draft.translations[uiLocale].name} onChange={(event) => updateName(event.target.value)} /></label>
       </div>
       <div className="modal-footer">{onArchive && <Button type="button" variant="danger" onClick={onArchive}>{t("common.archive")}</Button>}{onRestore && <Button type="button" variant="secondary" onClick={onRestore}>{t("common.restore")}</Button>}<Button type="button" variant="secondary" onClick={onClose}>{t("common.cancel")}</Button><Button type="submit">{t("common.save")}</Button></div>

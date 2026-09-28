@@ -1,4 +1,4 @@
-import type { Project, ProjectOverviewEntry, ProjectOverviewSection } from "./types";
+import type { Locale, Project, ProjectOverviewEntry, ProjectOverviewSection } from "./types";
 import { normalizeOverviewKey, type OverviewDropPosition } from "./overviewTemplates";
 
 type CreateId = (prefix: string) => string;
@@ -153,8 +153,8 @@ function repeatingEntry(createId: CreateId, label: string, itemLabels: string[],
 }
 
 /** Converts fixed legacy project data into the same flexible sections used by new projects. */
-export function legacyProjectOverviewSections(project: Project, createId: CreateId): ProjectOverviewSection[] {
-  const german = project.documentLocale === "de";
+export function legacyProjectOverviewSections(project: Project, createId: CreateId, locale: Locale): ProjectOverviewSection[] {
+  const german = locale === "de";
   const generalEntries: ProjectOverviewEntry[] = [];
   if (project.description) generalEntries.push(textEntry(createId, german ? "Kurzbeschreibung" : "Short description", project.description));
   if (project.address || project.city) generalEntries.push(groupEntry(createId, german ? "Projektadresse" : "Project address", [

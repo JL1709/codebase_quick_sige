@@ -81,7 +81,7 @@ describe("Word template settings", () => {
 
     fireEvent.click(within(section).getByRole("button", { name: "Add Word template" }));
     expect(screen.queryByLabelText("Document type")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Document language")).toHaveValue("en");
+    expect(screen.getByLabelText("Template language")).toHaveValue("en");
   });
 
   it("shows only the placeholders used by the standard A4 template", () => {

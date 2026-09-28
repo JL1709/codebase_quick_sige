@@ -1,12 +1,13 @@
 import { createPlanFromAssessment } from "../domain/recommendationEngine";
 import { defaultBlockImageSource } from "../domain/blockImages";
-import { blockHierarchyColor, categoryPlacementIds } from "../domain/categoryTree";
+import { categoryPlacementIds } from "../domain/categoryTree";
 import { legacyProjectOverviewSections } from "../domain/projectOverview";
 import type {
   AppDatabase,
   AssessmentAnswers,
   BuildingBlock,
   BuildingBlockCategory,
+  Locale,
   LocalizedBuildingBlockContent,
   Project,
 } from "../domain/types";
@@ -86,7 +87,6 @@ const categoryDefinitions: Array<Omit<BuildingBlockCategory, "sortOrder" | "life
   {
     id: "site-access-emergency",
     parentId: "site-setup",
-    color: "#d56b54",
     translations: {
       de: { name: "Zugänge und Notfallorganisation", description: "Zutritt, Verkehrswege, Erste Hilfe und Alarmierung" },
       en: { name: "Access and emergency organization", description: "Access, traffic routes, first aid, and alerts" },
@@ -95,7 +95,6 @@ const categoryDefinitions: Array<Omit<BuildingBlockCategory, "sortOrder" | "life
   {
     id: "site-utilities",
     parentId: "site-setup",
-    color: "#d69228",
     translations: {
       de: { name: "Versorgung und Infrastruktur", description: "Strom, Medien und Baustelleninfrastruktur" },
       en: { name: "Utilities and infrastructure", description: "Power, utilities, and site infrastructure" },
@@ -104,7 +103,6 @@ const categoryDefinitions: Array<Omit<BuildingBlockCategory, "sortOrder" | "life
   {
     id: "height-fall-protection",
     parentId: "work-at-height",
-    color: "#4f75a8",
     translations: {
       de: { name: "Absturzschutz und Gerüste", description: "Kollektiver Schutz und sichere Arbeitsplätze" },
       en: { name: "Fall protection and scaffolds", description: "Collective protection and safe workplaces" },
@@ -113,7 +111,6 @@ const categoryDefinitions: Array<Omit<BuildingBlockCategory, "sortOrder" | "life
   {
     id: "hazardous-permit-work",
     parentId: "hazardous-work",
-    color: "#9c3e45",
     translations: {
       de: { name: "Freigabepflichtige Arbeiten", description: "Heißarbeiten, Gefahrstoffe und enge Räume" },
       en: { name: "Permit-controlled work", description: "Hot work, hazardous substances, and confined spaces" },
@@ -122,7 +119,6 @@ const categoryDefinitions: Array<Omit<BuildingBlockCategory, "sortOrder" | "life
   {
     id: "existing-underground-utilities",
     parentId: "preparation",
-    color: "#d4a436",
     translations: {
       de: { name: "Bestehende erdverlegte Versorgungsleitungen", description: "Leitungen, Kabel und Kanäle im Arbeitsbereich" },
       en: { name: "Existing underground utilities", description: "Pipes, cables, and ducts in the work area" },
@@ -131,7 +127,6 @@ const categoryDefinitions: Array<Omit<BuildingBlockCategory, "sortOrder" | "life
   {
     id: "site-power-water",
     parentId: "site-utilities",
-    color: "#d69228",
     translations: {
       de: { name: "Versorgung Baustrom, Bauwasser, mobile Tankanlagen", description: "Temporäre Energie- und Medienversorgung" },
       en: { name: "Temporary power, water, and mobile tanks", description: "Temporary energy and utility supply" },
@@ -140,7 +135,6 @@ const categoryDefinitions: Array<Omit<BuildingBlockCategory, "sortOrder" | "life
   {
     id: "temporary-electrical-distribution",
     parentId: "site-power-water",
-    color: "#d69228",
     translations: {
       de: { name: "Elektrische Baustellenverteilung", description: "Verteiler und elektrische Betriebsmittel" },
       en: { name: "Temporary electrical distribution", description: "Distribution boards and electrical equipment" },
@@ -149,7 +143,6 @@ const categoryDefinitions: Array<Omit<BuildingBlockCategory, "sortOrder" | "life
   {
     id: "mobile-distribution-units",
     parentId: "temporary-electrical-distribution",
-    color: "#d69228",
     translations: {
       de: { name: "Mobile Kleinverteiler", description: "Ortsveränderliche Verteiler für den Baustelleneinsatz" },
       en: { name: "Mobile distribution units", description: "Portable distribution boards for construction sites" },
@@ -158,7 +151,6 @@ const categoryDefinitions: Array<Omit<BuildingBlockCategory, "sortOrder" | "life
   {
     id: "imported-site-security",
     parentId: "site-setup",
-    color: "#d56b54",
     translations: {
       de: { name: "Baustellensicherung", description: "Zäune und kontrollierte Baustellenbegrenzung" },
       en: { name: "Site security", description: "Fences and controlled site boundaries" },
@@ -177,7 +169,6 @@ const blockDefinitions = [
     id: "block-existing-utilities",
     categoryId: "preparation",
     visualKey: "utilities",
-    color: "#d4a436",
     regulations: ["DGUV Vorschrift 38", "DIN 4124"],
     translations: localizedContent(
       ["Sicherer Umgang mit Bestandsleitungen", "Lage vorhandener Leitungen vor Beginn der Arbeiten ermitteln, kennzeichnen und sichern.", "Vor Erd- oder Bohrarbeiten sind Bestandsunterlagen einzuholen, Leitungsauskünfte zu prüfen und die tatsächliche Lage mit geeigneten Verfahren zu erkunden. Festgestellte Leitungen sind eindeutig zu kennzeichnen und gegen Beschädigung zu sichern.", ["Leitungen", "Kabel", "Kanäle", "Bestand"]],
@@ -188,7 +179,6 @@ const blockDefinitions = [
     id: "block-site-fencing",
     categoryId: "site-setup",
     visualKey: "fence",
-    color: "#d56b54",
     regulations: ["DGUV Vorschrift 38"],
     translations: localizedContent(
       ["Baustellensicherung", "Baufeld mit standsicherem Bauzaun sichern und Zugänge kontrollieren.", "Die Baustelle ist entsprechend der örtlichen Gefährdung gegen unbefugtes Betreten zu sichern. Zugänge sind eindeutig zu kennzeichnen, kontrollierbar zu gestalten und außerhalb der Arbeitszeit zu verschließen.", ["Bauzaun", "Zutritt", "Sicherung"]],
@@ -199,7 +189,6 @@ const blockDefinitions = [
     id: "block-site-access",
     categoryId: "site-setup",
     visualKey: "access",
-    color: "#d56b54",
     regulations: ["ASR A1.8", "DGUV Vorschrift 38"],
     translations: localizedContent(
       ["Sichere Baustellenzugänge", "Personen- und Fahrzeugzugänge trennen, kennzeichnen und freihalten.", "Zugänge und Verkehrswege sind tragfähig, ausreichend breit und sicher zu gestalten. Fuß- und Fahrverkehr sind nach Möglichkeit zu trennen; Rettungswege und Feuerwehrzufahrten müssen jederzeit frei bleiben.", ["Zugang", "Verkehrsweg", "Rettungsweg"]],
@@ -210,7 +199,6 @@ const blockDefinitions = [
     id: "block-first-aid",
     categoryId: "site-setup",
     visualKey: "first-aid",
-    color: "#2b8a65",
     regulations: ["DGUV Vorschrift 1", "ASR A4.3"],
     translations: localizedContent(
       ["Erste Hilfe organisieren", "Ersthelfer, Material, Rettungswege und Meldeeinrichtungen festlegen.", "Erste-Hilfe-Einrichtungen sind entsprechend Beschäftigtenzahl, Tätigkeiten und Baustellenlage bereitzustellen. Ersthelfer, Aufbewahrungsorte, Rettungspunkte und Alarmierungswege sind allen Beteiligten bekannt zu machen.", ["Erste Hilfe", "Ersthelfer", "Rettung"]],
@@ -221,7 +209,6 @@ const blockDefinitions = [
     id: "block-emergency-information",
     categoryId: "site-setup",
     visualKey: "emergency",
-    color: "#2b8a65",
     regulations: ["ASR A2.3", "ASR A4.3"],
     translations: localizedContent(
       ["Notfallinformationen aushängen", "Alarmplan, Rettungswege und wichtige Rufnummern sichtbar bereitstellen.", "Aktuelle Notfallinformationen sind an zentralen und gut sichtbaren Stellen auszuhängen. Änderungen bei Ansprechpartnern, Zufahrten oder Rettungswegen sind unverzüglich nachzuführen.", ["Alarmplan", "Notruf", "Aushang"]],
@@ -232,7 +219,6 @@ const blockDefinitions = [
     id: "block-temporary-power",
     categoryId: "site-setup",
     visualKey: "power",
-    color: "#d69228",
     regulations: ["DGUV Information 203-006", "DGUV Vorschrift 3"],
     translations: localizedContent(
       ["Baustromversorgung", "Geeignete Baustromverteiler verwenden und Prüfintervalle dokumentieren.", "Die elektrische Versorgung ist über geeignete Baustromverteiler und geschützte Leitungsführungen herzustellen. Prüfungen, Fehlerstrom-Schutzeinrichtungen und arbeitstägliche Sichtkontrollen sind zu organisieren und zu dokumentieren.", ["Baustrom", "Verteiler", "Elektrik"]],
@@ -243,7 +229,6 @@ const blockDefinitions = [
     id: "block-traffic-routes",
     categoryId: "site-setup",
     visualKey: "traffic",
-    color: "#d56b54",
     regulations: ["ASR A1.8", "RSA 21"],
     translations: localizedContent(
       ["Verkehrswege und Anlieferung", "Baustellenverkehr, öffentliche Wege und Anlieferungen sicher koordinieren.", "Ein- und Ausfahrten, Lieferzonen, Rückwärtsfahrten und Kreuzungspunkte sind zu planen. Öffentlicher Verkehr und besonders gefährdete Verkehrsteilnehmer sind durch geeignete technische und organisatorische Maßnahmen zu schützen.", ["Verkehr", "Anlieferung", "Straße"]],
@@ -254,7 +239,6 @@ const blockDefinitions = [
     id: "block-excavation",
     categoryId: "earthworks",
     visualKey: "excavation",
-    color: "#aa603d",
     regulations: ["DIN 4124", "DGUV Vorschrift 38"],
     translations: localizedContent(
       ["Baugruben und Gräben", "Standsicherheit, Böschung oder Verbau sowie sichere Zugänge gewährleisten.", "Baugruben und Gräben sind unter Berücksichtigung von Boden, Wasser, Belastungen und Umgebung standsicher herzustellen. Böschung, Verbau, Randabstände, Zugänge und regelmäßige Kontrollen sind vor Beginn festzulegen.", ["Baugrube", "Graben", "Verbau", "Böschung"]],
@@ -265,7 +249,6 @@ const blockDefinitions = [
     id: "block-fall-protection",
     categoryId: "work-at-height",
     visualKey: "fall",
-    color: "#4d77ad",
     regulations: ["ASR A2.1", "DGUV Vorschrift 38"],
     translations: localizedContent(
       ["Absturzsicherung", "Kollektive Schutzmaßnahmen an Absturzkanten und Öffnungen vorsehen.", "Absturzgefährdungen sind vorrangig durch Seitenschutz, Abdeckungen, Arbeitsplattformen oder andere kollektiv wirkende Einrichtungen zu vermeiden. Persönliche Schutzausrüstung gegen Absturz ist nur nachrangig und mit Rettungskonzept einzusetzen.", ["Absturz", "Seitenschutz", "Öffnung"]],
@@ -276,7 +259,6 @@ const blockDefinitions = [
     id: "block-scaffolding",
     categoryId: "work-at-height",
     visualKey: "scaffold",
-    color: "#4d77ad",
     regulations: ["TRBS 2121-1", "DIN EN 12811"],
     translations: localizedContent(
       ["Gerüste sicher koordinieren", "Eignung, Übergabe, Änderungen und gemeinsame Nutzung verbindlich regeln.", "Gerüstklasse, Zugänge, Wandabstände und vorgesehene Nutzung sind gewerkeübergreifend abzustimmen. Übergabe, Prüfungen, Kennzeichnung und das Verbot eigenmächtiger Veränderungen sind verbindlich zu organisieren.", ["Gerüst", "Freigabe", "gemeinsame Nutzung"]],
@@ -287,7 +269,6 @@ const blockDefinitions = [
     id: "block-lifting",
     categoryId: "operations",
     visualKey: "crane",
-    color: "#4c7563",
     regulations: ["DGUV Vorschrift 52", "DGUV Regel 109-017"],
     translations: localizedContent(
       ["Hebe- und Kranarbeiten", "Gefahrenbereiche absperren und Lastwege gewerkeübergreifend koordinieren.", "Kranstandorte, Schwenkbereiche, Lastwege, Anschläger und Kommunikationsregeln sind vor den Hebevorgängen festzulegen. Der Aufenthalt unter schwebenden Lasten ist zu verhindern.", ["Kran", "Heben", "Last"]],
@@ -298,7 +279,6 @@ const blockDefinitions = [
     id: "block-live-operations",
     categoryId: "operations",
     visualKey: "operations",
-    color: "#4c7563",
     regulations: ["ArbSchG § 8", "BaustellV"],
     translations: localizedContent(
       ["Bauen im laufenden Betrieb", "Schnittstellen zwischen Baustelle, Betrieb und Dritten verbindlich koordinieren.", "Betriebliche Tätigkeiten, Verkehrswege, Freigaben, Abschaltungen und Notfallorganisation sind mit dem Betreiber abzustimmen. Wechselwirkungen und Verantwortlichkeiten müssen dokumentiert und kommuniziert werden.", ["laufender Betrieb", "Schnittstelle", "Dritte"]],
@@ -309,7 +289,6 @@ const blockDefinitions = [
     id: "block-hot-works",
     categoryId: "hazardous-work",
     visualKey: "hot-work",
-    color: "#a83d44",
     regulations: ["ASR A2.2", "DGUV Information 205-001"],
     translations: localizedContent(
       ["Heißarbeiten", "Freigabeverfahren, Brandschutzmaßnahmen und Brandwache festlegen.", "Schweiß-, Trenn- und sonstige Heißarbeiten dürfen nur nach Beurteilung der Umgebung und dokumentierter Freigabe erfolgen. Brennbare Stoffe sind zu entfernen oder abzuschirmen; Löschmittel und erforderliche Brandwachen sind bereitzustellen.", ["Schweißen", "Brand", "Freigabe"]],
@@ -320,7 +299,6 @@ const blockDefinitions = [
     id: "block-hazardous-substances",
     categoryId: "hazardous-work",
     visualKey: "hazmat",
-    color: "#a83d44",
     regulations: ["GefStoffV", "TRGS 524"],
     translations: localizedContent(
       ["Gefahrstoffe und Kontaminationen", "Erkundung, Freigabe, Schutzmaßnahmen und Entsorgung vor Arbeitsbeginn klären.", "Vor Eingriffen in möglicherweise kontaminierte Bereiche sind Erkundungsergebnisse, Arbeitsverfahren, Expositionsschutz, Dekontamination und Entsorgungswege festzulegen. Unklare Befunde erfordern einen Arbeitsstopp und fachliche Bewertung.", ["Gefahrstoff", "Kontamination", "Altlast"]],
@@ -331,7 +309,6 @@ const blockDefinitions = [
     id: "block-confined-spaces",
     categoryId: "hazardous-work",
     visualKey: "confined",
-    color: "#a83d44",
     regulations: ["DGUV Regel 113-004"],
     translations: localizedContent(
       ["Arbeiten in engen Räumen", "Freigabe, Lüftung, Überwachung und Rettung vor dem Einstieg sicherstellen.", "Arbeiten in Behältern, Schächten und engen Räumen erfordern eine Gefährdungsbeurteilung, Freigabe und zuverlässige Überwachung. Atmosphäre, Energiequellen, Kommunikation und unverzügliche Rettung sind vor dem Einstieg zu sichern.", ["enger Raum", "Schacht", "Rettung"]],
@@ -342,7 +319,6 @@ const blockDefinitions = [
     id: "block-demolition",
     categoryId: "operations",
     visualKey: "demolition",
-    color: "#4c7563",
     regulations: ["TRBS 2121", "DGUV Regel 101-004"],
     translations: localizedContent(
       ["Abbrucharbeiten", "Standsicherheit, Abbruchfolge, Sperrbereiche und Schadstoffe vorab klären.", "Abbruchverfahren und Reihenfolge sind auf Grundlage von Bestandsuntersuchungen und statischer Beurteilung festzulegen. Gefahrenbereiche, Staub- und Lärmschutz, Medienfreiheit und Entsorgungswege sind zu koordinieren.", ["Abbruch", "Rückbau", "Standsicherheit"]],
@@ -353,7 +329,6 @@ const blockDefinitions = [
     id: "block-heat-uv",
     categoryId: "environment",
     visualKey: "sun",
-    color: "#b18a2f",
     regulations: ["ArbSchG", "AMR 13.1"],
     translations: localizedContent(
       ["Hitze und UV-Strahlung", "Arbeitszeiten, Pausen, Schatten, Getränke und Hautschutz anpassen.", "Bei Hitze und intensiver UV-Strahlung sind Arbeitsorganisation, Pausen, Verschattung und Trinkwasserversorgung anzupassen. Beschäftigte sind über Symptome und Schutzmaßnahmen zu informieren.", ["Hitze", "UV", "Sonne"]],
@@ -364,7 +339,6 @@ const blockDefinitions = [
     id: "block-winter",
     categoryId: "environment",
     visualKey: "snow",
-    color: "#6f8da8",
     regulations: ["ArbStättV", "ASR A5.1"],
     translations: localizedContent(
       ["Winterbaustelle", "Schnee, Eis, Kälte, Beleuchtung und wetterbedingte Unterbrechungen einplanen.", "Verkehrswege und Arbeitsplätze sind von Schnee und Eis freizuhalten. Beleuchtung, geeignete Schutzkleidung, Aufwärmmöglichkeiten und Kriterien für wetterbedingte Arbeitsunterbrechungen sind festzulegen.", ["Winter", "Eis", "Kälte"]],
@@ -373,12 +347,13 @@ const blockDefinitions = [
   },
 ];
 
-const detailedCategoryByBlockId: Record<string, string> = {
-  "block-site-fencing": "site-access-emergency",
+export const DEFAULT_PRIMARY_CATEGORY_BY_BLOCK_ID: Record<string, string> = {
+  "block-existing-utilities": "existing-underground-utilities",
+  "block-site-fencing": "imported-site-security",
   "block-site-access": "site-access-emergency",
   "block-first-aid": "site-access-emergency",
   "block-emergency-information": "site-access-emergency",
-  "block-temporary-power": "site-utilities",
+  "block-temporary-power": "site-power-water",
   "block-traffic-routes": "site-access-emergency",
   "block-fall-protection": "height-fall-protection",
   "block-scaffolding": "height-fall-protection",
@@ -388,7 +363,7 @@ const detailedCategoryByBlockId: Record<string, string> = {
 };
 
 const starterBlocks: BuildingBlock[] = blockDefinitions.map((block) => {
-  const detailedCategoryId = detailedCategoryByBlockId[block.id];
+  const detailedCategoryId = DEFAULT_PRIMARY_CATEGORY_BY_BLOCK_ID[block.id];
   return {
     ...block,
     primaryCategoryId: detailedCategoryId ?? block.categoryId,
@@ -400,7 +375,7 @@ const starterBlocks: BuildingBlock[] = blockDefinitions.map((block) => {
 const importedBlocks: BuildingBlock[] = [
   {
     id: "import-existing-utilities", primaryCategoryId: "existing-underground-utilities",
-    categoryIds: ["preparation", "existing-underground-utilities"], visualKey: "utilities", color: "#d4a436",
+    categoryIds: ["preparation", "existing-underground-utilities"], visualKey: "utilities",
     regulations: [], lifecycle: "active",
     translations: localizedContent(
       ["Sicherer Umgang mit Bestandsleitungen", "Berücksichtigung der Lage von Leitungen, Kabeln, Kanälen o. ä. im Bereich der Baugruben oder Gräben.", "Beschreibung A4 Sicherer Umgang mit Bestandsleitungen", ["Bestandsleitungen", "Kabel", "Kanäle"]],
@@ -409,7 +384,7 @@ const importedBlocks: BuildingBlock[] = [
   },
   {
     id: "import-site-distribution", primaryCategoryId: "temporary-electrical-distribution",
-    categoryIds: ["site-setup", "site-utilities", "site-power-water", "temporary-electrical-distribution"], visualKey: "power", color: "#d69228",
+    categoryIds: ["site-setup", "site-utilities", "site-power-water", "temporary-electrical-distribution"], visualKey: "power",
     regulations: ["DGUV Information 203-070", "DGUV Vorschrift 4", "DGUV Information 203-005"], lifecycle: "active",
     translations: localizedContent(
       ["Baustromverteiler", "Verwendung eines Baustromverteilers, Prüfintervalle beachten.", "Beschreibung A4 Baustromverteiler", ["Baustromverteiler", "Baustrom", "Stromversorgung"]],
@@ -418,7 +393,7 @@ const importedBlocks: BuildingBlock[] = [
   },
   {
     id: "import-small-distribution", primaryCategoryId: "mobile-distribution-units",
-    categoryIds: ["site-setup", "site-utilities", "site-power-water", "temporary-electrical-distribution", "mobile-distribution-units"], visualKey: "power", color: "#d69228",
+    categoryIds: ["site-setup", "site-utilities", "site-power-water", "temporary-electrical-distribution", "mobile-distribution-units"], visualKey: "power",
     regulations: ["DGUV Information 203-070", "DGUV Vorschrift 4", "DGUV Information 203-005"], lifecycle: "active",
     translations: localizedContent(
       ["Elektrokleinverteiler", "Nutzung von spritzwassergeschützten und für den Baustellenbetrieb geeigneten Elektrokleinverteilern.", "Beschreibung A4 Elektrokleinverteiler", ["Elektrokleinverteiler", "Baustrom", "Verteiler"]],
@@ -427,7 +402,7 @@ const importedBlocks: BuildingBlock[] = [
   },
   {
     id: "import-portable-fence", primaryCategoryId: "imported-site-security",
-    categoryIds: ["site-setup", "imported-site-security"], visualKey: "fence", color: "#d56b54",
+    categoryIds: ["site-setup", "imported-site-security"], visualKey: "fence",
     regulations: [], lifecycle: "active",
     translations: localizedContent(
       ["Bauzaun, transportabel", "Schutzzaun aus Einzelelementen mit verzinktem Stahlrohrrahmen und Drahtgitterfüllung, mit Standfüßen, transportabel.", "Beschreibung A4 Bauzaun transportabel", ["Bauzaun", "transportabel", "Sicherung"]],
@@ -446,7 +421,8 @@ const organizationBlocks: BuildingBlock[] = [
     ),
   },
   {
-    ...structuredClone(starterBlocks[0]), id: "organization-archived-infection-access", lifecycle: "archived", regulations: [],
+    ...structuredClone(starterBlocks[0]), id: "organization-archived-infection-access",
+    primaryCategoryId: "site-access-emergency", categoryIds: ["site-setup", "site-access-emergency"], lifecycle: "archived", regulations: [],
     translations: localizedContent(
       ["Ehemalige Infektionsschutz-Zutrittsregel", "Historische Zutrittsregel für zeitlich begrenzte Infektionsschutzmaßnahmen.", "Bei behördlich angeordneten Infektionsschutzmaßnahmen wurden Zugangsvoraussetzungen vor Betreten der Baustelle dokumentiert.", ["Infektionsschutz", "Zutritt"]],
       ["Former infection-control access rule", "Historical access rule for time-limited infection-control measures.", "When infection-control measures were ordered by authorities, access requirements were documented before entering the construction site.", ["infection control", "access"]],
@@ -457,7 +433,6 @@ const organizationBlocks: BuildingBlock[] = [
 export const seedBlocks: BuildingBlock[] = [...starterBlocks, ...importedBlocks, ...organizationBlocks].map((block) => ({
   ...block,
   categoryIds: categoryPlacementIds(block.primaryCategoryId, seedCategories),
-  color: blockHierarchyColor(block, seedCategories),
   imageDataUrl: defaultBlockImageSource(block.id),
 }));
 
@@ -476,7 +451,6 @@ const demoProject: Project = {
   startDate: "2026-10-12",
   endDate: "2027-09-30",
   status: "in_review",
-  documentLocale: "de",
   participants: [
     { id: "participant-owner", role: "owner", company: "Westpark Projekt GmbH", name: "Dr. Anna Richter", email: "anna.richter@example.test", phone: "+49 341 555 100" },
     { id: "participant-coordinator", role: "coordinator", company: "Sicher Planen Ingenieure", name: "Max Mustermann", email: "max@example.test", phone: "+49 341 555 220" },
@@ -535,7 +509,7 @@ const englishProject: Project = {
   id: "project-riverside-renovation", organizationId: "organization-demo", projectNumber: "QS-2026-021",
   name: "Riverside Office Renovation", description: "Phased refurbishment of an occupied office building with public access.",
   address: "24 River Lane", city: "Bristol", constructionType: "renovation", startDate: "2027-01-18", endDate: "2027-08-27",
-  status: "draft", documentLocale: "en",
+  status: "draft",
   participants: [
     { id: "participant-en-owner", role: "owner", company: "Riverside Estates", name: "Emily Carter", email: "emily.carter@example.test", phone: "+44 117 555 0140" },
     { id: "participant-en-coordinator", role: "coordinator", company: "SafeBuild Consulting", name: "James Wilson", email: "james.wilson@example.test", phone: "+44 117 555 0141" },
@@ -545,13 +519,13 @@ const englishProject: Project = {
   customSections: [], overviewSections: [], assets: [], documentFolders: [], createdAt, updatedAt: createdAt,
 };
 
-function seedOverviewSections(project: Project) {
+function seedOverviewSections(project: Project, locale: Locale) {
   let identifierIndex = 0;
-  return legacyProjectOverviewSections(project, (prefix) => `${project.id}-${prefix}-${identifierIndex++}`);
+  return legacyProjectOverviewSections(project, (prefix) => `${project.id}-${prefix}-${identifierIndex++}`, locale);
 }
 
-demoProject.overviewSections = seedOverviewSections(demoProject);
-englishProject.overviewSections = seedOverviewSections(englishProject);
+demoProject.overviewSections = seedOverviewSections(demoProject, "de");
+englishProject.overviewSections = seedOverviewSections(englishProject, "en");
 
 const englishAssessment: AssessmentAnswers = {
   ...demoAssessment, employerCount: 6, maxWorkers: 24, workDays: 160, estimatedPersonDays: 2_100,
@@ -588,11 +562,10 @@ export function createSeedDatabase(): AppDatabase {
     updatedAt: createdAt,
   }));
   return {
-    schemaVersion: 18,
+    schemaVersion: 21,
     organization: {
       id: "organization-demo",
       name: "Sicher Planen Ingenieure",
-      defaultLocale: "de",
       accentColor: "#d5ff3f",
     },
     user: {

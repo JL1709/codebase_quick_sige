@@ -117,9 +117,11 @@ export function cssPixelsToLayoutUnits(cssPixels: number, zoom = 1): number {
 }
 
 export function minimumElementSize(element: PlanElement): { width: number; height: number } {
-  return element.kind === "block_area"
-    ? { width: MINIMUM_BLOCK_AREA_WIDTH, height: MINIMUM_BLOCK_AREA_HEIGHT }
-    : { width: MINIMUM_PLAN_ELEMENT_WIDTH, height: MINIMUM_PLAN_ELEMENT_HEIGHT };
+  if (element.kind === "block_area") return { width: MINIMUM_BLOCK_AREA_WIDTH, height: MINIMUM_BLOCK_AREA_HEIGHT };
+  if (element.kind === "shape" && (element.shape === "line" || element.shape === "arrow")) {
+    return { width: 120, height: 120 };
+  }
+  return { width: MINIMUM_PLAN_ELEMENT_WIDTH, height: MINIMUM_PLAN_ELEMENT_HEIGHT };
 }
 
 export function resizeElementFromCssMeasurement(

@@ -8,7 +8,7 @@ import type {
   BuildingBlock, BuildingBlockCategory, DocumentType, Locale, Plan, Project,
   ProjectDocumentConfiguration,
 } from "../domain/types";
-import { categoryTrail } from "../domain/categoryTree";
+import { blockHierarchyColor, categoryHierarchyColor, categoryTrail } from "../domain/categoryTree";
 import { overviewSectionTemplateData } from "../domain/overviewTemplates";
 
 const COMMAND_DELIMITER: [string, string] = ["{{", "}}"];
@@ -320,8 +320,8 @@ function stableStringify(value: unknown): string {
   return JSON.stringify(value);
 }
 
-export function documentDependencyFingerprint(project: Project, plan?: Plan): string {
-  const payload = stableStringify({ project, plan });
+export function documentDependencyFingerprint(project: Project, locale: Locale, plan?: Plan): string {
+  const payload = stableStringify({ locale, project, plan });
   let hash = 2_166_136_261;
   for (let index = 0; index < payload.length; index += 1) {
     hash ^= payload.charCodeAt(index);
@@ -348,6 +348,7 @@ function dataUrlImage(
 export function buildTemplateData(
   project: Project,
   plan: Plan | undefined,
+  locale: Locale,
   blocks: BuildingBlock[],
   categories: BuildingBlockCategory[] = [],
   documentConfigurations: ProjectDocumentConfiguration[] = [],
@@ -363,7 +364,7 @@ export function buildTemplateData(
   const projectFields: Record<string, unknown> = {
     number: project.projectNumber, name: project.name, description: project.description, address: project.address,
     city: project.city, construction_type: project.constructionType, start_date: project.startDate, end_date: project.endDate,
-    construction_type_label: constructionTypeLabels[project.documentLocale][project.constructionType], language: project.documentLocale,
+    construction_type_label: constructionTypeLabels[locale][project.constructionType], language: locale,
   };
   project.customFields.forEach((field, index) => { projectFields[field.placeholderKey || normalizePlaceholderKey(field.key, `field_${index + 1}`)] = field.value; });
   const customSections: Record<string, unknown> = {};
@@ -373,11 +374,11 @@ export function buildTemplateData(
     customSections[section.placeholderKey || normalizePlaceholderKey(section.title, `section_${sectionIndex + 1}`)] = values;
   });
   project.overviewSections.forEach((section) => {
-    customSections[section.placeholderKey] = overviewSectionTemplateData(section, project.documentLocale);
+    customSections[section.placeholderKey] = overviewSectionTemplateData(section, locale);
   });
   const blockMap = new Map(blocks.map((block) => [block.id, block]));
   const categoryMap = new Map(categories.map((category) => [category.id, category]));
-  const planLocale = plan?.documentLocale ?? project.documentLocale;
+  const planLocale = locale;
   const semanticOrder = new Map(plan?.layout.elements.map((element) => [element.kind === "block" ? element.itemId : element.kind === "section" ? element.sectionId : element.id, element.semanticOrder ?? Number.MAX_SAFE_INTEGER]) ?? []);
   const orderedSections = plan ? [...plan.sections].sort((left, right) => (semanticOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (semanticOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER)) : [];
   const planSections = orderedSections.map((section) => {
@@ -392,6 +393,7 @@ export function buildTemplateData(
     const block = blockMap.get(item.blockId);
     if (!block) return null;
     const content = block.translations[planLocale] ?? block.translations.de;
+    const blockColor = blockHierarchyColor(block, categories);
     return {
       category: sectionTitle,
       title: item.customTitle?.[planLocale] ?? content.title,
@@ -401,21 +403,23 @@ export function buildTemplateData(
       long_description: content.longDescription,
       regulations: block.regulations.join(", "),
       image: dataUrlImage(item.imageDataUrl ?? block.imageDataUrl, { width: BLOCK_IMAGE_WIDTH_CM, height: BLOCK_IMAGE_HEIGHT_CM }),
-      color: block.color,
-      cell_fill: cellFillMarker(block.color),
+      color: blockColor,
+      cell_fill: cellFillMarker(blockColor),
       expert_note: item.expertNote ?? "",
     };
     }).filter(Boolean);
     const rootCategoryId = rootCategory?.id ?? section.categoryId;
     const rootCategoryTitle = rootCategory?.translations[planLocale]?.name ?? sectionTitle;
-    const rootCategoryColor = rootCategory?.color ?? FALLBACK_CATEGORY_COLOR;
+    const rootCategoryColor = rootCategory
+      ? categoryHierarchyColor(rootCategory.id, categories)
+      : `#${FALLBACK_CATEGORY_COLOR}`;
     return {
       id: section.id,
       category_id: section.categoryId,
       title: sectionTitle,
       heading: sectionHeading,
       category_path: trailTitles.join(" › ") || sectionTitle,
-      color: category?.color ?? rootCategoryColor,
+      color: category ? categoryHierarchyColor(category.id, categories) : rootCategoryColor,
       root_category_id: rootCategoryId,
       root_category_title: rootCategoryTitle,
       root_category_color: rootCategoryColor,
@@ -443,8 +447,8 @@ export function buildTemplateData(
       project: projectFields,
       overview: { ...projectFields, ...customSections },
       emergency_contacts: project.emergencyContacts.map((contact) => ({ label: contact.label, name: contact.name, phone: contact.phone })),
-      participants: project.participants.map((participant) => ({ role: participant.role, role_label: participantRoleLabels[project.documentLocale][participant.role], company: participant.company, name: participant.name, email: participant.email, phone: participant.phone })),
-      plan: { title: plan?.title ?? "", categories: planCategories, sections: planSections, blocks: planBlocks },
+      participants: project.participants.map((participant) => ({ role: participant.role, role_label: participantRoleLabels[locale][participant.role], company: participant.company, name: participant.name, email: participant.email, phone: participant.phone })),
+      plan: { title: plan ? (locale === "de" ? "Sicherheits- und Gesundheitsschutzplan" : "Safety and Health Plan") : "", categories: planCategories, sections: planSections, blocks: planBlocks },
       assets: project.assets.map((asset) => ({ filename: asset.filename, image: asset.mimeType.startsWith("image/") ? dataUrlImage(asset.dataUrl) : undefined })),
       documents: documentConfigurations.map((configuration) => ({ type: configuration.documentType, template_id: configuration.templateId })),
     },

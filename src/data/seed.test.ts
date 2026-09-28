@@ -15,6 +15,7 @@ describe("seed data", () => {
       expect(block).not.toHaveProperty("reviewedAt");
       expect(block).not.toHaveProperty("contentRevision");
       expect(block).not.toHaveProperty("source");
+      expect(block).not.toHaveProperty("color");
       expect(block.translations.de).not.toHaveProperty("status");
       expect(block.translations.en).not.toHaveProperty("status");
     }
@@ -24,6 +25,8 @@ describe("seed data", () => {
     expect(activeBlocks).toHaveLength(23);
     expect(activeBlocks.every((block) => block.imageDataUrl?.startsWith("/block-images/"))).toBe(true);
     expect(new Set(activeBlocks.map((block) => block.imageDataUrl)).size).toBe(23);
+    expect(database.categories.filter((category) => !category.parentId).every((category) => Boolean(category.color))).toBe(true);
+    expect(database.categories.filter((category) => category.parentId).every((category) => !("color" in category))).toBe(true);
   });
 
   it("contains a complete local test project and generated plan", () => {
@@ -32,9 +35,27 @@ describe("seed data", () => {
     expect(project.participants.some((participant) => participant.role === "coordinator")).toBe(true);
     expect(project.emergencyContacts.length).toBeGreaterThanOrEqual(2);
     expect(database.plans.find((plan) => plan.projectId === project.id)).toBeDefined();
-    expect(database.projects.some((candidate) => candidate.documentLocale === "en" && candidate.constructionType === "renovation")).toBe(true);
+    expect(database.projects.some((candidate) => candidate.constructionType === "renovation")).toBe(true);
+    expect(database.projects.every((candidate) => !("documentLocale" in candidate))).toBe(true);
+    expect(database.plans.every((candidate) => !("documentLocale" in candidate))).toBe(true);
     expect(database.revisions.some((revision) => revision.projectId === project.id)).toBe(true);
     expect(project.assets.some((asset) => asset.mimeType === "application/pdf" && asset.pageCount === 2)).toBe(true);
+  });
+
+  it("places catalog blocks in their most specific applicable category", () => {
+    const database = createSeedDatabase();
+    const expectedCategoryByBlockId = {
+      "block-existing-utilities": "existing-underground-utilities",
+      "block-site-fencing": "imported-site-security",
+      "block-temporary-power": "site-power-water",
+      "organization-archived-infection-access": "site-access-emergency",
+    };
+
+    for (const [blockId, categoryId] of Object.entries(expectedCategoryByBlockId)) {
+      const block = database.blocks.find((candidate) => candidate.id === blockId);
+      expect(block?.primaryCategoryId).toBe(categoryId);
+      expect(block?.categoryIds.at(-1)).toBe(categoryId);
+    }
   });
 
   it("provides distinct German and English overview template examples", () => {

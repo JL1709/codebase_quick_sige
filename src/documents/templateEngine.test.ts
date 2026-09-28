@@ -20,10 +20,21 @@ async function documentXml(document: Blob | ArrayBuffer): Promise<string> {
 }
 
 describe("Word template engine", () => {
+  it("uses the Settings locale as the only language source", () => {
+    const database = createSeedDatabase();
+    const data = buildTemplateData(database.projects[0], database.plans[0], "en", database.blocks, database.categories) as {
+      qs: { project: { language: string }; plan: { title: string; blocks: Array<{ title: string }> } };
+    };
+
+    expect(data.qs.project.language).toBe("en");
+    expect(data.qs.plan.title).toBe("Safety and Health Plan");
+    expect(data.qs.plan.blocks.some((block) => block.title === "Organize first aid")).toBe(true);
+  });
+
   it("distinguishes an undefined placeholder from a defined empty value", async () => {
     const database = createSeedDatabase();
     const project = { ...database.projects[0], description: "" };
-    const data = buildTemplateData(project, database.plans[0], database.blocks);
+    const data = buildTemplateData(project, database.plans[0], database.user.preferredLocale, database.blocks);
 
     const existing = await inspectTemplate(await commandTemplate("qs.project.description"), data);
     const missing = await inspectTemplate(await commandTemplate("qs.overview.not_defined"), data);
@@ -38,7 +49,7 @@ describe("Word template engine", () => {
     let sequence = 0;
     const section = instantiateOverviewSection(template, (prefix) => `${prefix}-${++sequence}`);
     const project = { ...database.projects[0], overviewSections: [section] };
-    const data = buildTemplateData(project, database.plans[0], database.blocks) as {
+    const data = buildTemplateData(project, database.plans[0], database.user.preferredLocale, database.blocks) as {
       qs: { overview: { notfallkontakte: { kontakte: Array<{ telefon: string }> } } };
     };
 
@@ -50,7 +61,7 @@ describe("Word template engine", () => {
   it("blocks executable commands before rendering", async () => {
     const database = createSeedDatabase();
     const template = await commandTemplate("EXEC globalThis.compromised = true");
-    const data = buildTemplateData(database.projects[0], database.plans[0], database.blocks);
+    const data = buildTemplateData(database.projects[0], database.plans[0], database.user.preferredLocale, database.blocks);
 
     const inspection = await inspectTemplate(template, data);
     expect(inspection.unsafeCommands).toHaveLength(1);
@@ -75,7 +86,7 @@ describe("Word template engine", () => {
     database.blocks.forEach((block) => { block.imageDataUrl = onePixelPng; });
     const template = await createStandardTemplate("a4_plan", "de");
     const templateBuffer = await blobToArrayBuffer(template);
-    const data = buildTemplateData(database.projects[0], database.plans[0], database.blocks, database.categories);
+    const data = buildTemplateData(database.projects[0], database.plans[0], database.user.preferredLocale, database.blocks, database.categories);
     const generated = await renderTemplate(templateBuffer, data);
     const xml = await documentXml(generated);
 
@@ -107,7 +118,7 @@ describe("Word template engine", () => {
       new Paragraph("{{/qs.plan.blocks}}"),
     ] }] });
     const template = await blobToArrayBuffer(await Packer.toBlob(document));
-    const data = buildTemplateData(database.projects[0], database.plans[0], database.blocks, database.categories);
+    const data = buildTemplateData(database.projects[0], database.plans[0], database.user.preferredLocale, database.blocks, database.categories);
 
     const inspection = await inspectTemplate(template, data);
     const generated = await renderTemplate(template, data);

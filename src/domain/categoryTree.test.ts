@@ -3,6 +3,7 @@ import { createSeedDatabase } from "../data/seed";
 import {
   blockHierarchyColor,
   blockMatchesCategory,
+  blocksInCategoryHierarchyOrder,
   canReparentCategory,
   categoryDescendantIds,
   categoryHierarchyColor,
@@ -31,7 +32,7 @@ describe("recursive category tree", () => {
     expect(blockMatchesCategory(block, block.categoryIds[0], database.categories)).toBe(true);
   });
 
-  it("uses each catalog category's own color and a complete placement path", () => {
+  it("derives one progressively lighter color family and a complete placement path", () => {
     const rootColor = categoryHierarchyColor("site-setup", database.categories);
     const firstLevelColor = categoryHierarchyColor("site-access-emergency", database.categories);
     const siblingColor = categoryHierarchyColor("site-utilities", database.categories);
@@ -39,10 +40,9 @@ describe("recursive category tree", () => {
     const emergencyBlock = database.blocks.find((block) => block.id === "block-first-aid")!;
 
     expect(rootColor).toBe("#c8644d");
-    expect(firstLevelColor).toBe("#d56b54");
-    expect(siblingColor).toBe("#d69228");
+    expect(firstLevelColor).toBe(siblingColor);
     expect(firstLevelColor).not.toBe(rootColor);
-    expect(deepestColor).toBe("#d69228");
+    expect(deepestColor).not.toBe(firstLevelColor);
     expect(blockHierarchyColor(emergencyBlock, database.categories)).toBe(firstLevelColor);
     expect(categoryPlacementIds("mobile-distribution-units", database.categories)).toEqual([
       "site-setup", "site-utilities", "site-power-water", "temporary-electrical-distribution", "mobile-distribution-units",
@@ -77,5 +77,23 @@ describe("recursive category tree", () => {
     expect(reorderCategoryIds(initialOrder, "security", "access", "before")).toEqual([
       "security", "access", "utilities",
     ]);
+  });
+
+  it("orders blocks by the current recursive catalog hierarchy", () => {
+    const categories = database.categories.map((category) => {
+      if (category.id === "site-setup") return { ...category, sortOrder: 0 };
+      if (category.id === "preparation") return { ...category, sortOrder: 10 };
+      if (category.id === "imported-site-security") return { ...category, sortOrder: 0 };
+      if (category.id === "site-access-emergency") return { ...category, sortOrder: 1 };
+      if (category.id === "site-utilities") return { ...category, sortOrder: 2 };
+      return category;
+    });
+
+    const orderedBlockIds = blocksInCategoryHierarchyOrder(database.blocks, categories).map((block) => block.id);
+
+    expect(orderedBlockIds[0]).toBe("block-site-fencing");
+    expect(orderedBlockIds.indexOf("import-portable-fence")).toBeLessThan(orderedBlockIds.indexOf("block-site-access"));
+    expect(orderedBlockIds.indexOf("block-site-access")).toBeLessThan(orderedBlockIds.indexOf("block-temporary-power"));
+    expect(orderedBlockIds.indexOf("block-temporary-power")).toBeLessThan(orderedBlockIds.indexOf("block-existing-utilities"));
   });
 });

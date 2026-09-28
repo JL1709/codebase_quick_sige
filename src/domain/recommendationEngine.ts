@@ -138,8 +138,6 @@ export function createPlanFromAssessment(
   return {
     id: `plan-${project.id}`,
     projectId: project.id,
-    title: project.documentLocale === "de" ? "Sicherheits- und Gesundheitsschutzplan" : "Safety and Health Plan",
-    documentLocale: project.documentLocale,
     status: "draft",
     sections,
     layout: createLayoutFromSections(sections, categories, blocks),

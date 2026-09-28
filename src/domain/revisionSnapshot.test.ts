@@ -10,17 +10,17 @@ describe("revision snapshots", () => {
     expect(plan).toBeDefined();
     const snapshot = buildRevisionSnapshot(database, project, plan!);
     const originalProjectName = snapshot.project.name;
-    const originalPlanTitle = snapshot.plan.title;
+    const originalPlanStatus = snapshot.plan.status;
     const originalBlockTitle = snapshot.blocks[0].translations.de.title;
     const originalTemplateName = snapshot.documentTemplates[0].name;
 
     project.name = "Changed after publication";
-    plan!.title = "Changed draft";
+    plan!.status = "published";
     database.blocks.find((block) => block.id === snapshot.blocks[0].id)!.translations.de.title = "Changed catalog content";
     database.documentTemplates.find((template) => template.id === snapshot.documentTemplates[0].id)!.name = "Changed template";
 
     expect(snapshot.project.name).toBe(originalProjectName);
-    expect(snapshot.plan.title).toBe(originalPlanTitle);
+    expect(snapshot.plan.status).toBe(originalPlanStatus);
     expect(snapshot.blocks[0].translations.de.title).toBe(originalBlockTitle);
     expect(snapshot.documentTemplates[0].name).toBe(originalTemplateName);
   });

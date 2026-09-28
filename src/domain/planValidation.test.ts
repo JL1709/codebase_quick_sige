@@ -13,10 +13,10 @@ describe("plan validation", () => {
     if (!element || element.kind !== "block") return;
     element.width = 800;
     element.height = 280;
-    const issues = createPlanValidationIssues({ plan, project: database.projects[0], blocks: database.blocks, documentConfigurations: database.documentConfigurations, documentTemplates: database.documentTemplates, t });
+    const issues = createPlanValidationIssues({ plan, project: database.projects[0], blocks: database.blocks, documentConfigurations: database.documentConfigurations, documentTemplates: database.documentTemplates, locale: database.user.preferredLocale, t });
     const overflow = issues.find((issue) => issue.ruleCode === "TEXT_OVERFLOW" && issue.elementId === element.id);
     expect(overflow?.id).toBe(`TEXT_OVERFLOW:${element.id}`);
-    expect(overflow?.title).toContain(database.blocks.find((block) => block.id === element.blockId)?.translations[plan.documentLocale].title);
+    expect(overflow?.title).toContain(database.blocks.find((block) => block.id === element.blockId)?.translations[database.user.preferredLocale].title);
   });
 
   it("removes resolved element issues without disturbing stable global issue IDs", () => {
@@ -26,10 +26,10 @@ describe("plan validation", () => {
     expect(element).toBeDefined();
     if (!element) return;
     element.x = -100;
-    const before = createPlanValidationIssues({ plan, project: database.projects[0], blocks: database.blocks, documentConfigurations: database.documentConfigurations, documentTemplates: database.documentTemplates, t });
+    const before = createPlanValidationIssues({ plan, project: database.projects[0], blocks: database.blocks, documentConfigurations: database.documentConfigurations, documentTemplates: database.documentTemplates, locale: database.user.preferredLocale, t });
     expect(before.some((issue) => issue.id === `LAYOUT_OUTSIDE_SAFE_AREA:${element.id}`)).toBe(true);
     element.x = plan.layout.safeMargin;
-    const after = createPlanValidationIssues({ plan, project: database.projects[0], blocks: database.blocks, documentConfigurations: database.documentConfigurations, documentTemplates: database.documentTemplates, t });
+    const after = createPlanValidationIssues({ plan, project: database.projects[0], blocks: database.blocks, documentConfigurations: database.documentConfigurations, documentTemplates: database.documentTemplates, locale: database.user.preferredLocale, t });
     expect(after.some((issue) => issue.id === `LAYOUT_OUTSIDE_SAFE_AREA:${element.id}`)).toBe(false);
     expect(after.some((issue) => issue.id === "PLAN_REVIEW_REQUIRED")).toBe(true);
   });
@@ -41,11 +41,11 @@ describe("plan validation", () => {
     expect(element).toBeDefined();
     if (!element) return;
     element.x = -100;
-    const before = createPlanValidationIssues({ plan, project: database.projects[0], blocks: database.blocks, documentConfigurations: database.documentConfigurations, documentTemplates: database.documentTemplates, t });
+    const before = createPlanValidationIssues({ plan, project: database.projects[0], blocks: database.blocks, documentConfigurations: database.documentConfigurations, documentTemplates: database.documentTemplates, locale: database.user.preferredLocale, t });
     expect(before.some((issue) => issue.elementId === element.id)).toBe(true);
 
     plan.layout.elements = plan.layout.elements.filter((candidate) => candidate.id !== element.id);
-    const after = createPlanValidationIssues({ plan, project: database.projects[0], blocks: database.blocks, documentConfigurations: database.documentConfigurations, documentTemplates: database.documentTemplates, t });
+    const after = createPlanValidationIssues({ plan, project: database.projects[0], blocks: database.blocks, documentConfigurations: database.documentConfigurations, documentTemplates: database.documentTemplates, locale: database.user.preferredLocale, t });
     const liveElementIds = new Set(plan.layout.elements.map((candidate) => candidate.id));
     expect(after.every((issue) => !issue.elementId || liveElementIds.has(issue.elementId))).toBe(true);
     const severityRanks = after.map((issue) => ({ error: 0, warning: 1, information: 2 })[issue.severity]);

@@ -1,7 +1,7 @@
-import { createSeedDatabase } from "./seed";
+import { createSeedDatabase, DEFAULT_PRIMARY_CATEGORY_BY_BLOCK_ID } from "./seed";
 import { ensurePlanLayout } from "../domain/planLayout";
 import { defaultBlockImageSource } from "../domain/blockImages";
-import { blockHierarchyColor, categoryPlacementIds } from "../domain/categoryTree";
+import { categoryPlacementIds, normalizeCategoryColorOwnership } from "../domain/categoryTree";
 import { legacyProjectOverviewSections } from "../domain/projectOverview";
 import type {
   AppDatabase,
@@ -9,9 +9,11 @@ import type {
   BuildingBlockCategory,
   CustomField,
   EmergencyContact,
+  Locale,
   OverviewTemplate,
   OverviewTemplateEntry,
   Participant,
+  Plan,
   Project,
 } from "../domain/types";
 import { z } from "zod";
@@ -20,11 +22,11 @@ export const STORAGE_KEY = "quicksige.database.v3";
 const LEGACY_STORAGE_KEYS = ["quicksige.prototype.database.v2"];
 export const BACKUP_KEY = "quicksige.database.migration-backup.v2";
 export const MIGRATION_ERROR_KEY = "quicksige.database.migration-error";
-export const CURRENT_SCHEMA_VERSION = 18;
+export const CURRENT_SCHEMA_VERSION = 21;
 
 const persistedDatabaseSchema = z.object({
   schemaVersion: z.number().int().nonnegative(),
-  organization: z.object({ id: z.string(), name: z.string(), defaultLocale: z.enum(["de", "en"]), accentColor: z.string() }),
+  organization: z.object({ id: z.string(), name: z.string(), accentColor: z.string() }),
   user: z.object({ id: z.string(), organizationId: z.string(), name: z.string(), email: z.string(), role: z.enum(["owner", "admin", "editor", "viewer"]), preferredLocale: z.enum(["de", "en"]) }),
   projects: z.array(z.object({ id: z.string() }).passthrough()),
   blocks: z.array(z.object({ id: z.string() }).passthrough()),
@@ -38,21 +40,15 @@ const persistedDatabaseSchema = z.object({
   auditEvents: z.array(z.object({ id: z.string() }).passthrough()),
 }).passthrough();
 
-const DETAILED_CATEGORY_BY_BLOCK_ID: Record<string, string> = {
-  "block-site-fencing": "site-access-emergency",
-  "block-site-access": "site-access-emergency",
-  "block-first-aid": "site-access-emergency",
-  "block-emergency-information": "site-access-emergency",
-  "block-temporary-power": "site-utilities",
-  "block-traffic-routes": "site-access-emergency",
-  "block-fall-protection": "height-fall-protection",
-  "block-scaffolding": "height-fall-protection",
-  "block-hot-works": "hazardous-permit-work",
-  "block-hazardous-substances": "hazardous-permit-work",
-  "block-confined-spaces": "hazardous-permit-work",
+const CATEGORY_ASSIGNMENT_CORRECTIONS: Record<string, { previousCategoryId: string; correctedCategoryId: string }> = {
+  "block-existing-utilities": { previousCategoryId: "preparation", correctedCategoryId: "existing-underground-utilities" },
+  "block-site-fencing": { previousCategoryId: "site-access-emergency", correctedCategoryId: "imported-site-security" },
+  "block-temporary-power": { previousCategoryId: "site-utilities", correctedCategoryId: "site-power-water" },
+  "organization-archived-infection-access": { previousCategoryId: "preparation", correctedCategoryId: "site-access-emergency" },
 };
 
 type PersistedBuildingBlock = BuildingBlock & {
+  color?: string;
   code?: string;
   tags?: string[];
   provenance?: unknown;
@@ -60,6 +56,9 @@ type PersistedBuildingBlock = BuildingBlock & {
   reviewedAt?: string;
   source?: "system" | "organization";
 };
+
+type PersistedProject = Project & { documentLocale?: Locale };
+type PersistedPlan = Plan & { documentLocale?: Locale; title?: string };
 
 type PersistedOverviewTemplate = Partial<OverviewTemplate> & Pick<OverviewTemplate, "id" | "organizationId" | "name" | "createdAt" | "updatedAt"> & {
   kind?: "project_details" | "emergency_contacts" | "participants" | "custom_section";
@@ -70,7 +69,7 @@ type PersistedOverviewTemplate = Partial<OverviewTemplate> & Pick<OverviewTempla
   lifecycle?: "active" | "archived";
 };
 
-const LEGACY_BLOCK_METADATA_FIELDS = ["code", "tags", "provenance", "contentRevision", "reviewedAt", "source"] as const;
+const LEGACY_BLOCK_METADATA_FIELDS = ["color", "code", "tags", "provenance", "contentRevision", "reviewedAt", "source"] as const;
 
 export interface AppRepository {
   load(): AppDatabase;
@@ -88,11 +87,13 @@ function isDatabase(value: unknown): value is Partial<AppDatabase> & Pick<AppDat
   return Array.isArray(candidate.projects) && Array.isArray(candidate.blocks);
 }
 
-function migrateProject(project: Project): Project {
+function migrateProject(project: PersistedProject, locale: Locale): Project {
   const documentFolders = project.documentFolders ?? [];
   const documentFolderIds = new Set(documentFolders.map((folder) => folder.id));
+  const projectWithoutLegacyLocale = { ...project };
+  Reflect.deleteProperty(projectWithoutLegacyLocale, "documentLocale");
   const migratedProject = {
-    ...project,
+    ...projectWithoutLegacyLocale,
     participants: project.participants ?? [],
     emergencyContacts: project.emergencyContacts ?? [],
     customFields: project.customFields ?? [],
@@ -108,8 +109,19 @@ function migrateProject(project: Project): Project {
   let identifierIndex = 0;
   return {
     ...migratedProject,
-    overviewSections: legacyProjectOverviewSections(migratedProject, (prefix) => `${project.id}-${prefix}-${identifierIndex++}`),
+    overviewSections: legacyProjectOverviewSections(migratedProject, (prefix) => `${project.id}-${prefix}-${identifierIndex++}`, locale),
   };
+}
+
+function migratePlan(plan: PersistedPlan): Plan {
+  const planWithoutLegacyLocale = { ...plan };
+  Reflect.deleteProperty(planWithoutLegacyLocale, "documentLocale");
+  Reflect.deleteProperty(planWithoutLegacyLocale, "title");
+  return ensurePlanLayout({
+    ...planWithoutLegacyLocale,
+    supportingDocuments: plan.supportingDocuments ?? [],
+    includedAssetIds: plan.includedAssetIds ?? [],
+  });
 }
 
 function migrateTemplateEntry(entry: OverviewTemplateEntry): OverviewTemplateEntry {
@@ -206,7 +218,7 @@ function backfillStarterTemplateTranslations(
 
 function migrateBlock(block: PersistedBuildingBlock): BuildingBlock {
   const originalCategoryId = block.primaryCategoryId ?? block.categoryId ?? "uncategorized";
-  const legacyDetailedCategoryId = block.primaryCategoryId ? undefined : DETAILED_CATEGORY_BY_BLOCK_ID[block.id];
+  const legacyDetailedCategoryId = block.primaryCategoryId ? undefined : DEFAULT_PRIMARY_CATEGORY_BY_BLOCK_ID[block.id];
   const primaryCategoryId = legacyDetailedCategoryId ?? originalCategoryId;
   const bundledImageSource = defaultBlockImageSource(block.id);
   const imageDataUrl = !block.imageDataUrl || block.imageDataUrl.startsWith("/block-images/")
@@ -233,8 +245,19 @@ function migrateBlock(block: PersistedBuildingBlock): BuildingBlock {
   };
 }
 
+function correctDefaultCategoryAssignment(block: BuildingBlock, sourceSchemaVersion: number): BuildingBlock {
+  if (sourceSchemaVersion >= CURRENT_SCHEMA_VERSION) return block;
+  const correction = CATEGORY_ASSIGNMENT_CORRECTIONS[block.id];
+  if (!correction || block.primaryCategoryId !== correction.previousCategoryId) return block;
+  return { ...block, primaryCategoryId: correction.correctedCategoryId };
+}
+
 function migrateCategory(category: BuildingBlockCategory, sortOrder: number): BuildingBlockCategory {
-  return { ...category, sortOrder: category.sortOrder ?? sortOrder, lifecycle: category.lifecycle ?? "active" };
+  return normalizeCategoryColorOwnership({
+    ...category,
+    sortOrder: category.sortOrder ?? sortOrder,
+    lifecycle: category.lifecycle ?? "active",
+  });
 }
 
 function normalizeBlockPlacement(block: BuildingBlock, categories: BuildingBlockCategory[]): BuildingBlock {
@@ -243,7 +266,6 @@ function normalizeBlockPlacement(block: BuildingBlock, categories: BuildingBlock
   return {
     ...block,
     categoryIds,
-    color: blockHierarchyColor(block, categories),
   };
 }
 
@@ -251,12 +273,11 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
   if (!isDatabase(value)) return null;
   const source = value as AppDatabase;
   const defaults = createSeedDatabase();
-  const projects = source.projects.map(migrateProject);
-  const plans = (source.plans ?? []).map((plan) => ensurePlanLayout({
-    ...plan,
-    supportingDocuments: plan.supportingDocuments ?? [],
-    includedAssetIds: plan.includedAssetIds ?? [],
-  }));
+  const locale = source.user?.preferredLocale ?? defaults.user.preferredLocale;
+  const organization = { ...defaults.organization, ...source.organization } as typeof source.organization & { defaultLocale?: Locale };
+  Reflect.deleteProperty(organization, "defaultLocale");
+  const projects = source.projects.map((project) => migrateProject(project as PersistedProject, locale));
+  const plans = (source.plans ?? []).map((plan) => migratePlan(plan as PersistedPlan));
   const sourceCategories = (source.categories ?? []).map(migrateCategory);
   const sourceCategoryIds = new Set(sourceCategories.map((category) => category.id));
   const categories = [...sourceCategories, ...defaults.categories.filter((category) => !sourceCategoryIds.has(category.id))];
@@ -273,21 +294,33 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
     ...defaults,
     ...source,
     schemaVersion: CURRENT_SCHEMA_VERSION,
+    organization,
     projects,
-    blocks: source.blocks.map(migrateBlock).map((block) => normalizeBlockPlacement(block, categories)),
+    blocks: source.blocks
+      .map(migrateBlock)
+      .map((block) => correctDefaultCategoryAssignment(block, source.schemaVersion ?? 0))
+      .map((block) => normalizeBlockPlacement(block, categories)),
     categories,
     plans,
-    revisions: (source.revisions ?? []).map((revision) => ({
-      ...revision,
-      snapshot: {
-        ...revision.snapshot,
-        project: migrateProject(revision.snapshot.project),
-        plan: ensurePlanLayout(revision.snapshot.plan),
-        documentTemplates: revision.snapshot.documentTemplates ?? source.documentTemplates ?? defaults.documentTemplates,
-        documentConfigurations: revision.snapshot.documentConfigurations ?? (source.documentConfigurations ?? []).filter((configuration) => configuration.projectId === revision.projectId),
-        generatedDocuments: revision.snapshot.generatedDocuments ?? (source.generatedDocuments ?? []).filter((document) => document.projectId === revision.projectId),
-      },
-    })),
+    revisions: (source.revisions ?? []).map((revision) => {
+      const snapshotCategories = (revision.snapshot.categories ?? categories).map(migrateCategory);
+      const snapshotBlocks = (revision.snapshot.blocks ?? source.blocks)
+        .map(migrateBlock)
+        .map((block) => normalizeBlockPlacement(block, snapshotCategories));
+      return {
+        ...revision,
+        snapshot: {
+          ...revision.snapshot,
+          project: migrateProject(revision.snapshot.project as PersistedProject, locale),
+          plan: migratePlan(revision.snapshot.plan as PersistedPlan),
+          blocks: snapshotBlocks,
+          categories: snapshotCategories,
+          documentTemplates: revision.snapshot.documentTemplates ?? source.documentTemplates ?? defaults.documentTemplates,
+          documentConfigurations: revision.snapshot.documentConfigurations ?? (source.documentConfigurations ?? []).filter((configuration) => configuration.projectId === revision.projectId),
+          generatedDocuments: revision.snapshot.generatedDocuments ?? (source.generatedDocuments ?? []).filter((document) => document.projectId === revision.projectId),
+        },
+      };
+    }),
     overviewTemplates: ((source.overviewTemplates ?? defaults.overviewTemplates) as PersistedOverviewTemplate[])
       .map(migrateOverviewTemplate)
       .map((template) => backfillStarterTemplateTranslations(
@@ -302,9 +335,9 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
       return {
         ...document,
         templateRevision: document.templateRevision ?? 1,
-        projectSnapshot: migrateProject(document.projectSnapshot ?? structuredClone(project)),
-        planSnapshot: document.planSnapshot ?? (plan ? structuredClone(plan) : undefined),
-        language: document.language ?? project?.documentLocale ?? "de",
+        projectSnapshot: migrateProject((document.projectSnapshot ?? structuredClone(project)) as PersistedProject, locale),
+        planSnapshot: document.planSnapshot ? migratePlan(document.planSnapshot as PersistedPlan) : plan ? structuredClone(plan) : undefined,
+        language: document.language ?? locale,
         dependencyFingerprint: document.dependencyFingerprint ?? "legacy",
         stale: document.stale ?? true,
       };

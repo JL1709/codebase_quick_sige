@@ -19,7 +19,7 @@ function strengthTone(strength: RecommendationStrength): "danger" | "warning" | 
 export function RecommendationsPage() {
   const { projectId = "" } = useParams();
   const { database, getProject, getAssessment, createPlan } = useApp();
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const navigate = useNavigate();
   const project = getProject(projectId);
   const assessment = getAssessment(projectId);
@@ -50,7 +50,7 @@ export function RecommendationsPage() {
         {recommendations.map((recommendation) => {
           const block = blockMap.get(recommendation.blockId);
           if (!block) return null;
-          const content = block.translations[project.documentLocale] ?? block.translations.de;
+          const content = block.translations[locale] ?? block.translations.de;
           return <article className={`recommendation-card ${recommendation.included ? "" : "is-excluded"}`} key={recommendation.id}>
             <BlockVisual visualKey={block.visualKey} color={blockHierarchyColor(block, database.categories)} />
             <div className="recommendation-content"><div className="recommendation-title"><strong>{content.title}</strong><Badge tone={strengthTone(recommendation.strength)}>{t(`recommendations.${recommendation.strength}`)}</Badge></div><p>{t(recommendation.reasonKey, recommendation.reasonParams)}</p></div>

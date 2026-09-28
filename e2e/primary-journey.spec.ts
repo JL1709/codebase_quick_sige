@@ -128,11 +128,13 @@ test("complete project workflow remains localized and revision-safe", async ({ p
   await page.getByRole("button", { name: /block library/i }).click();
   await expect(page.locator(".editor-sidebar")).toBeVisible();
   const blockCountBefore = await page.locator(".canvas-block").count();
-  const libraryItem = page.locator(".editor-catalog-card").first();
-  const libraryBox = await libraryItem.boundingBox();
+  const libraryItem = page.locator(".editor-catalog-card:not(.is-added)").first();
+  const libraryDragHandle = libraryItem.locator(".library-drag-handle");
+  await libraryDragHandle.scrollIntoViewIfNeeded();
+  const libraryBox = await libraryDragHandle.boundingBox();
   const canvasBox = await page.locator(".wysiwyg-page").boundingBox();
   expect(libraryBox).not.toBeNull(); expect(canvasBox).not.toBeNull();
-  await page.mouse.move((libraryBox?.x ?? 0) + 20, (libraryBox?.y ?? 0) + 20);
+  await page.mouse.move((libraryBox?.x ?? 0) + (libraryBox?.width ?? 0) / 2, (libraryBox?.y ?? 0) + (libraryBox?.height ?? 0) / 2);
   await page.mouse.down();
   await page.mouse.move((canvasBox?.x ?? 0) + 420, (canvasBox?.y ?? 0) + 320, { steps: 12 });
   await page.mouse.up();
@@ -227,7 +229,7 @@ test("project creation applies templates and guided assessment creates a plan", 
 
   await page.getByRole("navigation", { name: "Project navigation" }).getByRole("link", { name: "Documents" }).click();
   const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+X0YV5wAAAABJRU5ErkJggg==", "base64");
-  await page.getByRole("button", { name: "Upload file" }).click();
+  await page.getByRole("button", { name: "Upload file" }).first().click();
   const uploadDialog = page.getByRole("dialog", { name: "Upload project file" });
   await uploadDialog.getByLabel("File").setInputFiles({ name: "north-campus.png", mimeType: "image/png", buffer: png });
   await uploadDialog.getByRole("button", { name: "Upload file" }).click();
@@ -415,9 +417,11 @@ test("catalog content is manageable and primary pages meet critical accessibilit
   expect(catalogImageBox).not.toBeNull(); expect(catalogDescriptionBox).not.toBeNull();
   expect(Math.abs(catalogImageBox!.width - catalogDescriptionBox!.width)).toBeLessThanOrEqual(1);
   const firstAidCard = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Organize first aid" }) });
+  const siteSecurityCard = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Site security" }) });
   const temporaryPowerCard = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Temporary construction power" }) });
-  await expect(firstAidCard.locator("h3")).not.toHaveCSS("background-color", await temporaryPowerCard.locator("h3").evaluate((element) => getComputedStyle(element).backgroundColor));
-  await expect(portableDistributionCard.locator("h3")).toHaveCSS("background-color", await temporaryPowerCard.locator("h3").evaluate((element) => getComputedStyle(element).backgroundColor));
+  await expect(firstAidCard.locator("h3")).toHaveCSS("background-color", await siteSecurityCard.locator("h3").evaluate((element) => getComputedStyle(element).backgroundColor));
+  await expect(temporaryPowerCard.locator("h3")).not.toHaveCSS("background-color", await firstAidCard.locator("h3").evaluate((element) => getComputedStyle(element).backgroundColor));
+  await expect(portableDistributionCard.locator("h3")).not.toHaveCSS("background-color", await firstAidCard.locator("h3").evaluate((element) => getComputedStyle(element).backgroundColor));
   const categoryBrowser = page.locator(".category-browser");
   await categoryBrowser.getByRole("button", { name: "Edit: Site setup", exact: true }).click();
   const categoryDialog = page.getByRole("dialog");
@@ -426,6 +430,7 @@ test("catalog content is manageable and primary pages meet critical accessibilit
   await expect(categoryDialog.getByLabel("Description", { exact: true })).toHaveCount(0);
   await expect(categoryDialog.getByText("Deutsch", { exact: true })).toHaveCount(0);
   await expect(categoryDialog.getByText("English", { exact: true })).toHaveCount(0);
+  await expect(categoryDialog.getByLabel("Color", { exact: true })).toBeEnabled();
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect.poll(() => page.evaluate(() => {
     const stored = window.localStorage.getItem("quicksige.database.v3");
@@ -433,6 +438,15 @@ test("catalog content is manageable and primary pages meet critical accessibilit
     const category = (JSON.parse(stored) as { categories: Array<{ id: string; translations: { de: { name: string } } }> }).categories.find((candidate) => candidate.id === "site-setup");
     return category?.translations.de.name ?? "";
   })).toBe("Baustelleneinrichtung");
+  await categoryBrowser.getByRole("button", { name: "Edit: Access and emergency organization", exact: true }).click();
+  await expect(categoryDialog.getByLabel("Color", { exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => {
+    const stored = window.localStorage.getItem("quicksige.database.v3");
+    if (!stored) return true;
+    const category = (JSON.parse(stored) as { categories: Array<{ id: string; color?: string }> }).categories.find((candidate) => candidate.id === "site-access-emergency");
+    return category ? Object.hasOwn(category, "color") : true;
+  })).toBe(false);
   const siteSetupDragHandle = categoryBrowser.getByRole("button", { name: "Reorder category: Site setup" });
   await expect(siteSetupDragHandle).toBeVisible();
   await dragCategoryToEdge(page, categoryBrowser, "site-setup", "preparation", "before");
@@ -450,6 +464,7 @@ test("catalog content is manageable and primary pages meet critical accessibilit
   await expect.poll(() => categoryBrowser.locator('[data-parent-id="site-setup"]').evaluateAll((rows) => rows.map((row) => row.getAttribute("data-category-id")))).toEqual([
     "site-utilities", "imported-site-security", "site-access-emergency",
   ]);
+  await expect(page.locator(".catalog-card h3").first()).toHaveText("Temporary construction power");
   await expect(portableDistributionCard.getByRole("button", { name: /Edit:/ })).toBeVisible();
   await expect(portableDistributionCard.getByRole("button", { name: /More actions/ })).toHaveCount(0);
   await portableDistributionCard.getByRole("button", { name: /Edit:/ }).click();
@@ -697,13 +712,15 @@ test("A0 canvas fits, zooms deeply, edits structural content, and navigates vali
   }
 
   const zoomBadge = page.locator(".editor-toolbar .badge").filter({ hasText: "%" });
+  const fittedZoom = Number((await zoomBadge.textContent())?.replace("%", "") ?? 0);
   await page.locator(".editor-canvas-shell").hover();
   await page.keyboard.down(browserName === "webkit" ? "Meta" : "Control");
   await page.mouse.wheel(0, -1_800);
   await page.keyboard.up(browserName === "webkit" ? "Meta" : "Control");
-  await expect.poll(async () => Number((await zoomBadge.textContent())?.replace("%", "") ?? 0)).toBeGreaterThan(115);
+  await expect.poll(async () => Number((await zoomBadge.textContent())?.replace("%", "") ?? 0)).toBeGreaterThan(fittedZoom * 2);
+  const wheelZoom = Number((await zoomBadge.textContent())?.replace("%", "") ?? 0);
   await page.keyboard.press(browserName === "webkit" ? "Meta++" : "Control++");
-  await expect.poll(async () => Number((await zoomBadge.textContent())?.replace("%", "") ?? 0)).toBeGreaterThan(125);
+  await expect.poll(async () => Number((await zoomBadge.textContent())?.replace("%", "") ?? 0)).toBeGreaterThan(wheelZoom);
 
   await page.getByRole("button", { name: "Fit plan" }).click();
   const firstSectionTitle = page.locator('.canvas-section [data-inline-field="sectionTitle"]').first();
@@ -716,10 +733,19 @@ test("A0 canvas fits, zooms deeply, edits structural content, and navigates vali
   await expect(firstSectionTitle).toHaveText(originalSectionTitle ?? "");
   await page.keyboard.press(browserName === "webkit" ? "Meta+Shift+z" : "Control+y");
   await expect(firstSectionTitle).toHaveText("Custom coordination");
-  await expect.poll(() => page.evaluate(() => {
-    const database = JSON.parse(window.localStorage.getItem("quicksige.database.v3") ?? "{}") as { plans?: Array<{ projectId: string; sections: Array<{ titleOverrides?: Record<string, string> }> }> };
-    return database.plans?.find((candidate) => candidate.projectId === "project-logistics-center")?.sections[0]?.titleOverrides?.de;
-  })).toBe("Custom coordination");
+  const editedSectionElementId = await firstSectionTitle.locator("xpath=ancestor::*[@data-element-id][1]").getAttribute("data-element-id");
+  await expect.poll(() => page.evaluate((elementId) => {
+    const database = JSON.parse(window.localStorage.getItem("quicksige.database.v3") ?? "{}") as {
+      plans?: Array<{
+        projectId: string;
+        sections: Array<{ id: string; titleOverrides?: Record<string, string> }>;
+        layout: { elements: Array<{ id: string; kind: string; sectionId?: string }> };
+      }>;
+    };
+    const storedPlan = database.plans?.find((candidate) => candidate.projectId === "project-logistics-center");
+    const sectionId = storedPlan?.layout.elements.find((element) => element.id === elementId && element.kind === "section")?.sectionId;
+    return storedPlan?.sections.find((section) => section.id === sectionId)?.titleOverrides?.en;
+  }, editedSectionElementId)).toBe("Custom coordination");
   await page.reload();
   await expect(page.locator(".canvas-plan-header")).toHaveCount(0);
   await expect(page.locator('.canvas-section [data-inline-field="sectionTitle"]').first()).toHaveText("Custom coordination");
@@ -735,13 +761,23 @@ test("A0 canvas fits, zooms deeply, edits structural content, and navigates vali
   await page.getByLabel("Change summary").fill("Structural canvas edits");
   await page.getByRole("button", { name: "Publish", exact: true }).click();
   await expect(page.getByText(/Revision B was published/)).toBeVisible();
-  const revisionContent = await page.evaluate(() => {
+  const revisionContent = await page.evaluate((elementId) => {
     const database = JSON.parse(window.localStorage.getItem("quicksige.database.v3") ?? "{}") as {
-      revisions?: Array<{ changeSummary: string; snapshot: { plan: { sections: Array<{ titleOverrides?: Record<string, string> }> } } }>;
+      revisions?: Array<{
+        changeSummary: string;
+        snapshot: {
+          plan: {
+            sections: Array<{ id: string; titleOverrides?: Record<string, string> }>;
+            layout: { elements: Array<{ id: string; kind: string; sectionId?: string }> };
+          };
+        };
+      }>;
     };
     const revision = database.revisions?.find((candidate) => candidate.changeSummary === "Structural canvas edits");
-    return revision?.snapshot.plan.sections[0]?.titleOverrides?.de;
-  });
+    const revisionPlan = revision?.snapshot.plan;
+    const sectionId = revisionPlan?.layout.elements.find((element) => element.id === elementId && element.kind === "section")?.sectionId;
+    return revisionPlan?.sections.find((section) => section.id === sectionId)?.titleOverrides?.en;
+  }, editedSectionElementId);
   expect(revisionContent).toBe("Custom coordination");
 });
 
@@ -802,19 +838,39 @@ test("block fitting preserves free elements and canvas selection follows desktop
   await expect(legacyHeader).toHaveCount(0);
 });
 
-test("plan library reflects catalog membership, language, placement, and category color", async ({ page }) => {
+test("plan library reflects settings language, catalog membership, placement, and category color", async ({ page }) => {
   await useEnglishInterface(page);
   await page.goto("/projects/project-logistics-center/plan");
 
-  const documentLanguage = page.getByLabel("Document language");
-  await expect(documentLanguage).toHaveValue("de");
-  await page.getByRole("button", { name: /Zugänge und Notfallorganisation/ }).click();
-  await expect(page.getByRole("button", { name: "Included: Erste Hilfe organisieren" })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Add: Digitale Anlieferungsanmeldung" })).toBeEnabled();
-
-  await documentLanguage.selectOption("en");
+  await expect(page.getByLabel("Document language")).toHaveCount(0);
+  await page.getByRole("button", { name: /Access and emergency organization/ }).click();
   await expect(page.locator(".library-category-header").filter({ hasText: "Access and emergency organization" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Included: Organize first aid" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Add: Digital delivery check-in" })).toBeEnabled();
+  const firstAidLibraryItem = page.locator(".editor-catalog-card").filter({ hasText: "Organize first aid" });
+  await expect(firstAidLibraryItem.locator(".library-drag-icon")).toHaveCount(0);
+  await expect(firstAidLibraryItem.locator(".library-drag-copy > span")).toHaveCount(0);
+  await expect(firstAidLibraryItem).not.toContainText(/\d+×/);
+  const includedIndicator = firstAidLibraryItem.getByRole("button", { name: "Included: Organize first aid" });
+  const includedIndicatorBox = await includedIndicator.boundingBox();
+  expect(includedIndicatorBox?.width).toBeLessThanOrEqual(24);
+  expect(includedIndicatorBox?.height).toBeLessThanOrEqual(24);
+  await expect(includedIndicator).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(firstAidLibraryItem).toHaveCSS("background-color", "rgb(255, 255, 255)");
+  const addIndicator = page.getByRole("button", { name: "Add: Digital delivery check-in" });
+  const addIndicatorCenterOffset = await addIndicator.evaluate((button) => {
+    const icon = button.querySelector("svg");
+    if (!icon) throw new Error("Add indicator icon is missing");
+    const buttonBounds = button.getBoundingClientRect();
+    const iconBounds = icon.getBoundingClientRect();
+    return {
+      x: Math.abs(buttonBounds.x + buttonBounds.width / 2 - (iconBounds.x + iconBounds.width / 2)),
+      y: Math.abs(buttonBounds.y + buttonBounds.height / 2 - (iconBounds.y + iconBounds.height / 2)),
+    };
+  });
+  const maximumCenterOffsetPixels = 0.5;
+  expect(addIndicatorCenterOffset.x).toBeLessThanOrEqual(maximumCenterOffsetPixels);
+  expect(addIndicatorCenterOffset.y).toBeLessThanOrEqual(maximumCenterOffsetPixels);
   await expect(page.locator(".canvas-block").filter({ hasText: "Organize first aid" })).toHaveCount(1);
 
   await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Block catalog" }).click();
@@ -1022,9 +1078,14 @@ test("contextual toolbar covers every seeded canvas element family and drag sele
   await useEnglishInterface(page);
   await page.goto("/projects/project-logistics-center/plan");
   await page.getByRole("button", { name: "Fit plan" }).click();
-  await page.getByRole("button", { name: "Annotations" }).click();
-  await page.getByRole("button", { name: "Add: Text box" }).click();
+  await expect(page.getByRole("button", { name: "Project documents" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Document elements" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Annotations" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Insert", exact: true }).click();
+  await page.getByRole("menuitem", { name: /Text box/ }).click();
+  await page.locator(".wysiwyg-page").click({ position: { x: 520, y: 350 }, force: true });
   await expect(page.locator(".canvas-text")).toHaveCount(1);
+  await page.keyboard.press("Escape");
   for (const selector of [
     ".canvas-block-area",
     ".canvas-section",
@@ -1063,4 +1124,63 @@ test("contextual toolbar covers every seeded canvas element family and drag sele
   expect(after).not.toBeNull(); expect(controls).not.toBeNull();
   expect(Math.abs((controls!.x + controls!.width / 2) - (after!.x + after!.width / 2))).toBeLessThan(8);
   expect(Math.abs((controls!.y + controls!.height / 2) - (after!.y + after!.height / 2))).toBeLessThan(8);
+});
+
+test("annotation insert tools create and format native plan elements", async ({ page }) => {
+  await useEnglishInterface(page);
+  await page.goto("/projects/project-logistics-center/plan");
+  await page.getByRole("button", { name: "Fit plan" }).click();
+
+  const insertAt = async (toolName: string, x: number, y: number) => {
+    await page.getByRole("button", { name: "Insert", exact: true }).click();
+    await page.getByRole("menuitem", { name: new RegExp(toolName) }).click();
+    await page.locator(".wysiwyg-page").click({ position: { x, y }, force: true });
+    if (toolName === "Text box" || toolName === "Callout") await page.keyboard.press("Escape");
+  };
+  const activateConnectorTool = async (toolName: "Line" | "Arrow") => {
+    await page.getByRole("button", { name: "Insert", exact: true }).click();
+    await page.getByRole("menuitem", { name: new RegExp(toolName) }).click();
+  };
+  const drawConnector = async (start: { x: number; y: number }, end: { x: number; y: number }) => {
+    const planBounds = await page.locator(".wysiwyg-page").boundingBox();
+    expect(planBounds).not.toBeNull();
+    await page.mouse.move(planBounds!.x + start.x, planBounds!.y + start.y);
+    await page.mouse.down();
+    await page.mouse.move(planBounds!.x + end.x, planBounds!.y + end.y, { steps: 10 });
+    await page.mouse.up();
+  };
+
+  await insertAt("Rectangle", 400, 250);
+  const rectangle = page.locator(".canvas-shape.is-rectangle");
+  await expect(rectangle).toHaveCount(1);
+  await page.getByRole("button", { name: "Format element" }).click();
+  await page.getByLabel("Fill color").fill("#3b82f6");
+  await expect(rectangle).toHaveCSS("background-color", "rgb(59, 130, 246)");
+  await page.getByRole("button", { name: "Format element" }).click();
+
+  await activateConnectorTool("Line");
+  const planBounds = await page.locator(".wysiwyg-page").boundingBox();
+  expect(planBounds).not.toBeNull();
+  await page.mouse.move(planBounds!.x + 300, planBounds!.y + 220);
+  await page.mouse.down();
+  await expect(page.locator(".canvas-insert-preview")).toHaveCount(0);
+  await page.mouse.up();
+  await expect(page.locator(".canvas-shape.is-line")).toHaveCount(0);
+  await drawConnector({ x: 300, y: 220 }, { x: 420, y: 320 });
+  await activateConnectorTool("Arrow");
+  await drawConnector({ x: 450, y: 230 }, { x: 320, y: 350 });
+  await insertAt("Callout", 460, 310);
+  await insertAt("Text box", 480, 330);
+  const lineGraphic = page.locator(".canvas-shape.is-line svg line");
+  await expect(lineGraphic).toHaveAttribute("x1", "0%");
+  await expect(lineGraphic).toHaveAttribute("y1", "0%");
+  await expect(lineGraphic).toHaveAttribute("x2", "100%");
+  await expect(lineGraphic).toHaveAttribute("y2", "100%");
+  const arrowGraphic = page.locator(".canvas-shape.is-arrow svg line");
+  await expect(arrowGraphic).toHaveAttribute("x1", "100%");
+  await expect(arrowGraphic).toHaveAttribute("y1", "0%");
+  await expect(arrowGraphic).toHaveAttribute("x2", "0%");
+  await expect(arrowGraphic).toHaveAttribute("y2", "100%");
+  await expect(page.locator(".canvas-shape.is-callout")).toHaveCount(1);
+  await expect(page.locator(".canvas-text")).toHaveCount(1);
 });

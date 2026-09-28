@@ -34,6 +34,6 @@ describe("recommendation engine", () => {
 
     expect(plan.sections.length).toBeGreaterThan(2);
     expect(plan.sections.flatMap((section) => section.items).map((item) => item.blockId)).not.toContain("block-hot-works");
-    expect(plan.documentLocale).toBe(project.documentLocale);
+    expect(plan).not.toHaveProperty("documentLocale");
   });
 });

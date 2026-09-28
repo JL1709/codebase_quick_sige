@@ -4,7 +4,7 @@ import { deleteBlob } from "../data/blobRepository";
 import { defaultAssessmentAnswers } from "../data/seed";
 import { createPlanFromAssessment } from "../domain/recommendationEngine";
 import { buildRevisionSnapshot } from "../domain/revisionSnapshot";
-import { blockHierarchyColor, categoryPlacementIds } from "../domain/categoryTree";
+import { categoryPlacementIds, normalizeCategoryColorOwnership } from "../domain/categoryTree";
 import { instantiateOverviewSection, localizeOverviewTemplate, normalizeOverviewKey, validateOverviewTemplate } from "../domain/overviewTemplates";
 import type {
   AppDatabase, AssessmentAnswers, BuildingBlock, BuildingBlockCategory, DocumentTemplate, GeneratedDocument,
@@ -70,7 +70,11 @@ export function AppProvider({ children, repository: providedRepository }: { chil
     setDatabase((current) => { const next = updater(current); repository.current.save(next); return next; });
   }, []);
 
-  const setLocale = useCallback((locale: Locale) => commit((current) => ({ ...current, user: { ...current.user, preferredLocale: locale } })), [commit]);
+  const setLocale = useCallback((locale: Locale) => commit((current) => ({
+    ...current,
+    user: { ...current.user, preferredLocale: locale },
+    generatedDocuments: current.generatedDocuments.map((document) => ({ ...document, stale: true })),
+  })), [commit]);
   const createProject = useCallback((values: ProjectFormValues): Project => {
     const now = new Date().toISOString();
     const today = now.slice(0, 10);
@@ -85,7 +89,6 @@ export function AppProvider({ children, repository: providedRepository }: { chil
       startDate: today,
       endDate: today,
       status: "draft",
-      documentLocale: database.user.preferredLocale,
       participants: [], emergencyContacts: [], customFields: [], customSections: [],
       overviewSections: values.overviewSections,
       assets: [], documentFolders: [], createdAt: now, updatedAt: now,
@@ -97,7 +100,7 @@ export function AppProvider({ children, repository: providedRepository }: { chil
       auditEvents: [...current.auditEvents, { id: newId("audit"), projectId: project.id, action: "project.created", actorName: current.user.name, createdAt: now, details: project.name }],
     }));
     return project;
-  }, [commit, database.organization.id, database.user.preferredLocale]);
+  }, [commit, database.organization.id]);
 
   const deleteProject = useCallback(async (projectId: string): Promise<void> => {
     const project = database.projects.find((candidate) => candidate.id === projectId);
@@ -189,23 +192,24 @@ export function AppProvider({ children, repository: providedRepository }: { chil
   }, [commit, database]);
 
   const saveBlock = useCallback((block: BuildingBlock) => commit((current) => {
+    const blockWithoutLegacyColor = { ...block } as BuildingBlock & { color?: string };
+    Reflect.deleteProperty(blockWithoutLegacyColor, "color");
     const normalizedBlock = {
-      ...block,
+      ...blockWithoutLegacyColor,
       categoryIds: categoryPlacementIds(block.primaryCategoryId, current.categories),
-      color: blockHierarchyColor(block, current.categories),
     };
     return { ...current, blocks: current.blocks.some((candidate) => candidate.id === block.id) ? current.blocks.map((candidate) => candidate.id === block.id ? normalizedBlock : candidate) : [normalizedBlock, ...current.blocks] };
   }), [commit]);
   const archiveBlock = useCallback((blockId: string) => commit((current) => ({ ...current, blocks: current.blocks.map((block) => block.id === blockId ? { ...block, lifecycle: "archived" } : block) })), [commit]);
   const restoreBlock = useCallback((blockId: string) => commit((current) => ({ ...current, blocks: current.blocks.map((block) => block.id === blockId ? { ...block, lifecycle: "active" } : block) })), [commit]);
   const saveCategory = useCallback((category: BuildingBlockCategory) => commit((current) => {
+    const normalizedCategory = normalizeCategoryColorOwnership(category);
     const categories = current.categories.some((candidate) => candidate.id === category.id)
-      ? current.categories.map((candidate) => candidate.id === category.id ? category : candidate)
-      : [...current.categories, category];
+      ? current.categories.map((candidate) => candidate.id === category.id ? normalizedCategory : candidate)
+      : [...current.categories, normalizedCategory];
     const blocks = current.blocks.map((block) => ({
       ...block,
       categoryIds: categoryPlacementIds(block.primaryCategoryId, categories),
-      color: blockHierarchyColor(block, categories),
     }));
     return { ...current, categories, blocks };
   }), [commit]);

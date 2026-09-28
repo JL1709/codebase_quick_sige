@@ -25,6 +25,9 @@ import type {
   Project,
 } from "../domain/types";
 
+const ARROW_HEAD_LENGTH_MM = 8;
+const ARROW_HEAD_HALF_ANGLE_RADIANS = Math.PI / 6;
+
 function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -51,6 +54,16 @@ function hexToRgb(hex: string): [number, number, number] {
     Number.parseInt(normalized.slice(0, 2), 16),
     Number.parseInt(normalized.slice(2, 4), 16),
     Number.parseInt(normalized.slice(4, 6), 16),
+  ];
+}
+
+function annotationColor(hex: string | undefined, opacity = 1, fallback = "#12241f"): [number, number, number] {
+  const [red, green, blue] = hexToRgb(hex ?? fallback);
+  const normalizedOpacity = Math.max(0, Math.min(1, opacity));
+  return [
+    Math.round(red * normalizedOpacity + 255 * (1 - normalizedOpacity)),
+    Math.round(green * normalizedOpacity + 255 * (1 - normalizedOpacity)),
+    Math.round(blue * normalizedOpacity + 255 * (1 - normalizedOpacity)),
   ];
 }
 
@@ -82,10 +95,10 @@ export function buildPlanPdf(
   plan: Plan,
   blocks: BuildingBlock[],
   categories: BuildingBlockCategory[],
+  locale: Locale,
   revision?: PlanRevision,
   assetPreviewByElement: Map<string, string> = new Map(),
 ): jsPDF {
-  const locale = plan.documentLocale;
   const pdf = new jsPDF({ orientation: "landscape", unit: "mm", format: "a0", compress: true });
   const blockMap = getBlockMap(blocks);
   const categoryMap = getCategoryMap(categories);
@@ -102,7 +115,7 @@ export function buildPlanPdf(
         : locale === "de" ? "Arbeitsstand" : "Working draft";
       pdf.setFillColor(18, 36, 31); pdf.roundedRect(x, y, width, height, 5, 5, "F");
       pdf.setTextColor(213, 255, 63); pdf.setFont("helvetica", "bold"); pdf.setFontSize(15); pdf.text(element.brandText?.[locale] ?? "QUICKSiGe", x + 13, y + 18);
-      pdf.setTextColor(255, 255, 255); pdf.setFontSize(23); pdf.text(pdf.splitTextToSize(element.titleText?.[locale] ?? plan.title, width * .58).slice(0, 1), x + 13, y + 40);
+      pdf.setTextColor(255, 255, 255); pdf.setFontSize(23); pdf.text(pdf.splitTextToSize(element.titleText?.[locale] ?? (locale === "de" ? "Sicherheits- und Gesundheitsschutzplan" : "Safety and Health Plan"), width * .58).slice(0, 1), x + 13, y + 40);
       pdf.setFontSize(10); pdf.setFont("helvetica", "normal");
       pdf.text(element.projectNameText?.[locale] ?? project.name, x + width - 13, y + 16, { align: "right" });
       pdf.text(pdf.splitTextToSize(element.projectDetailsText?.[locale] ?? projectDetails, width * .36).slice(0, 1), x + width - 13, y + 30, { align: "right" });
@@ -152,7 +165,52 @@ export function buildPlanPdf(
       if (element.displayVariant === "participant_list") pdf.text(pdf.splitTextToSize(project.participants.slice(0, 4).map((participant) => `${participant.name} · ${participant.company}`).join(" · ") || "—", width - 20), x + 10, y + 25);
       if (element.displayVariant === "qr_link") { pdf.setDrawColor(18, 36, 31); pdf.rect(x + width - 32, y + 8, 22, 22, "S"); pdf.text("QR", x + width - 21, y + 21, { align: "center" }); }
     } else if (element.kind === "text") {
-      pdf.setTextColor(18, 36, 31); pdf.setFontSize(8); pdf.text(pdf.splitTextToSize(element.text[locale] ?? "", width), x, y + 8);
+      const opacity = element.opacity ?? 1;
+      if (element.fillColor) { pdf.setFillColor(...annotationColor(element.fillColor, opacity)); pdf.rect(x, y, width, height, "F"); }
+      if (element.strokeColor) { pdf.setDrawColor(...annotationColor(element.strokeColor, opacity)); pdf.setLineWidth(element.strokeWidth ?? 1); pdf.rect(x, y, width, height, "S"); }
+      pdf.setTextColor(...annotationColor(element.textColor, opacity));
+      pdf.setFont("helvetica", element.fontWeight === "bold" ? "bold" : "normal");
+      pdf.setFontSize(element.fontSize ?? 9);
+      const alignment = element.textAlign ?? "left";
+      const textX = alignment === "left" ? x + 6 : alignment === "center" ? x + width / 2 : x + width - 6;
+      pdf.text(pdf.splitTextToSize(element.text[locale] ?? "", Math.max(1, width - 12)), textX, y + 10, { align: alignment });
+    } else if (element.kind === "shape") {
+      const opacity = element.opacity ?? 1;
+      const strokeColor = annotationColor(element.strokeColor, opacity, "#296c5d");
+      pdf.setDrawColor(...strokeColor);
+      pdf.setLineWidth(element.strokeWidth ?? 1);
+      if (element.shape === "line" || element.shape === "arrow") {
+        const connectorStart = element.connectorStart ?? { x: 0, y: 0.5 };
+        const connectorEnd = element.connectorEnd ?? { x: 1, y: 0.5 };
+        const startX = x + width * connectorStart.x;
+        const startY = y + height * connectorStart.y;
+        const endX = x + width * connectorEnd.x;
+        const endY = y + height * connectorEnd.y;
+        pdf.line(startX, startY, endX, endY);
+        if (element.shape === "arrow") {
+          const arrowAngle = Math.atan2(endY - startY, endX - startX);
+          const firstHeadX = endX - ARROW_HEAD_LENGTH_MM * Math.cos(arrowAngle - ARROW_HEAD_HALF_ANGLE_RADIANS);
+          const firstHeadY = endY - ARROW_HEAD_LENGTH_MM * Math.sin(arrowAngle - ARROW_HEAD_HALF_ANGLE_RADIANS);
+          const secondHeadX = endX - ARROW_HEAD_LENGTH_MM * Math.cos(arrowAngle + ARROW_HEAD_HALF_ANGLE_RADIANS);
+          const secondHeadY = endY - ARROW_HEAD_LENGTH_MM * Math.sin(arrowAngle + ARROW_HEAD_HALF_ANGLE_RADIANS);
+          pdf.line(endX, endY, firstHeadX, firstHeadY);
+          pdf.line(endX, endY, secondHeadX, secondHeadY);
+        }
+      } else {
+        const drawingStyle = element.fillColor && element.strokeColor ? "FD" : element.fillColor ? "F" : "S";
+        if (element.fillColor) pdf.setFillColor(...annotationColor(element.fillColor, opacity));
+        pdf.roundedRect(x, y, width, height, 3, 3, drawingStyle);
+        if (element.shape === "callout") {
+          if (element.fillColor) pdf.setFillColor(...annotationColor(element.fillColor, opacity));
+          pdf.triangle(x + 18, y + height, x + 30, y + height, x + 24, y + height + 8, drawingStyle);
+          pdf.setTextColor(...annotationColor(element.textColor, opacity));
+          pdf.setFont("helvetica", element.fontWeight === "bold" ? "bold" : "normal");
+          pdf.setFontSize(element.fontSize ?? 9);
+          const alignment = element.textAlign ?? "left";
+          const textX = alignment === "left" ? x + 6 : alignment === "center" ? x + width / 2 : x + width - 6;
+          pdf.text(pdf.splitTextToSize(element.text?.[locale] ?? "", Math.max(1, width - 12)), textX, y + 10, { align: alignment });
+        }
+      }
     } else if (element.kind === "title_block") {
       pdf.setDrawColor(18, 36, 31); pdf.roundedRect(x, y, width, height, 3, 3, "S"); pdf.setTextColor(18, 36, 31); pdf.setFont("helvetica", "bold"); pdf.setFontSize(8); pdf.text(element.projectNameText?.[locale] ?? project.name, x + 8, y + 14); pdf.setFont("helvetica", "normal"); pdf.setFontSize(6); pdf.text(element.coordinatorText?.[locale] ?? project.participants.find((participant) => participant.role === "coordinator")?.name ?? "—", x + 8, y + 28); pdf.text(element.referenceText?.[locale] ?? `${project.projectNumber} · A0`, x + 8, y + 41);
     }
@@ -166,6 +224,7 @@ export async function exportPlanPdf(
   plan: Plan,
   blocks: BuildingBlock[],
   categories: BuildingBlockCategory[],
+  locale: Locale,
   revision?: PlanRevision,
 ): Promise<void> {
   const blocksWithImages = await hydrateBlockImages(blocks);
@@ -203,7 +262,7 @@ export async function exportPlanPdf(
       // Keep the labelled PDF placeholder when a source page cannot be decoded.
     }
   }));
-  buildPlanPdf({ ...project, assets }, plan, blocksWithImages, categories, revision, assetPreviewByElement)
+  buildPlanPdf({ ...project, assets }, plan, blocksWithImages, categories, locale, revision, assetPreviewByElement)
     .save(`${safeFilename(project.projectNumber)}-sige-plan-${revision?.index ?? "draft"}.pdf`);
 }
 
@@ -227,15 +286,15 @@ export function buildPlanDocxDocument(
   plan: Plan,
   blocks: BuildingBlock[],
   categories: BuildingBlockCategory[],
+  locale: Locale,
   revision?: PlanRevision,
 ): Document {
-  const locale = plan.documentLocale;
   const blockMap = getBlockMap(blocks);
   const categoryMap = getCategoryMap(categories);
   const children: (Paragraph | Table)[] = [
     new Paragraph({
       heading: HeadingLevel.TITLE,
-      children: [new TextRun({ text: plan.title, bold: true, color: "12241F" })],
+      children: [new TextRun({ text: locale === "de" ? "Sicherheits- und Gesundheitsschutzplan" : "Safety and Health Plan", bold: true, color: "12241F" })],
     }),
     new Paragraph({
       children: [new TextRun({ text: `${project.projectNumber} · ${project.name}`, bold: true, color: "12241F" })],
@@ -252,7 +311,7 @@ export function buildPlanDocxDocument(
     ...((project.assets ?? []).some((asset) => (plan.includedAssetIds ?? []).includes(asset.id)) ? [
       new Paragraph({
         children: [new TextRun({
-          text: `${locale === "de" ? "Projektdateien" : "Project files"}: ${(project.assets ?? []).filter((asset) => (plan.includedAssetIds ?? []).includes(asset.id)).map((asset) => asset.filename).join(" · ")}`,
+          text: `${locale === "de" ? "Projektdokumente" : "Project documents"}: ${(project.assets ?? []).filter((asset) => (plan.includedAssetIds ?? []).includes(asset.id)).map((asset) => asset.filename).join(" · ")}`,
           color: "53615C",
         })],
         spacing: { after: 240 },
@@ -306,7 +365,7 @@ export function buildPlanDocxDocument(
 
   return new Document({
     creator: "QuickSiGe",
-    title: `${project.projectNumber} ${plan.title}`,
+    title: `${project.projectNumber} ${locale === "de" ? "Sicherheits- und Gesundheitsschutzplan" : "Safety and Health Plan"}`,
     description: "Generated from a QuickSiGe plan revision",
     styles: {
       default: { document: { run: { font: "Aptos", size: 21 }, paragraph: { spacing: { line: 280 } } } },
@@ -325,9 +384,10 @@ export async function exportPlanDocx(
   plan: Plan,
   blocks: BuildingBlock[],
   categories: BuildingBlockCategory[],
+  locale: Locale,
   revision?: PlanRevision,
 ): Promise<void> {
-  const blob = await Packer.toBlob(buildPlanDocxDocument(project, plan, blocks, categories, revision));
+  const blob = await Packer.toBlob(buildPlanDocxDocument(project, plan, blocks, categories, locale, revision));
   downloadBlob(blob, `${safeFilename(project.projectNumber)}-sige-plan-${revision?.index ?? "draft"}.docx`);
 }
 
@@ -381,7 +441,7 @@ const constructionTypeCopy: Record<Locale, Record<Project["constructionType"], s
   en: { new_build: "New build", renovation: "Renovation", demolition: "Demolition" },
 };
 
-function drawA4Header(pdf: jsPDF, project: Project, copy: SupportingCopy): number {
+function drawA4Header(pdf: jsPDF, project: Project, copy: SupportingCopy, locale: Locale): number {
   pdf.setFillColor(18, 36, 31);
   pdf.rect(0, 0, 210, 46, "F");
   pdf.setTextColor(213, 255, 63);
@@ -396,7 +456,7 @@ function drawA4Header(pdf: jsPDF, project: Project, copy: SupportingCopy): numbe
   pdf.text(copy.subtitle, 16, 38);
   pdf.text(`${project.projectNumber} · ${project.name}`, 194, 17, { align: "right" });
   pdf.text(`${project.address}, ${project.city}`, 194, 28, { align: "right" });
-  pdf.text(new Date().toLocaleDateString(project.documentLocale === "de" ? "de-DE" : "en-GB"), 194, 38, { align: "right" });
+  pdf.text(new Date().toLocaleDateString(locale === "de" ? "de-DE" : "en-GB"), 194, 38, { align: "right" });
   pdf.setTextColor(28, 43, 38);
   return 58;
 }
@@ -418,11 +478,10 @@ function drawRows(pdf: jsPDF, rows: Array<[string, string]>, startY: number): nu
   return y;
 }
 
-export function buildSupportingDocumentPdf(project: Project, type: Plan["supportingDocuments"][number]["type"]): jsPDF {
-  const locale = project.documentLocale;
+export function buildSupportingDocumentPdf(project: Project, type: Plan["supportingDocuments"][number]["type"], locale: Locale): jsPDF {
   const copy = supportingCopy[locale][type];
   const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
-  let y = drawA4Header(pdf, project, copy);
+  let y = drawA4Header(pdf, project, copy, locale);
   pdf.setTextColor(28, 43, 38);
 
   if (type === "alarm_plan" || type === "first_aid") {
@@ -476,7 +535,7 @@ export function buildSupportingDocumentPdf(project: Project, type: Plan["support
   return pdf;
 }
 
-export function exportSupportingDocumentPdf(project: Project, type: Plan["supportingDocuments"][number]["type"]): void {
-  buildSupportingDocumentPdf(project, type)
+export function exportSupportingDocumentPdf(project: Project, type: Plan["supportingDocuments"][number]["type"], locale: Locale): void {
+  buildSupportingDocumentPdf(project, type, locale)
     .save(`${safeFilename(project.projectNumber)}-${type.replaceAll("_", "-")}.pdf`);
 }

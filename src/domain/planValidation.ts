@@ -1,4 +1,4 @@
-import type { BuildingBlock, DocumentTemplate, Plan, Project, ProjectDocumentConfiguration } from "./types";
+import type { BuildingBlock, DocumentTemplate, Locale, Plan, Project, ProjectDocumentConfiguration } from "./types";
 
 export type PlanValidationSeverity = "error" | "warning" | "information";
 
@@ -19,27 +19,29 @@ interface ValidationInput {
   blocks: BuildingBlock[];
   documentConfigurations: ProjectDocumentConfiguration[];
   documentTemplates: DocumentTemplate[];
+  locale: Locale;
   t: (key: string, params?: Record<string, string | number>) => string;
 }
 
-function elementName(plan: Plan, project: Project, blocks: Map<string, BuildingBlock>, elementId: string, t: ValidationInput["t"]): string {
+function elementName(plan: Plan, project: Project, blocks: Map<string, BuildingBlock>, elementId: string, locale: Locale, t: ValidationInput["t"]): string {
   const element = plan.layout.elements.find((candidate) => candidate.id === elementId);
   if (!element) return t("editor.validation.unknownElement");
   if (element.kind === "block") {
     const item = plan.sections.find((section) => section.id === element.sectionId)?.items.find((candidate) => candidate.id === element.itemId);
     const block = item ? blocks.get(item.blockId) : undefined;
-    return block ? item?.customTitle?.[plan.documentLocale] ?? block.translations[plan.documentLocale].title : element.id;
+    return block ? item?.customTitle?.[locale] ?? block.translations[locale].title : element.id;
   }
   if (element.kind === "image" || element.kind === "pdf_page") return project.assets.find((asset) => asset.id === element.assetId)?.filename ?? element.id;
-  if (element.kind === "text") return element.text[plan.documentLocale]?.slice(0, 48) || t("editor.element.text");
+  if (element.kind === "text") return element.text[locale]?.slice(0, 48) || t("editor.element.text");
+  if (element.kind === "shape") return element.text?.[locale]?.slice(0, 48) || t(`editor.shape.${element.shape}`);
   return t(`editor.element.${element.kind}`);
 }
 
-export function createPlanValidationIssues({ plan, project, blocks, documentConfigurations, documentTemplates, t }: ValidationInput): PlanValidationIssue[] {
+export function createPlanValidationIssues({ plan, project, blocks, documentConfigurations, documentTemplates, locale, t }: ValidationInput): PlanValidationIssue[] {
   const issues: PlanValidationIssue[] = [];
   const blockMap = new Map(blocks.map((block) => [block.id, block]));
   const addElementIssue = (ruleCode: string, elementId: string, descriptionKey: string, suggestedActionKey: string) => {
-    const name = elementName(plan, project, blockMap, elementId, t);
+    const name = elementName(plan, project, blockMap, elementId, locale, t);
     issues.push({
       id: `${ruleCode}:${elementId}`,
       severity: "warning",
@@ -69,7 +71,7 @@ export function createPlanValidationIssues({ plan, project, blocks, documentConf
     if (element.kind === "block") {
       const item = plan.sections.find((section) => section.id === element.sectionId)?.items.find((candidate) => candidate.id === element.itemId);
       const block = item ? blockMap.get(item.blockId) : undefined;
-      const text = item && block ? item.customShortDescription?.[plan.documentLocale] ?? block.translations[plan.documentLocale].shortDescription : "";
+      const text = item && block ? item.customShortDescription?.[locale] ?? block.translations[locale].shortDescription : "";
       const estimatedCapacity = Math.max(40, Math.floor((element.width / 120) * (element.height / 150)));
       if (text.length > estimatedCapacity) addElementIssue("TEXT_OVERFLOW", element.id, "editor.validation.overflowDescription", "editor.validation.resizeOrShorten");
     }

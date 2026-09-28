@@ -6,7 +6,7 @@ export type Season = "spring" | "summer" | "autumn" | "winter" | "year_round";
 export type RecommendationStrength = "required_review" | "strong" | "optional";
 export type RecordLifecycle = "active" | "archived";
 
-export interface Organization { id: string; name: string; defaultLocale: Locale; accentColor: string }
+export interface Organization { id: string; name: string; accentColor: string }
 export interface AppUser { id: string; organizationId: string; name: string; email: string; role: "owner" | "admin" | "editor" | "viewer"; preferredLocale: Locale }
 
 export interface Participant {
@@ -95,7 +95,6 @@ export interface Project {
   startDate: string;
   endDate: string;
   status: ProjectStatus;
-  documentLocale: Locale;
   participants: Participant[];
   emergencyContacts: EmergencyContact[];
   customFields: CustomField[];
@@ -130,7 +129,6 @@ export interface BuildingBlock {
   categoryId?: string;
   visualKey: string;
   imageDataUrl?: string;
-  color: string;
   regulations: string[];
   lifecycle: RecordLifecycle;
   translations: Record<Locale, LocalizedBuildingBlockContent>;
@@ -139,7 +137,8 @@ export interface BuildingBlock {
 export interface BuildingBlockCategory {
   id: string;
   parentId?: string;
-  color: string;
+  /** Only root categories own a persisted color; descendant colors are derived from depth. */
+  color?: string;
   sortOrder: number;
   lifecycle: RecordLifecycle;
   translations: Record<Locale, { name: string; description: string }>;
@@ -166,7 +165,19 @@ export type SupportingDocumentType = "site_rules" | "alarm_plan" | "fire_safety"
 export interface PlanSupportingDocument { id: string; type: SupportingDocumentType; included: boolean }
 
 export type BlockLayoutMode = "vertical" | "horizontal" | "best_fit";
-export type PlanElementKind = "block_area" | "header" | "section" | "block" | "image" | "pdf_page" | "document" | "text" | "title_block";
+export type PlanAnnotationShape = "rectangle" | "line" | "arrow" | "callout";
+export type PlanTextAlignment = "left" | "center" | "right";
+export interface PlanAnnotationStyle {
+  fillColor?: string;
+  strokeColor?: string;
+  strokeWidth?: number;
+  textColor?: string;
+  fontSize?: number;
+  fontWeight?: "normal" | "bold";
+  textAlign?: PlanTextAlignment;
+  opacity?: number;
+}
+export type PlanElementKind = "block_area" | "header" | "section" | "block" | "image" | "pdf_page" | "document" | "text" | "shape" | "title_block";
 export interface PlanElementBase {
   id: string;
   kind: PlanElementKind;
@@ -194,7 +205,15 @@ export interface PlanDocumentElement extends PlanElementBase {
   documentType: SupportingDocumentType;
   displayVariant?: "compact" | "emergency_card" | "participant_list" | "qr_link";
 }
-export interface PlanTextElement extends PlanElementBase { kind: "text"; text: Partial<Record<Locale, string>> }
+export interface PlanConnectorPoint { x: number; y: number }
+export interface PlanTextElement extends PlanElementBase, PlanAnnotationStyle { kind: "text"; text: Partial<Record<Locale, string>> }
+export interface PlanShapeElement extends PlanElementBase, PlanAnnotationStyle {
+  kind: "shape";
+  shape: PlanAnnotationShape;
+  text?: Partial<Record<Locale, string>>;
+  connectorStart?: PlanConnectorPoint;
+  connectorEnd?: PlanConnectorPoint;
+}
 export interface PlanHeaderElement extends PlanElementBase {
   kind: "header";
   brandText?: Partial<Record<Locale, string>>;
@@ -209,7 +228,7 @@ export interface PlanTitleBlockElement extends PlanElementBase {
   coordinatorText?: Partial<Record<Locale, string>>;
   referenceText?: Partial<Record<Locale, string>>;
 }
-export type PlanElement = PlanBlockAreaElement | PlanHeaderElement | PlanSectionElement | PlanBlockElement | PlanAssetElement | PlanDocumentElement | PlanTextElement | PlanTitleBlockElement;
+export type PlanElement = PlanBlockAreaElement | PlanHeaderElement | PlanSectionElement | PlanBlockElement | PlanAssetElement | PlanDocumentElement | PlanTextElement | PlanShapeElement | PlanTitleBlockElement;
 
 /** Coordinates are integer tenths of a millimetre to avoid floating-point drift. */
 export interface PlanLayout {
@@ -224,7 +243,7 @@ export interface PlanLayout {
 }
 
 export interface Plan {
-  id: string; projectId: string; title: string; documentLocale: Locale; status: "draft" | "published";
+  id: string; projectId: string; status: "draft" | "published";
   sections: PlanSection[]; layout: PlanLayout; recommendations: Recommendation[]; requirementAssessment: RequirementAssessment;
   supportingDocuments: PlanSupportingDocument[]; includedAssetIds: string[]; createdAt: string; updatedAt: string;
 }

@@ -10,12 +10,16 @@ describe("local database migration", () => {
   it("preserves projects while adding flexible data, templates, and A0 layout", () => {
     const legacy = structuredClone(createSeedDatabase()) as unknown as Record<string, unknown>;
     legacy.schemaVersion = 2;
+    (legacy.organization as Record<string, unknown>).defaultLocale = "de";
     const project = (legacy.projects as Array<Record<string, unknown>>)[0];
+    project.documentLocale = "de";
     delete project.customFields;
     delete project.customSections;
     delete project.assets;
     delete project.documentFolders;
     const plan = (legacy.plans as Array<Record<string, unknown>>)[0];
+    plan.documentLocale = "de";
+    plan.title = "Legacy German plan title";
     delete plan.layout;
     delete legacy.overviewTemplates;
     delete legacy.documentTemplates;
@@ -33,10 +37,14 @@ describe("local database migration", () => {
     const migrated = migrateDatabase(legacy);
 
     expect(migrated?.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(migrated?.organization).not.toHaveProperty("defaultLocale");
     expect(migrated?.projects[0].id).toBe(project.id);
     expect(migrated?.projects[0].customFields).toEqual([]);
     expect(migrated?.projects[0].documentFolders).toEqual([]);
+    expect(migrated?.projects[0]).not.toHaveProperty("documentLocale");
     expect(migrated?.plans[0].layout.format).toBe("A0");
+    expect(migrated?.plans[0]).not.toHaveProperty("documentLocale");
+    expect(migrated?.plans[0]).not.toHaveProperty("title");
     expect(migrated?.documentTemplates.length).toBeGreaterThan(0);
     expect(migrated?.blocks[0].imageDataUrl).toBe("/block-images/block-existing-utilities.png");
     expect(migrated?.blocks[0]).not.toHaveProperty("code");
@@ -92,7 +100,10 @@ describe("local database migration", () => {
     const second = migrateDatabase(first);
 
     expect(second?.categories.find((category) => category.id === "depth-4")?.parentId).toBe("depth-3");
+    expect(second?.categories.find((category) => category.id === "depth-3")).not.toHaveProperty("color");
+    expect(second?.categories.find((category) => category.id === "depth-4")).not.toHaveProperty("color");
     expect(second?.blocks[0].categoryIds).toEqual(["site-setup", "site-access-emergency", "depth-3", "depth-4"]);
+    expect(second?.blocks[0]).not.toHaveProperty("color");
     expect(second?.schemaVersion).toBe(first?.schemaVersion);
   });
 
@@ -109,7 +120,55 @@ describe("local database migration", () => {
 
     expect(reloadedBlock?.primaryCategoryId).toBe("earthworks");
     expect(reloadedBlock?.categoryIds).toEqual(["earthworks"]);
-    expect(reloadedBlock?.color).toBe(source.categories.find((category) => category.id === "earthworks")?.color);
+    expect(reloadedBlock).not.toHaveProperty("color");
+    expect(second?.categories.find((category) => category.id === "earthworks")?.color).toBe("#a85a32");
+  });
+
+  it("corrects known default category mistakes without overwriting unrelated catalog moves", () => {
+    const source = createSeedDatabase();
+    source.schemaVersion = 19;
+    const legacyAssignments = {
+      "block-existing-utilities": "preparation",
+      "block-site-fencing": "site-access-emergency",
+      "block-temporary-power": "site-utilities",
+      "organization-archived-infection-access": "preparation",
+    };
+    for (const [blockId, categoryId] of Object.entries(legacyAssignments)) {
+      const block = source.blocks.find((candidate) => candidate.id === blockId)!;
+      block.primaryCategoryId = categoryId;
+      block.categoryIds = [categoryId];
+    }
+    const deliberatelyMovedBlock = source.blocks.find((block) => block.id === "block-first-aid")!;
+    deliberatelyMovedBlock.primaryCategoryId = "earthworks";
+    deliberatelyMovedBlock.categoryIds = ["earthworks"];
+
+    const migrated = migrateDatabase(source);
+
+    expect(migrated?.blocks.find((block) => block.id === "block-existing-utilities")?.primaryCategoryId).toBe("existing-underground-utilities");
+    expect(migrated?.blocks.find((block) => block.id === "block-site-fencing")?.primaryCategoryId).toBe("imported-site-security");
+    expect(migrated?.blocks.find((block) => block.id === "block-temporary-power")?.primaryCategoryId).toBe("site-power-water");
+    expect(migrated?.blocks.find((block) => block.id === "organization-archived-infection-access")?.primaryCategoryId).toBe("site-access-emergency");
+    expect(migrated?.blocks.find((block) => block.id === "block-first-aid")?.primaryCategoryId).toBe("earthworks");
+  });
+
+  it("removes legacy block and descendant colors from live data and revision snapshots", () => {
+    const source = createSeedDatabase();
+    const childCategory = source.categories.find((category) => category.parentId);
+    const revision = source.revisions[0];
+    const snapshotChildCategory = revision.snapshot.categories.find((category) => category.parentId);
+    expect(childCategory).toBeDefined();
+    expect(snapshotChildCategory).toBeDefined();
+    Object.assign(source.blocks[0], { color: "#123456" });
+    Object.assign(childCategory!, { color: "#654321" });
+    Object.assign(revision.snapshot.blocks[0], { color: "#abcdef" });
+    Object.assign(snapshotChildCategory!, { color: "#fedcba" });
+
+    const migrated = migrateDatabase(source);
+
+    expect(migrated?.blocks[0]).not.toHaveProperty("color");
+    expect(migrated?.categories.find((category) => category.id === childCategory!.id)).not.toHaveProperty("color");
+    expect(migrated?.revisions[0].snapshot.blocks[0]).not.toHaveProperty("color");
+    expect(migrated?.revisions[0].snapshot.categories.find((category) => category.id === snapshotChildCategory!.id)).not.toHaveProperty("color");
   });
 
   it("migrates legacy typed overview templates into the hierarchical builder", () => {

@@ -14,3 +14,11 @@
 - Small Pull Requests: Keep code branches small and focused on single problems to ensure thorough peer reviews.
 - Constructive Peer Reviews: Use the review process to catch edge cases, validate architectural decisions, and share team knowledge.
 - Security by Design: Sanitize all external inputs to block injection attacks, encrypt sensitive data, and keep third-party dependencies updated.
+
+Don't immediately code → investigate first.
+Don't patch → find root cause.
+Don't create duplicated state → single source of truth.
+Don't interpret a bug too narrowly → think system-wide.
+Don't optimize for smallest diff → optimize for correct architecture.
+Don't overengineer → simplest proper solution.
+Don't say “done” after compiling → actually verify.
