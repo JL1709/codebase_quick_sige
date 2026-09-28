@@ -84,13 +84,43 @@ describe("physical A0 layout", () => {
     const reconciledItem = targetSection?.items.find((item) => item.id === movedItem!.id);
     expect(reconciledItem?.customTitle?.de).toBe("Planspezifischer Titel");
     expect(sections.find((section) => section.categoryId === "site-access-emergency")?.items.some((item) => item.id === movedItem!.id)).toBe(false);
-    expect(sections.every((section) => section.items.length > 0)).toBe(true);
+    expect(sections.find((section) => section.categoryId === "site-setup")?.items).toEqual([]);
 
     const fitted = fitBlocksInArea(plan.layout, sections, database.categories, blocks, "best_fit");
     const movedElement = fitted.layout.elements.find(
       (element): element is PlanBlockElement => element.kind === "block" && element.itemId === movedItem!.id,
     );
     expect(movedElement?.sectionId).toBe(targetSection?.id);
+  });
+
+  it("fits every catalog ancestor as a containing section around its descendants", () => {
+    const database = createSeedDatabase();
+    const plan = structuredClone(database.plans[0]);
+    const sections = reconcilePlanSectionsWithCatalog(plan.sections, database.categories, database.blocks);
+    const fitted = fitBlocksInArea(plan.layout, sections, database.categories, database.blocks, "best_fit");
+    const sectionElementByCategoryId = new Map(sections.map((section) => [
+      section.categoryId,
+      fitted.layout.elements.find((element) => element.kind === "section" && element.sectionId === section.id),
+    ]));
+    const rootElement = sectionElementByCategoryId.get("site-setup");
+    const accessElement = sectionElementByCategoryId.get("site-access-emergency");
+    const accessSection = sections.find((section) => section.categoryId === "site-access-emergency");
+    const accessBlockElement = fitted.layout.elements.find(
+      (element) => element.kind === "block" && accessSection?.items.some((item) => item.id === element.itemId),
+    );
+
+    expect(fitted.fits).toBe(true);
+    expect(rootElement).toBeDefined();
+    expect(accessElement).toBeDefined();
+    expect(accessBlockElement).toBeDefined();
+    expect(accessElement!.x).toBeGreaterThan(rootElement!.x);
+    expect(accessElement!.y).toBeGreaterThan(rootElement!.y);
+    expect(accessElement!.x + accessElement!.width).toBeLessThan(rootElement!.x + rootElement!.width);
+    expect(accessElement!.y + accessElement!.height).toBeLessThan(rootElement!.y + rootElement!.height);
+    expect(accessBlockElement!.x).toBeGreaterThan(accessElement!.x);
+    expect(accessBlockElement!.y).toBeGreaterThan(accessElement!.y);
+    expect(accessBlockElement!.x + accessBlockElement!.width).toBeLessThan(accessElement!.x + accessElement!.width);
+    expect(accessBlockElement!.y + accessBlockElement!.height).toBeLessThan(accessElement!.y + accessElement!.height);
   });
 
   it("keeps user-placed files unchanged while fitting blocks", () => {

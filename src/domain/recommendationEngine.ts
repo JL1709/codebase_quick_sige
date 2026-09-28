@@ -9,7 +9,7 @@ import type {
   RecommendationStrength,
   RequirementAssessment,
 } from "./types";
-import { createLayoutFromSections } from "./planLayout";
+import { createLayoutFromSections, reconcilePlanSectionsWithCatalog } from "./planLayout";
 
 interface RecommendationCandidate {
   blockId: string;
@@ -125,7 +125,7 @@ export function createPlanFromAssessment(
   const includedBlockIds = new Set(recommendations.filter((result) => result.included).map((result) => result.blockId));
   const blockMap = new Map(blocks.map((block) => [block.id, block]));
 
-  const sections: PlanSection[] = categories
+  const directSections: PlanSection[] = categories
     .map((category) => ({
       id: `section-${category.id}`,
       categoryId: category.id,
@@ -134,6 +134,7 @@ export function createPlanFromAssessment(
         .map((block) => ({ id: `item-${block.id}`, blockId: block.id })),
     }))
     .filter((section) => section.items.some((item) => blockMap.has(item.blockId)));
+  const sections = reconcilePlanSectionsWithCatalog(directSections, categories, blocks);
 
   return {
     id: `plan-${project.id}`,

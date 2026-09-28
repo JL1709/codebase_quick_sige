@@ -1,5 +1,5 @@
 import { createSeedDatabase, DEFAULT_PRIMARY_CATEGORY_BY_BLOCK_ID } from "./seed";
-import { ensurePlanLayout } from "../domain/planLayout";
+import { ensurePlanLayout, fitBlocksInArea, reconcilePlanSectionsWithCatalog } from "../domain/planLayout";
 import { defaultBlockImageSource } from "../domain/blockImages";
 import { categoryPlacementIds, normalizeCategoryColorOwnership } from "../domain/categoryTree";
 import { legacyProjectOverviewSections } from "../domain/projectOverview";
@@ -22,7 +22,7 @@ export const STORAGE_KEY = "quicksige.database.v3";
 const LEGACY_STORAGE_KEYS = ["quicksige.prototype.database.v2"];
 export const BACKUP_KEY = "quicksige.database.migration-backup.v2";
 export const MIGRATION_ERROR_KEY = "quicksige.database.migration-error";
-export const CURRENT_SCHEMA_VERSION = 21;
+export const CURRENT_SCHEMA_VERSION = 22;
 
 const persistedDatabaseSchema = z.object({
   schemaVersion: z.number().int().nonnegative(),
@@ -122,6 +122,22 @@ function migratePlan(plan: PersistedPlan): Plan {
     supportingDocuments: plan.supportingDocuments ?? [],
     includedAssetIds: plan.includedAssetIds ?? [],
   });
+}
+
+function migratePlanCategoryHierarchy(
+  plan: Plan,
+  categories: BuildingBlockCategory[],
+  blocks: BuildingBlock[],
+  sourceSchemaVersion: number,
+): Plan {
+  if (sourceSchemaVersion >= CURRENT_SCHEMA_VERSION) return plan;
+  const sections = reconcilePlanSectionsWithCatalog(plan.sections, categories, blocks);
+  const fitted = fitBlocksInArea(plan.layout, sections, categories, blocks);
+  return {
+    ...plan,
+    sections,
+    layout: fitted.fits ? fitted.layout : plan.layout,
+  };
 }
 
 function migrateTemplateEntry(entry: OverviewTemplateEntry): OverviewTemplateEntry {
@@ -277,10 +293,16 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
   const organization = { ...defaults.organization, ...source.organization } as typeof source.organization & { defaultLocale?: Locale };
   Reflect.deleteProperty(organization, "defaultLocale");
   const projects = source.projects.map((project) => migrateProject(project as PersistedProject, locale));
-  const plans = (source.plans ?? []).map((plan) => migratePlan(plan as PersistedPlan));
   const sourceCategories = (source.categories ?? []).map(migrateCategory);
   const sourceCategoryIds = new Set(sourceCategories.map((category) => category.id));
   const categories = [...sourceCategories, ...defaults.categories.filter((category) => !sourceCategoryIds.has(category.id))];
+  const blocks = source.blocks
+    .map(migrateBlock)
+    .map((block) => correctDefaultCategoryAssignment(block, source.schemaVersion ?? 0))
+    .map((block) => normalizeBlockPlacement(block, categories));
+  const plans = (source.plans ?? [])
+    .map((plan) => migratePlan(plan as PersistedPlan))
+    .map((plan) => migratePlanCategoryHierarchy(plan, categories, blocks, source.schemaVersion ?? 0));
   const documentTemplates = (source.documentTemplates ?? defaults.documentTemplates)
     .filter((template) => template.origin === "custom" || template.documentType === "a4_plan")
     .map((template) => ({
@@ -296,10 +318,7 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
     schemaVersion: CURRENT_SCHEMA_VERSION,
     organization,
     projects,
-    blocks: source.blocks
-      .map(migrateBlock)
-      .map((block) => correctDefaultCategoryAssignment(block, source.schemaVersion ?? 0))
-      .map((block) => normalizeBlockPlacement(block, categories)),
+    blocks,
     categories,
     plans,
     revisions: (source.revisions ?? []).map((revision) => {
@@ -307,12 +326,13 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
       const snapshotBlocks = (revision.snapshot.blocks ?? source.blocks)
         .map(migrateBlock)
         .map((block) => normalizeBlockPlacement(block, snapshotCategories));
+      const snapshotPlan = migratePlan(revision.snapshot.plan as PersistedPlan);
       return {
         ...revision,
         snapshot: {
           ...revision.snapshot,
           project: migrateProject(revision.snapshot.project as PersistedProject, locale),
-          plan: migratePlan(revision.snapshot.plan as PersistedPlan),
+          plan: migratePlanCategoryHierarchy(snapshotPlan, snapshotCategories, snapshotBlocks, source.schemaVersion ?? 0),
           blocks: snapshotBlocks,
           categories: snapshotCategories,
           documentTemplates: revision.snapshot.documentTemplates ?? source.documentTemplates ?? defaults.documentTemplates,

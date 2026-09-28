@@ -1,7 +1,7 @@
 import type { BuildingBlock, BuildingBlockCategory, Locale } from "./types";
 
-const CATEGORY_DEPTH_LIGHTENING_STEP = 0.14;
-const MAXIMUM_CATEGORY_LIGHTENING = 0.56;
+const CATEGORY_DEPTH_LIGHTENING_STEP = 0.24;
+const MAXIMUM_CATEGORY_LIGHTENING = 0.78;
 export const DEFAULT_ROOT_CATEGORY_COLOR = "#496f5f";
 
 function validCategoryColor(color: string | undefined): string {

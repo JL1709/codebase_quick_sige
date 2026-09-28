@@ -40,6 +40,7 @@ describe("recursive category tree", () => {
     const emergencyBlock = database.blocks.find((block) => block.id === "block-first-aid")!;
 
     expect(rootColor).toBe("#c8644d");
+    expect(firstLevelColor).toBe("#d58978");
     expect(firstLevelColor).toBe(siblingColor);
     expect(firstLevelColor).not.toBe(rootColor);
     expect(deepestColor).not.toBe(firstLevelColor);

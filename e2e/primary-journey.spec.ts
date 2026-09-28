@@ -843,6 +843,25 @@ test("plan library reflects settings language, catalog membership, placement, an
   await page.goto("/projects/project-logistics-center/plan");
 
   await expect(page.getByLabel("Document language")).toHaveCount(0);
+  const siteSetupSection = page.locator('[data-category-id="site-setup"]');
+  const accessSection = page.locator('[data-category-id="site-access-emergency"]');
+  const siteAccessBlock = page.locator('[data-block-id="block-site-access"]');
+  await expect(siteSetupSection).toBeVisible();
+  await expect(accessSection).toBeVisible();
+  const [siteSetupBounds, accessBounds] = await Promise.all([siteSetupSection.boundingBox(), accessSection.boundingBox()]);
+  expect(siteSetupBounds).not.toBeNull();
+  expect(accessBounds).not.toBeNull();
+  expect(accessBounds!.x).toBeGreaterThan(siteSetupBounds!.x);
+  expect(accessBounds!.y).toBeGreaterThan(siteSetupBounds!.y);
+  expect(accessBounds!.x + accessBounds!.width).toBeLessThan(siteSetupBounds!.x + siteSetupBounds!.width);
+  expect(accessBounds!.y + accessBounds!.height).toBeLessThan(siteSetupBounds!.y + siteSetupBounds!.height);
+  const [rootColor, accessColor, blockColor] = await Promise.all([
+    siteSetupSection.locator(":scope > div").evaluate((element) => getComputedStyle(element).backgroundColor),
+    accessSection.locator(":scope > div").evaluate((element) => getComputedStyle(element).backgroundColor),
+    siteAccessBlock.locator(".canvas-block-title").evaluate((element) => getComputedStyle(element).backgroundColor),
+  ]);
+  expect(accessColor).not.toBe(rootColor);
+  expect(blockColor).toBe(accessColor);
   await page.getByRole("button", { name: /Access and emergency organization/ }).click();
   await expect(page.locator(".library-category-header").filter({ hasText: "Access and emergency organization" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Included: Organize first aid" })).toBeDisabled();

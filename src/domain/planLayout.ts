@@ -41,13 +41,16 @@ export const PLAN_BLOCK_AREA_ELEMENT_ID = "layout-block-area";
 export const PLAN_HEADER_ELEMENT_ID = "layout-header";
 export const PLAN_TITLE_BLOCK_ELEMENT_ID = "layout-title-block";
 
-interface OrderedSection {
+interface SectionHierarchyNode {
   section: PlanSection;
   items: PlanSection["items"];
+  children: SectionHierarchyNode[];
+  depth: number;
 }
 
 interface SectionPlacement {
   sectionId: string;
+  depth: number;
   x: number;
   y: number;
   width: number;
@@ -60,6 +63,12 @@ interface LayoutCandidate {
   blockHeight: number;
   placements: SectionPlacement[];
   footprint: number;
+}
+
+interface LocalHierarchyLayout {
+  width: number;
+  height: number;
+  placements: SectionPlacement[];
 }
 
 export interface FitBlocksResult {
@@ -209,170 +218,206 @@ export function reconcilePlanSectionsWithCatalog(
     return candidateId;
   };
 
-  return [...itemsByCategory.entries()]
-    .sort(([leftCategoryId], [rightCategoryId]) => compareCategoryOrder(leftCategoryId, rightCategoryId, categories))
-    .map(([categoryId, items]) => {
+  const visibleCategoryIds = new Set<string>();
+  itemsByCategory.forEach((items, categoryId) => {
+    if (!items.length || !knownCategoryIds.has(categoryId)) return;
+    categoryTrail(categoryId, categories).forEach((category) => visibleCategoryIds.add(category.id));
+  });
+
+  const reconciledSections = categories
+    .filter((category) => visibleCategoryIds.has(category.id))
+    .sort((left, right) => compareCategoryOrder(left.id, right.id, categories))
+    .map((category) => {
+      const categoryId = category.id;
       const existingSection = existingSectionByCategory.get(categoryId);
       return {
         ...(existingSection ?? { id: sectionIdForCategory(categoryId), categoryId }),
         categoryId,
-        items,
+        items: itemsByCategory.get(categoryId) ?? [],
       };
     });
+
+  const unknownSections = sections.filter((section) => !knownCategoryIds.has(section.categoryId) && section.items.length > 0);
+  return [...reconciledSections, ...unknownSections];
 }
 
-function orderedSections(
+function sectionHierarchy(
   sections: PlanSection[],
   categories: BuildingBlockCategory[],
   blocks: BuildingBlock[],
-): OrderedSection[] {
+): SectionHierarchyNode[] {
   const blockOrder = new Map(blocks.map((block, index) => [block.id, index]));
-  return sections
-    .filter((section) => section.items.length > 0)
-    .map((section) => ({
+  const sectionByCategoryId = new Map(sections.map((section) => [section.categoryId, section]));
+  const categoryById = new Map(categories.map((category) => [category.id, category]));
+  const nodeByCategoryId = new Map<string, SectionHierarchyNode>(sections.map((section) => [section.categoryId, {
       section,
       items: section.items
         .map((item, index) => ({ item, index }))
         .sort((left, right) => (blockOrder.get(left.item.blockId) ?? Number.MAX_SAFE_INTEGER) - (blockOrder.get(right.item.blockId) ?? Number.MAX_SAFE_INTEGER) || left.index - right.index)
         .map(({ item }) => item),
-    }))
-    .sort((left, right) => compareCategoryOrder(left.section.categoryId, right.section.categoryId, categories));
+      children: [],
+      depth: Math.max(0, categoryTrail(section.categoryId, categories).length - 1),
+    }] as const));
+
+  const roots: SectionHierarchyNode[] = [];
+  nodeByCategoryId.forEach((node, categoryId) => {
+    const parentId = categoryById.get(categoryId)?.parentId;
+    const parent = parentId ? nodeByCategoryId.get(parentId) : undefined;
+    if (parent) parent.children.push(node);
+    else roots.push(node);
+  });
+  const sortNodes = (nodes: SectionHierarchyNode[]) => {
+    nodes.sort((left, right) => compareCategoryOrder(left.section.categoryId, right.section.categoryId, categories));
+    nodes.forEach((node) => sortNodes(node.children));
+  };
+  sortNodes(roots);
+  return roots.filter((node) => sectionByCategoryId.has(node.section.categoryId));
 }
 
 function blockHeightForWidth(blockWidth: number): number {
   return snapToGrid(blockWidth / BLOCK_ASPECT_RATIO);
 }
 
-function verticalCandidate(groups: OrderedSection[], area: PlanBlockAreaElement, blockWidth: number, blockHeight: number): LayoutCandidate | null {
-  const availableBlockHeight = area.height - SECTION_HEADER_HEIGHT - SECTION_PADDING * 2;
-  const rowsPerColumn = Math.floor((availableBlockHeight + BLOCK_GAP) / (blockHeight + BLOCK_GAP));
-  if (rowsPerColumn < 1) return null;
-  const groupWidths = groups.map(({ items }) => {
-    const columns = Math.ceil(items.length / rowsPerColumn);
-    return SECTION_PADDING * 2 + columns * blockWidth + Math.max(0, columns - 1) * BLOCK_GAP;
-  });
-  const totalWidth = groupWidths.reduce((sum, width) => sum + width, 0) + Math.max(0, groups.length - 1) * SECTION_GAP;
-  if (totalWidth > area.width) return null;
-
-  let groupX = area.x;
-  const placements = groups.map(({ section, items }, groupIndex) => {
-    const rowsUsed = Math.min(rowsPerColumn, items.length);
-    const groupHeight = SECTION_HEADER_HEIGHT + SECTION_PADDING * 2 + rowsUsed * blockHeight + Math.max(0, rowsUsed - 1) * BLOCK_GAP;
-    const placement: SectionPlacement = {
-      sectionId: section.id,
-      x: groupX,
-      y: area.y,
-      width: groupWidths[groupIndex],
-      height: groupHeight,
-      blocks: items.map((item, itemIndex) => ({
-        itemId: item.id,
-        x: groupX + SECTION_PADDING + Math.floor(itemIndex / rowsPerColumn) * (blockWidth + BLOCK_GAP),
-        y: area.y + SECTION_HEADER_HEIGHT + SECTION_PADDING + (itemIndex % rowsPerColumn) * (blockHeight + BLOCK_GAP),
-      })),
-    };
-    groupX += groupWidths[groupIndex] + SECTION_GAP;
-    return placement;
-  });
-  return { blockWidth, blockHeight, placements, footprint: totalWidth * area.height };
+function offsetPlacements(placements: SectionPlacement[], offsetX: number, offsetY: number): SectionPlacement[] {
+  return placements.map((placement) => ({
+    ...placement,
+    x: placement.x + offsetX,
+    y: placement.y + offsetY,
+    blocks: placement.blocks.map((block) => ({ ...block, x: block.x + offsetX, y: block.y + offsetY })),
+  }));
 }
 
-function horizontalCandidate(groups: OrderedSection[], area: PlanBlockAreaElement, blockWidth: number, blockHeight: number): LayoutCandidate | null {
-  const availableBlockWidth = area.width - SECTION_PADDING * 2;
-  const columnsPerRow = Math.floor((availableBlockWidth + BLOCK_GAP) / (blockWidth + BLOCK_GAP));
-  if (columnsPerRow < 1) return null;
-  const groupHeights = groups.map(({ items }) => {
-    const rows = Math.ceil(items.length / columnsPerRow);
-    return SECTION_HEADER_HEIGHT + SECTION_PADDING * 2 + rows * blockHeight + Math.max(0, rows - 1) * BLOCK_GAP;
-  });
-  const totalHeight = groupHeights.reduce((sum, height) => sum + height, 0) + Math.max(0, groups.length - 1) * SECTION_GAP;
-  if (totalHeight > area.height) return null;
+function layoutHierarchyNode(
+  node: SectionHierarchyNode,
+  maximumWidth: number,
+  blockWidth: number,
+  blockHeight: number,
+  mode: BlockLayoutMode,
+): LocalHierarchyLayout | null {
+  const minimumContainerWidth = blockWidth + SECTION_PADDING * 2;
+  if (maximumWidth < minimumContainerWidth) return null;
+  const contentWidth = maximumWidth - SECTION_PADDING * 2;
+  const maximumChildColumns = Math.max(1, Math.floor((contentWidth + SECTION_GAP) / (minimumContainerWidth + SECTION_GAP)));
+  const desiredChildColumns = mode === "horizontal"
+    ? 1
+    : mode === "vertical"
+      ? maximumChildColumns
+      : Math.min(3, maximumChildColumns);
+  const childWidth = node.children.length
+    ? (contentWidth - SECTION_GAP * (Math.min(desiredChildColumns, node.children.length) - 1)) / Math.min(desiredChildColumns, node.children.length)
+    : contentWidth;
+  const childLayouts: LocalHierarchyLayout[] = [];
+  for (const child of node.children) {
+    const childLayout = layoutHierarchyNode(child, childWidth, blockWidth, blockHeight, mode);
+    if (!childLayout) return null;
+    childLayouts.push(childLayout);
+  }
 
-  let groupY = area.y;
-  const placements = groups.map(({ section, items }, groupIndex) => {
-    const columnsUsed = Math.min(columnsPerRow, items.length);
-    const groupWidth = SECTION_PADDING * 2 + columnsUsed * blockWidth + Math.max(0, columnsUsed - 1) * BLOCK_GAP;
-    const placement: SectionPlacement = {
-      sectionId: section.id,
-      x: area.x,
-      y: groupY,
-      width: groupWidth,
-      height: groupHeights[groupIndex],
-      blocks: items.map((item, itemIndex) => ({
+  let cursorY = SECTION_HEADER_HEIGHT + SECTION_PADDING;
+  let usedContentWidth = 0;
+  const blockPlacements: SectionPlacement["blocks"] = [];
+  if (node.items.length) {
+    const blockColumns = Math.max(1, Math.floor((contentWidth + BLOCK_GAP) / (blockWidth + BLOCK_GAP)));
+    const blockRows = Math.ceil(node.items.length / blockColumns);
+    node.items.forEach((item, index) => {
+      blockPlacements.push({
         itemId: item.id,
-        x: area.x + SECTION_PADDING + (itemIndex % columnsPerRow) * (blockWidth + BLOCK_GAP),
-        y: groupY + SECTION_HEADER_HEIGHT + SECTION_PADDING + Math.floor(itemIndex / columnsPerRow) * (blockHeight + BLOCK_GAP),
-      })),
-    };
-    groupY += groupHeights[groupIndex] + SECTION_GAP;
-    return placement;
+        x: SECTION_PADDING + (index % blockColumns) * (blockWidth + BLOCK_GAP),
+        y: cursorY + Math.floor(index / blockColumns) * (blockHeight + BLOCK_GAP),
+      });
+    });
+    usedContentWidth = Math.max(
+      usedContentWidth,
+      Math.min(blockColumns, node.items.length) * blockWidth + Math.max(0, Math.min(blockColumns, node.items.length) - 1) * BLOCK_GAP,
+    );
+    cursorY += blockRows * blockHeight + Math.max(0, blockRows - 1) * BLOCK_GAP;
+    if (childLayouts.length) cursorY += SECTION_GAP;
+  }
+
+  const nestedPlacements: SectionPlacement[] = [];
+  let childRowX = SECTION_PADDING;
+  let childRowHeight = 0;
+  childLayouts.forEach((childLayout) => {
+    if (childRowX > SECTION_PADDING && childRowX + childLayout.width > SECTION_PADDING + contentWidth) {
+      cursorY += childRowHeight + SECTION_GAP;
+      childRowX = SECTION_PADDING;
+      childRowHeight = 0;
+    }
+    nestedPlacements.push(...offsetPlacements(childLayout.placements, childRowX, cursorY));
+    usedContentWidth = Math.max(usedContentWidth, childRowX - SECTION_PADDING + childLayout.width);
+    childRowX += childLayout.width + SECTION_GAP;
+    childRowHeight = Math.max(childRowHeight, childLayout.height);
   });
-  return { blockWidth, blockHeight, placements, footprint: area.width * totalHeight };
+  if (childLayouts.length) cursorY += childRowHeight;
+
+  const width = Math.max(minimumContainerWidth, usedContentWidth + SECTION_PADDING * 2);
+  const height = cursorY + SECTION_PADDING;
+  const placement: SectionPlacement = {
+    sectionId: node.section.id,
+    depth: node.depth,
+    x: 0,
+    y: 0,
+    width,
+    height,
+    blocks: blockPlacements,
+  };
+  return { width, height, placements: [placement, ...nestedPlacements] };
 }
 
-function bestFitCandidate(groups: OrderedSection[], area: PlanBlockAreaElement, blockWidth: number, blockHeight: number): LayoutCandidate | null {
-  const maximumItemCount = Math.max(1, ...groups.map(({ items }) => items.length));
+function createCandidate(
+  mode: BlockLayoutMode,
+  roots: SectionHierarchyNode[],
+  area: PlanBlockAreaElement,
+  blockWidth: number,
+): LayoutCandidate | null {
+  const blockHeight = blockHeightForWidth(blockWidth);
+  const minimumRootWidth = blockWidth + SECTION_PADDING * 2;
+  const maximumRootColumns = Math.max(1, Math.floor((area.width + SECTION_GAP) / (minimumRootWidth + SECTION_GAP)));
   let bestCandidate: LayoutCandidate | null = null;
 
-  for (let configuredColumns = 1; configuredColumns <= maximumItemCount; configuredColumns += 1) {
+  for (let rootColumns = 1; rootColumns <= Math.min(roots.length, maximumRootColumns); rootColumns += 1) {
+    const rootMaximumWidth = (area.width - SECTION_GAP * (rootColumns - 1)) / rootColumns;
+    const rootLayouts: LocalHierarchyLayout[] = [];
+    let valid = true;
+    for (const root of roots) {
+      const rootLayout = layoutHierarchyNode(root, rootMaximumWidth, blockWidth, blockHeight, mode);
+      if (!rootLayout) { valid = false; break; }
+      rootLayouts.push(rootLayout);
+    }
+    if (!valid) continue;
+
     let cursorX = area.x;
     let cursorY = area.y;
     let rowHeight = 0;
     let usedWidth = 0;
     const placements: SectionPlacement[] = [];
-    let fits = true;
-
-    for (const { section, items } of groups) {
-      const columns = Math.min(configuredColumns, items.length);
-      const rows = Math.ceil(items.length / columns);
-      const groupWidth = SECTION_PADDING * 2 + columns * blockWidth + Math.max(0, columns - 1) * BLOCK_GAP;
-      const groupHeight = SECTION_HEADER_HEIGHT + SECTION_PADDING * 2 + rows * blockHeight + Math.max(0, rows - 1) * BLOCK_GAP;
-      if (groupWidth > area.width || groupHeight > area.height) { fits = false; break; }
-      if (cursorX > area.x && cursorX + groupWidth > area.x + area.width) {
+    rootLayouts.forEach((rootLayout, index) => {
+      if (index > 0 && index % rootColumns === 0) {
         cursorX = area.x;
         cursorY += rowHeight + SECTION_GAP;
         rowHeight = 0;
       }
-      if (cursorY + groupHeight > area.y + area.height) { fits = false; break; }
-      placements.push({
-        sectionId: section.id,
-        x: cursorX,
-        y: cursorY,
-        width: groupWidth,
-        height: groupHeight,
-        blocks: items.map((item, itemIndex) => ({
-          itemId: item.id,
-          x: cursorX + SECTION_PADDING + (itemIndex % columns) * (blockWidth + BLOCK_GAP),
-          y: cursorY + SECTION_HEADER_HEIGHT + SECTION_PADDING + Math.floor(itemIndex / columns) * (blockHeight + BLOCK_GAP),
-        })),
-      });
-      usedWidth = Math.max(usedWidth, cursorX - area.x + groupWidth);
-      cursorX += groupWidth + SECTION_GAP;
-      rowHeight = Math.max(rowHeight, groupHeight);
-    }
-    if (!fits) continue;
+      placements.push(...offsetPlacements(rootLayout.placements, cursorX, cursorY));
+      usedWidth = Math.max(usedWidth, cursorX - area.x + rootLayout.width);
+      cursorX += rootLayout.width + SECTION_GAP;
+      rowHeight = Math.max(rowHeight, rootLayout.height);
+    });
     const usedHeight = cursorY - area.y + rowHeight;
+    if (usedHeight > area.height) continue;
     const candidate = { blockWidth, blockHeight, placements, footprint: usedWidth * usedHeight };
     if (!bestCandidate || candidate.footprint < bestCandidate.footprint) bestCandidate = candidate;
   }
   return bestCandidate;
 }
 
-function createCandidate(
-  mode: BlockLayoutMode,
-  groups: OrderedSection[],
-  area: PlanBlockAreaElement,
-  blockWidth: number,
-): LayoutCandidate | null {
-  const blockHeight = blockHeightForWidth(blockWidth);
-  if (mode === "vertical") return verticalCandidate(groups, area, blockWidth, blockHeight);
-  if (mode === "horizontal") return horizontalCandidate(groups, area, blockWidth, blockHeight);
-  return bestFitCandidate(groups, area, blockWidth, blockHeight);
+function flattenHierarchy(nodes: SectionHierarchyNode[]): SectionHierarchyNode[] {
+  return nodes.flatMap((node) => [node, ...flattenHierarchy(node.children)]);
 }
 
-function buildManagedElements(layout: PlanLayout, groups: OrderedSection[], candidate: LayoutCandidate): PlanElement[] {
+function buildManagedElements(layout: PlanLayout, roots: SectionHierarchyNode[], candidate: LayoutCandidate): PlanElement[] {
   const existingSectionElements = new Map(layout.elements.filter((element): element is PlanSectionElement => element.kind === "section").map((element) => [element.sectionId, element]));
   const existingBlockElements = new Map(layout.elements.filter((element): element is PlanBlockElement => element.kind === "block").map((element) => [element.itemId, element]));
-  const groupBySectionId = new Map(groups.map((group) => [group.section.id, group]));
+  const groupBySectionId = new Map(flattenHierarchy(roots).map((group) => [group.section.id, group]));
   const managedElements: PlanElement[] = [];
 
   candidate.placements.forEach((placement, sectionIndex) => {
@@ -385,7 +430,7 @@ function buildManagedElements(layout: PlanLayout, groups: OrderedSection[], cand
       y: placement.y,
       width: placement.width,
       height: placement.height,
-      zIndex: 100 + sectionIndex,
+      zIndex: 100 + placement.depth * 20 + sectionIndex,
       semanticOrder: sectionIndex * 1_000,
     });
     placement.blocks.forEach((blockPlacement, blockIndex) => {
@@ -418,9 +463,9 @@ export function fitBlocksInArea(
   const area = getBlockArea(layout);
   if (!area) return { layout, fits: false };
   const mode = requestedMode ?? area.layoutMode;
-  const groups = orderedSections(sections, categories, blocks);
+  const roots = sectionHierarchy(sections, categories, blocks);
   const updatedArea = { ...area, layoutMode: mode };
-  if (!groups.length) {
+  if (!roots.length) {
     return {
       layout: { ...layout, elements: layout.elements.filter((element) => element.kind !== "section" && element.kind !== "block").map((element) => element.id === area.id ? updatedArea : element) },
       fits: true,
@@ -430,7 +475,7 @@ export function fitBlocksInArea(
   const maximumWidth = Math.min(MAXIMUM_BLOCK_WIDTH, area.width - SECTION_PADDING * 2);
   let candidate: LayoutCandidate | null = null;
   for (let blockWidth = snapToGrid(maximumWidth); blockWidth >= MINIMUM_BLOCK_WIDTH; blockWidth -= BLOCK_SIZE_STEP) {
-    candidate = createCandidate(mode, groups, updatedArea, blockWidth);
+    candidate = createCandidate(mode, roots, updatedArea, blockWidth);
     if (candidate) break;
   }
   if (!candidate) {
@@ -444,7 +489,7 @@ export function fitBlocksInArea(
     .filter((element) => element.kind !== "section" && element.kind !== "block")
     .map((element) => element.id === area.id ? updatedArea : element);
   return {
-    layout: { ...layout, elements: [...unmanagedElements, ...buildManagedElements(layout, groups, candidate)] },
+    layout: { ...layout, elements: [...unmanagedElements, ...buildManagedElements(layout, roots, candidate)] },
     fits: true,
     blockWidth: candidate.blockWidth,
     blockHeight: candidate.blockHeight,
