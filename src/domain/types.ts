@@ -23,12 +23,18 @@ export interface CustomField { id: string; key: string; value: string; placehold
 export interface CustomSection { id: string; title: string; placeholderKey: string; fields: CustomField[] }
 
 export type OverviewEntryType = "text" | "date" | "group" | "repeating_group";
+export interface LocalizedOverviewTemplateEntryContent {
+  label: string;
+  defaultValue: string;
+}
+
 export interface OverviewTemplateEntry {
   id: string;
   label: string;
   type: OverviewEntryType;
   defaultValue: string;
   children: OverviewTemplateEntry[];
+  translations?: Partial<Record<Locale, LocalizedOverviewTemplateEntryContent>>;
 }
 
 export interface ProjectOverviewEntry {
@@ -52,8 +58,14 @@ export interface ProjectOverviewSection {
 export interface ProjectAsset {
   id: string;
   filename: string;
-  mimeType: "image/png" | "image/jpeg" | "application/pdf";
+  mimeType:
+    | "image/png"
+    | "image/jpeg"
+    | "application/pdf"
+    | "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
   byteSize: number;
+  folderId?: string;
   /** Binary content lives in IndexedDB. These data URLs are migration-only. */
   blobId?: string;
   previewBlobId?: string;
@@ -62,6 +74,12 @@ export interface ProjectAsset {
   pageCount?: number;
   width?: number;
   height?: number;
+  createdAt: string;
+}
+
+export interface ProjectDocumentFolder {
+  id: string;
+  name: string;
   createdAt: string;
 }
 
@@ -84,6 +102,7 @@ export interface Project {
   customSections: CustomSection[];
   overviewSections: ProjectOverviewSection[];
   assets: ProjectAsset[];
+  documentFolders: ProjectDocumentFolder[];
   createdAt: string;
   updatedAt: string;
 }
@@ -214,6 +233,8 @@ export interface OverviewTemplate {
   id: string;
   organizationId: string;
   name: string;
+  sourceLocale?: Locale;
+  translations?: Partial<Record<Locale, { name: string }>>;
   entries: OverviewTemplateEntry[];
   createdAt: string;
   updatedAt: string;
@@ -270,6 +291,6 @@ export interface AppDatabase {
 }
 
 export interface ProjectFormValues {
-  projectNumber: string; name: string; description: string; address: string; city: string;
-  constructionType: ConstructionType; startDate: string; endDate: string; documentLocale: Locale; templateIds?: string[];
+  name: string;
+  overviewSections: ProjectOverviewSection[];
 }

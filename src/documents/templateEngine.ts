@@ -1,19 +1,21 @@
 import { createReport, listCommands } from "docx-templates/lib/browser.js";
 import {
-  AlignmentType, Document, Footer, HeadingLevel, Packer, PageNumber, Paragraph, ShadingType,
-  Table, TableCell, TableRow, TextRun, WidthType,
+  AlignmentType, BorderStyle, Document, Packer, Paragraph, ShadingType,
+  Table, TableCell, TableLayoutType, TableRow, TextRun, VerticalAlign, WidthType,
 } from "docx";
 import JSZip from "jszip";
 import type {
   BuildingBlock, BuildingBlockCategory, DocumentType, Locale, Plan, Project,
   ProjectDocumentConfiguration,
 } from "../domain/types";
+import { categoryTrail } from "../domain/categoryTree";
 import { overviewSectionTemplateData } from "../domain/overviewTemplates";
 
 const COMMAND_DELIMITER: [string, string] = ["{{", "}}"];
 const SAFE_PATH = /^(qs(?:\.[A-Za-z_][A-Za-z0-9_]*)+|\$[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*|\$idx)$/;
 const SAFE_LOOP = /^([A-Za-z_][A-Za-z0-9_]*)\s+IN\s+(qs(?:\.[A-Za-z_][A-Za-z0-9_]*)+|\$[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)$/;
 const SAFE_LOOP_END = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const MAXIMUM_LOOP_NESTING = 3;
 export const MAX_TEMPLATE_FILE_BYTES = 10 * 1024 * 1024;
 export const MAX_TEMPLATE_UNCOMPRESSED_BYTES = 40 * 1024 * 1024;
 export const MAX_TEMPLATE_ZIP_ENTRIES = 400;
@@ -23,6 +25,27 @@ const UNSAFE_PACKAGE_PATH = /(^|\/)(vbaProject\.bin|activeX|embeddings)(\/|$)/i;
 const EXTERNAL_RELATIONSHIP = /TargetMode\s*=\s*["']External["']/i;
 const XML_TEXT = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g;
 const XML_ENTITY_MAP: Record<string, string> = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&apos;": "'" };
+const FRIENDLY_PLACEHOLDER = /\{\{\s*([#/])?\s*(qs(?:\.[A-Za-z_][A-Za-z0-9_]*)+)\s*\}\}/g;
+const LEGACY_AUTHOR_COMMAND = /\{\{\s*(?:FOR|END-FOR|INS|IMAGE)\b[^{}]*\}\}/gi;
+const DYNAMIC_CELL_FILL = /\[\[QS_CELL_FILL:([0-9A-F]{6})\]\]/gi;
+const FALLBACK_CATEGORY_COLOR = "496F5F";
+const A4_PAGE_WIDTH_DXA = 11_906;
+const A4_PAGE_HEIGHT_DXA = 16_838;
+const A4_PAGE_MARGIN_DXA = 720;
+const A4_CONTENT_WIDTH_DXA = A4_PAGE_WIDTH_DXA - (2 * A4_PAGE_MARGIN_DXA);
+const BLOCK_IMAGE_COLUMN_WIDTH_DXA = 3_500;
+const BLOCK_DESCRIPTION_COLUMN_WIDTH_DXA = A4_CONTENT_WIDTH_DXA - BLOCK_IMAGE_COLUMN_WIDTH_DXA;
+const BLOCK_IMAGE_WIDTH_CM = 5.4;
+const BLOCK_IMAGE_HEIGHT_CM = 3.6;
+const FRIENDLY_LOOP_VARIABLES: Record<string, string> = {
+  "qs.emergency_contacts": "contact",
+  "qs.participants": "participant",
+  "qs.plan.categories": "category",
+  "qs.category.sections": "section",
+  "qs.section.blocks": "block",
+  "qs.plan.sections": "section",
+  "qs.plan.blocks": "block",
+};
 
 export interface TemplateInspection {
   placeholders: string[];
@@ -40,6 +63,242 @@ export interface TemplateFileValidation extends TemplateInspection {
 }
 
 type TemplateData = Record<string, unknown>;
+
+interface FriendlyLoopScope {
+  path: string;
+  variable: string;
+}
+
+interface XmlTextNode {
+  contentStart: number;
+  contentEnd: number;
+  plainStart: number;
+  plainEnd: number;
+  text: string;
+}
+
+function decodeXmlText(value: string): string {
+  return value.replace(/&(amp|lt|gt|quot|apos);/g, (entity) => XML_ENTITY_MAP[entity] ?? entity);
+}
+
+function encodeXmlText(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function rewriteXmlTextMatches(
+  fragment: string,
+  expression: RegExp,
+  replacement: (match: RegExpMatchArray) => string,
+): string {
+  const nodes: XmlTextNode[] = [];
+  let plainLength = 0;
+  for (const match of fragment.matchAll(XML_TEXT)) {
+    const text = decodeXmlText(match[1]);
+    const contentStart = (match.index ?? 0) + match[0].indexOf(match[1]);
+    nodes.push({
+      contentStart,
+      contentEnd: contentStart + match[1].length,
+      plainStart: plainLength,
+      plainEnd: plainLength + text.length,
+      text,
+    });
+    plainLength += text.length;
+  }
+  if (!nodes.length) return fragment;
+
+  const plainText = nodes.map((node) => node.text).join("");
+  const matches = [...plainText.matchAll(expression)];
+  const replacements = matches.map((match) => replacement(match));
+  for (let matchIndex = matches.length - 1; matchIndex >= 0; matchIndex -= 1) {
+    const match = matches[matchIndex];
+    const matchStart = match.index ?? 0;
+    const matchEnd = matchStart + match[0].length;
+    const firstNodeIndex = nodes.findIndex((node) => matchStart >= node.plainStart && matchStart < node.plainEnd);
+    const lastNodeIndex = nodes.findIndex((node) => matchEnd > node.plainStart && matchEnd <= node.plainEnd);
+    if (firstNodeIndex < 0 || lastNodeIndex < 0) continue;
+    const firstNode = nodes[firstNodeIndex];
+    const lastNode = nodes[lastNodeIndex];
+    const localStart = matchStart - firstNode.plainStart;
+    const localEnd = matchEnd - lastNode.plainStart;
+    if (firstNodeIndex === lastNodeIndex) {
+      firstNode.text = `${firstNode.text.slice(0, localStart)}${replacements[matchIndex]}${firstNode.text.slice(localEnd)}`;
+      continue;
+    }
+    firstNode.text = `${firstNode.text.slice(0, localStart)}${replacements[matchIndex]}`;
+    for (let nodeIndex = firstNodeIndex + 1; nodeIndex < lastNodeIndex; nodeIndex += 1) nodes[nodeIndex].text = "";
+    lastNode.text = lastNode.text.slice(localEnd);
+  }
+
+  let rewritten = fragment;
+  for (let nodeIndex = nodes.length - 1; nodeIndex >= 0; nodeIndex -= 1) {
+    const node = nodes[nodeIndex];
+    rewritten = `${rewritten.slice(0, node.contentStart)}${encodeXmlText(node.text)}${rewritten.slice(node.contentEnd)}`;
+  }
+  return rewritten;
+}
+
+function scopedTemplatePath(path: string, scopes: FriendlyLoopScope[]): string {
+  const segments = path.split(".");
+  const contextualVariable = segments[1];
+  if (scopes.some((scope) => scope.variable === contextualVariable)) {
+    return `$${contextualVariable}${segments.length > 2 ? `.${segments.slice(2).join(".")}` : ""}`;
+  }
+  return path;
+}
+
+function loopVariable(path: string): string {
+  const knownVariable = FRIENDLY_LOOP_VARIABLES[path];
+  if (knownVariable) return knownVariable;
+  return path.split(".").at(-1) ?? "item";
+}
+
+function friendlyCommand(match: RegExpMatchArray, scopes: FriendlyLoopScope[]): string {
+  const marker = match[1];
+  const path = match[2];
+  if (marker === "#") {
+    const variable = loopVariable(path);
+    const collectionPath = scopedTemplatePath(path, scopes);
+    scopes.push({ path, variable });
+    return `{{FOR ${variable} IN ${collectionPath}}}`;
+  }
+  if (marker === "/") {
+    const scope = scopes.at(-1);
+    if (!scope || scope.path !== path) return match[0];
+    scopes.pop();
+    return `{{END-FOR ${scope.variable}}}`;
+  }
+
+  let valuePath = scopedTemplatePath(path, scopes);
+  const lastSegment = path.split(".").at(-1);
+  if (lastSegment === "color" && valuePath.startsWith("$")) valuePath = `${valuePath.slice(0, -"color".length)}cell_fill`;
+  return `{{${lastSegment === "image" ? "IMAGE" : "INS"} ${valuePath}}}`;
+}
+
+async function normalizeTemplateSyntax(template: ArrayBuffer): Promise<ArrayBuffer> {
+  const zip = await JSZip.loadAsync(template);
+  const xmlNames = Object.keys(zip.files).filter((name) => /^word\/(document|header\d+|footer\d+)\.xml$/.test(name));
+  for (const name of xmlNames) {
+    const file = zip.file(name);
+    if (!file) continue;
+    const scopes: FriendlyLoopScope[] = [];
+    const xml = await file.async("text");
+    const rewritten = xml.replace(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g, (paragraph) => (
+      rewriteXmlTextMatches(paragraph, FRIENDLY_PLACEHOLDER, (match) => friendlyCommand(match, scopes))
+    ));
+    if (rewritten !== xml) zip.file(name, rewritten);
+  }
+  return zip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" });
+}
+
+async function findLegacyAuthorCommands(template: ArrayBuffer): Promise<string[]> {
+  const zip = await JSZip.loadAsync(template);
+  const xmlNames = Object.keys(zip.files).filter((name) => /^word\/(document|header\d+|footer\d+)\.xml$/.test(name));
+  const commands: string[] = [];
+  for (const name of xmlNames) {
+    const xml = await zip.file(name)?.async("text");
+    if (!xml) continue;
+    for (const paragraph of xml.matchAll(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g)) {
+      const text = [...paragraph[0].matchAll(XML_TEXT)].map((match) => decodeXmlText(match[1])).join("");
+      commands.push(...[...text.matchAll(LEGACY_AUTHOR_COMMAND)].map((match) => match[0]));
+      LEGACY_AUTHOR_COMMAND.lastIndex = 0;
+    }
+  }
+  return commands;
+}
+
+function setTableCellFill(cell: string, fill: string): string {
+  const shading = `<w:shd w:val="clear" w:color="auto" w:fill="${fill}"/>`;
+  if (/<w:shd\b/.test(cell)) return cell.replace(/<w:shd\b[^>]*(?:\/>|>[\s\S]*?<\/w:shd>)/, shading);
+  if (/<w:tcPr\s*\/>/.test(cell)) return cell.replace(/<w:tcPr\s*\/>/, `<w:tcPr>${shading}</w:tcPr>`);
+  if (/<w:tcPr(?:\s[^>]*)?>/.test(cell)) return cell.replace(/<w:tcPr(?:\s[^>]*)?>/, (properties) => `${properties}${shading}`);
+  return cell.replace(/<w:tc(?:\s[^>]*)?>/, (opening) => `${opening}<w:tcPr>${shading}</w:tcPr>`);
+}
+
+function setParagraphFill(paragraph: string, fill: string): string {
+  const shading = `<w:shd w:val="clear" w:color="auto" w:fill="${fill}"/>`;
+  if (/<w:shd\b/.test(paragraph)) return paragraph.replace(/<w:shd\b[^>]*(?:\/>|>[\s\S]*?<\/w:shd>)/, shading);
+  if (/<w:pPr\s*\/>/.test(paragraph)) return paragraph.replace(/<w:pPr\s*\/>/, `<w:pPr>${shading}</w:pPr>`);
+  if (/<w:pPr(?:\s[^>]*)?>/.test(paragraph)) return paragraph.replace(/<w:pPr(?:\s[^>]*)?>/, (properties) => `${properties}${shading}`);
+  return paragraph.replace(/<w:p(?:\s[^>]*)?>/, (opening) => `${opening}<w:pPr>${shading}</w:pPr>`);
+}
+
+interface XmlElementSpan {
+  start: number;
+  end: number;
+}
+
+function findXmlElementSpans(xml: string, elementName: "p" | "tc"): XmlElementSpan[] {
+  const elementTokens = new RegExp(`<w:${elementName}(?:\\s[^>]*)?>|<\\/w:${elementName}>`, "g");
+  const openElements: number[] = [];
+  const spans: XmlElementSpan[] = [];
+  for (const token of xml.matchAll(elementTokens)) {
+    const tokenStart = token.index ?? 0;
+    if (token[0].startsWith("</")) {
+      const elementStart = openElements.pop();
+      if (elementStart !== undefined) spans.push({ start: elementStart, end: tokenStart + token[0].length });
+    } else {
+      openElements.push(tokenStart);
+    }
+  }
+  return spans;
+}
+
+function applyDynamicCellFillsToXml(xml: string): string {
+  const cellSpans = findXmlElementSpans(xml, "tc");
+  const paragraphSpans = findXmlElementSpans(xml, "p");
+  const targets = new Map<number, XmlElementSpan & { kind: "cell" | "paragraph" }>();
+  for (const marker of xml.matchAll(DYNAMIC_CELL_FILL)) {
+    const markerPosition = marker.index ?? 0;
+    const containingCells = cellSpans.filter((cell) => cell.start < markerPosition && cell.end > markerPosition);
+    const innermostCell = containingCells.sort((left, right) => (left.end - left.start) - (right.end - right.start))[0];
+    if (innermostCell) {
+      targets.set(innermostCell.start, { ...innermostCell, kind: "cell" });
+      continue;
+    }
+    const paragraph = paragraphSpans.find((candidate) => candidate.start < markerPosition && candidate.end > markerPosition);
+    if (paragraph) targets.set(paragraph.start, { ...paragraph, kind: "paragraph" });
+  }
+  DYNAMIC_CELL_FILL.lastIndex = 0;
+
+  let rewritten = xml;
+  const orderedTargets = [...targets.values()].sort((left, right) => right.start - left.start);
+  orderedTargets.forEach((target) => {
+    const fragment = rewritten.slice(target.start, target.end);
+    const visibleText = [...fragment.matchAll(XML_TEXT)].map((match) => decodeXmlText(match[1])).join("");
+    const fill = /\[\[QS_CELL_FILL:([0-9A-F]{6})\]\]/i.exec(visibleText)?.[1]?.toUpperCase();
+    if (!fill) return;
+    const withoutMarker = rewriteXmlTextMatches(fragment, DYNAMIC_CELL_FILL, () => "");
+    DYNAMIC_CELL_FILL.lastIndex = 0;
+    const filledFragment = target.kind === "cell"
+      ? setTableCellFill(withoutMarker, fill)
+      : setParagraphFill(withoutMarker, fill);
+    rewritten = `${rewritten.slice(0, target.start)}${filledFragment}${rewritten.slice(target.end)}`;
+  });
+  return rewritten;
+}
+
+async function applyDynamicCellFills(document: ArrayBuffer): Promise<ArrayBuffer> {
+  const zip = await JSZip.loadAsync(document);
+  const xmlNames = Object.keys(zip.files).filter((name) => /^word\/(document|header\d+|footer\d+)\.xml$/.test(name));
+  for (const name of xmlNames) {
+    const file = zip.file(name);
+    if (!file) continue;
+    const xml = await file.async("text");
+    const rewritten = applyDynamicCellFillsToXml(xml);
+    if (rewritten !== xml) zip.file(name, rewritten);
+  }
+  return zip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" });
+}
+
+function cellFillMarker(color: string): string {
+  const normalized = color.replace("#", "").toUpperCase();
+  return `[[QS_CELL_FILL:${/^[0-9A-F]{6}$/.test(normalized) ? normalized : FALLBACK_CATEGORY_COLOR}]]`;
+}
 
 async function applyControlledPageBreaks(template: ArrayBuffer): Promise<ArrayBuffer> {
   const zip = await JSZip.loadAsync(template);
@@ -76,11 +335,14 @@ export function normalizePlaceholderKey(value: string, fallback: string): string
   return normalized || fallback;
 }
 
-function dataUrlImage(dataUrl?: string): { data: string; extension: ".png" | ".jpg"; width: number; height: number } | undefined {
+function dataUrlImage(
+  dataUrl?: string,
+  dimensions: { width: number; height: number } = { width: 4.8, height: 3.2 },
+): { data: string; extension: ".png" | ".jpg"; width: number; height: number } | undefined {
   if (!dataUrl) return undefined;
   const match = /^data:image\/(png|jpeg);base64,(.+)$/i.exec(dataUrl);
   if (!match) return undefined;
-  return { data: match[2], extension: match[1].toLowerCase() === "png" ? ".png" : ".jpg", width: 4.8, height: 3.2 };
+  return { data: match[2], extension: match[1].toLowerCase() === "png" ? ".png" : ".jpg", ...dimensions };
 }
 
 export function buildTemplateData(
@@ -120,7 +382,12 @@ export function buildTemplateData(
   const orderedSections = plan ? [...plan.sections].sort((left, right) => (semanticOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (semanticOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER)) : [];
   const planSections = orderedSections.map((section) => {
     const category = categoryMap.get(section.categoryId);
+    const trail = categoryTrail(section.categoryId, categories);
+    const trailTitles = trail.map((trailCategory) => trailCategory.translations[planLocale]?.name ?? trailCategory.id);
+    const rootCategory = trail[0] ?? category;
     const sectionTitle = section.titleOverrides?.[planLocale] ?? category?.translations[planLocale]?.name ?? section.categoryId;
+    const sectionHeading = section.titleOverrides?.[planLocale]
+      ?? (trailTitles.length > 1 ? trailTitles.slice(1).join(" › ") : category?.translations[planLocale]?.description ?? sectionTitle);
     const sectionBlocks = [...section.items].sort((left, right) => (semanticOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (semanticOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER)).map((item) => {
     const block = blockMap.get(item.blockId);
     if (!block) return null;
@@ -133,20 +400,51 @@ export function buildTemplateData(
       short_description: item.customShortDescription?.[planLocale] ?? content.shortDescription,
       long_description: content.longDescription,
       regulations: block.regulations.join(", "),
-      image: dataUrlImage(item.imageDataUrl ?? block.imageDataUrl),
+      image: dataUrlImage(item.imageDataUrl ?? block.imageDataUrl, { width: BLOCK_IMAGE_WIDTH_CM, height: BLOCK_IMAGE_HEIGHT_CM }),
+      color: block.color,
+      cell_fill: cellFillMarker(block.color),
       expert_note: item.expertNote ?? "",
     };
     }).filter(Boolean);
-    return { id: section.id, category_id: section.categoryId, title: sectionTitle, blocks: sectionBlocks };
+    const rootCategoryId = rootCategory?.id ?? section.categoryId;
+    const rootCategoryTitle = rootCategory?.translations[planLocale]?.name ?? sectionTitle;
+    const rootCategoryColor = rootCategory?.color ?? FALLBACK_CATEGORY_COLOR;
+    return {
+      id: section.id,
+      category_id: section.categoryId,
+      title: sectionTitle,
+      heading: sectionHeading,
+      category_path: trailTitles.join(" › ") || sectionTitle,
+      color: category?.color ?? rootCategoryColor,
+      root_category_id: rootCategoryId,
+      root_category_title: rootCategoryTitle,
+      root_category_color: rootCategoryColor,
+      blocks: sectionBlocks,
+    };
   }) ?? [];
   const planBlocks = planSections.flatMap((section) => section.blocks);
+  const planCategories: Array<{ id: string; title: string; color: string; cell_fill: string; sections: typeof planSections }> = [];
+  planSections.forEach((section) => {
+    let category = planCategories.find((candidate) => candidate.id === section.root_category_id);
+    if (!category) {
+      category = {
+        id: section.root_category_id,
+        title: section.root_category_title,
+        color: section.root_category_color,
+        cell_fill: cellFillMarker(section.root_category_color),
+        sections: [],
+      };
+      planCategories.push(category);
+    }
+    category.sections.push(section);
+  });
   return {
     qs: {
       project: projectFields,
       overview: { ...projectFields, ...customSections },
       emergency_contacts: project.emergencyContacts.map((contact) => ({ label: contact.label, name: contact.name, phone: contact.phone })),
       participants: project.participants.map((participant) => ({ role: participant.role, role_label: participantRoleLabels[project.documentLocale][participant.role], company: participant.company, name: participant.name, email: participant.email, phone: participant.phone })),
-      plan: { title: plan?.title ?? "", sections: planSections, blocks: planBlocks },
+      plan: { title: plan?.title ?? "", categories: planCategories, sections: planSections, blocks: planBlocks },
       assets: project.assets.map((asset) => ({ filename: asset.filename, image: asset.mimeType.startsWith("image/") ? dataUrlImage(asset.dataUrl) : undefined })),
       documents: documentConfigurations.map((configuration) => ({ type: configuration.documentType, template_id: configuration.templateId })),
     },
@@ -217,9 +515,11 @@ export async function validateTemplateFile(
       const xml = await zip.file(relationshipName)?.async("text");
       if (xml && EXTERNAL_RELATIONSHIP.test(xml)) errors.push(`External relationship found in ${relationshipName}.`);
     }
+    const normalizedTemplate = await normalizeTemplateSyntax(template);
+    const normalizedZip = await JSZip.loadAsync(normalizedTemplate);
     const contentNames = names.filter((name) => /^word\/(document|header\d+|footer\d+)\.xml$/.test(name));
     for (const contentName of contentNames) {
-      const xml = await zip.file(contentName)?.async("text");
+      const xml = await normalizedZip.file(contentName)?.async("text");
       if (!xml) continue;
       invalidImageCommandParagraphs(xml).forEach((text) => errors.push(`Image command must be alone in its paragraph or table cell: ${text}`));
     }
@@ -250,51 +550,60 @@ function resolvePath(data: TemplateData, path: string): { exists: boolean; value
 }
 
 export async function inspectTemplate(template: ArrayBuffer, data: TemplateData): Promise<TemplateInspection> {
-  const commands = await listCommands(await applyControlledPageBreaks(template), COMMAND_DELIMITER);
+  const legacyAuthorCommands = await findLegacyAuthorCommands(template);
+  const normalizedTemplate = await normalizeTemplateSyntax(template);
+  const commands = await listCommands(await applyControlledPageBreaks(normalizedTemplate), COMMAND_DELIMITER);
   const placeholders = new Set<string>();
   const missing = new Set<string>();
-  const unsafe = new Set<string>();
-  const loopPaths = new Map<string, string>();
-  const loopStack: string[] = [];
+  const unsafe = new Set(legacyAuthorCommands);
+  const loopStack: Array<{ path: string; variable: string; entries: unknown[] }> = [];
+  const resolveValues = (path: string): { exists: boolean; values: unknown[] } => {
+    if (path.startsWith("qs.")) {
+      const resolved = resolvePath(data, path);
+      return { exists: resolved.exists, values: resolved.exists ? [resolved.value] : [] };
+    }
+    const [variable, ...segments] = path.slice(1).split(".");
+    const scope = [...loopStack].reverse().find((candidate) => candidate.variable === variable);
+    if (!scope) return { exists: false, values: [] };
+    if (!segments.length) return { exists: true, values: scope.entries };
+    if (!scope.entries.length) return { exists: true, values: [] };
+    const resolved = scope.entries.map((entry) => resolvePath(entry as TemplateData, segments.join(".")));
+    return { exists: resolved.every((entry) => entry.exists), values: resolved.filter((entry) => entry.exists).map((entry) => entry.value) };
+  };
   commands.forEach((command) => {
     const code = command.code.trim();
     if (["INS", "IMAGE"].includes(command.type)) {
       if (!SAFE_PATH.test(code)) { unsafe.add(command.raw); return; }
       placeholders.add(code);
-      if (code.startsWith("qs.") && !resolvePath(data, code).exists) missing.add(code);
-      if (code.startsWith("$")) {
-        const [variable, ...segments] = code.slice(1).split(".");
-        const collectionPath = loopPaths.get(variable);
-        const collection = collectionPath ? resolvePath(data, collectionPath).value : undefined;
-        if (Array.isArray(collection) && segments.length && collection.some((entry) => !resolvePath(entry as TemplateData, segments.join(".")).exists)) missing.add(code);
-      }
+      if (!resolveValues(code).exists) missing.add(code);
       return;
     }
     if (command.type === "FOR") {
       const match = SAFE_LOOP.exec(code);
       if (!match) { unsafe.add(command.raw); return; }
-      if (loopStack.length > 1) { unsafe.add(`${command.raw} (loop nesting is limited to two levels)`); return; }
-      if (loopPaths.has(match[1])) { unsafe.add(`${command.raw} (duplicate loop variable)`); return; }
+      if (loopStack.length >= MAXIMUM_LOOP_NESTING) { unsafe.add(`${command.raw} (loop nesting is limited to ${MAXIMUM_LOOP_NESTING} levels)`); return; }
+      if (loopStack.some((scope) => scope.variable === match[1])) { unsafe.add(`${command.raw} (duplicate loop variable)`); return; }
       placeholders.add(match[2]);
-      if (match[2].startsWith("qs.") && !resolvePath(data, match[2]).exists) missing.add(match[2]);
-      loopPaths.set(match[1], match[2]);
-      loopStack.push(match[1]);
+      const collection = resolveValues(match[2]);
+      if (!collection.exists) missing.add(match[2]);
+      loopStack.push({ path: match[2], variable: match[1], entries: collection.values.flatMap((value) => Array.isArray(value) ? value : []) });
       return;
     }
     if (command.type === "END-FOR" && SAFE_LOOP_END.test(code)) {
-      if (loopStack.at(-1) !== code) { unsafe.add(`${command.raw} (unmatched loop end)`); return; }
-      loopStack.pop(); loopPaths.delete(code); return;
+      if (loopStack.at(-1)?.variable !== code) { unsafe.add(`${command.raw} (unmatched loop end)`); return; }
+      loopStack.pop(); return;
     }
     unsafe.add(command.raw);
   });
-  loopStack.forEach((variable) => unsafe.add(`Missing END-FOR for ${variable}`));
+  loopStack.forEach(({ path }) => unsafe.add(`Missing closing loop marker for ${path}`));
   return { placeholders: [...placeholders], missingPlaceholders: [...missing], unsafeCommands: [...unsafe] };
 }
 
 export async function renderTemplate(template: ArrayBuffer, data: TemplateData): Promise<Blob> {
   const inspection = await inspectTemplate(template, data);
   if (inspection.unsafeCommands.length) throw new Error(`Unsafe template commands: ${inspection.unsafeCommands.join(", ")}`);
-  const normalizedTemplate = await applyControlledPageBreaks(template);
+  const friendlyTemplate = await normalizeTemplateSyntax(template);
+  const normalizedTemplate = await applyControlledPageBreaks(friendlyTemplate);
   const report = await createReport({
     template: new Uint8Array(normalizedTemplate), data, cmdDelimiter: COMMAND_DELIMITER, rejectNullish: false,
     // Every command is restricted to a property path before execution, so the direct evaluator
@@ -302,94 +611,123 @@ export async function renderTemplate(template: ArrayBuffer, data: TemplateData):
     failFast: false, processLineBreaks: true, noSandbox: true,
   });
   const reportBuffer = report.buffer.slice(report.byteOffset, report.byteOffset + report.byteLength) as ArrayBuffer;
-  return new Blob([reportBuffer], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
-}
-
-function command(text: string): TextRun { return new TextRun({ text: `{{${text}}}`, color: "296C5D" }); }
-function label(text: string): TextRun { return new TextRun({ text, bold: true, color: "10251F" }); }
-
-function standardSupportingBody(documentType: DocumentType, locale: Locale): Array<Paragraph | Table> {
-  if (documentType === "participants") {
-    return [
-      new Paragraph({ heading: HeadingLevel.HEADING_1, spacing: { before: 360 }, children: [new TextRun(locale === "de" ? "Projektbeteiligte" : "Project participants")] }),
-      new Paragraph({ children: [command("FOR participant IN qs.participants")] }),
-      new Paragraph({ children: [command("INS $participant.role_label"), new TextRun(" · "), command("INS $participant.name"), new TextRun(" · "), command("INS $participant.company")] }),
-      new Paragraph({ children: [command("INS $participant.phone"), new TextRun(" · "), command("INS $participant.email")] }),
-      new Paragraph({ children: [command("END-FOR participant")] }),
-    ];
-  }
-  if (documentType === "advance_notice") {
-    return [
-      new Paragraph({ heading: HeadingLevel.HEADING_1, spacing: { before: 360 }, children: [new TextRun(locale === "de" ? "Angaben zum Bauvorhaben" : "Project information")] }),
-      new Paragraph({ children: [label(locale === "de" ? "Art: " : "Type: "), command("INS qs.project.construction_type_label")] }),
-      new Paragraph({ children: [label(locale === "de" ? "Beginn: " : "Start: "), command("INS qs.project.start_date"), new TextRun(" · "), label(locale === "de" ? "Ende: " : "End: "), command("INS qs.project.end_date")] }),
-      new Paragraph({ children: [label(locale === "de" ? "Beschreibung: " : "Description: "), command("INS qs.project.description")] }),
-    ];
-  }
-  if (documentType === "site_rules") {
-    return [
-      new Paragraph({ heading: HeadingLevel.HEADING_1, spacing: { before: 360 }, children: [new TextRun(locale === "de" ? "Verbindliche Maßnahmen" : "Binding measures")] }),
-      new Paragraph({ children: [command("FOR block IN qs.plan.blocks")] }),
-      new Paragraph({ children: [label("• "), command("INS $block.title"), new TextRun(" — "), command("INS $block.short_description")] }),
-      new Paragraph({ children: [command("END-FOR block")] }),
-    ];
-  }
-  const contactLabel = locale === "de" ? "Notfallkontakte" : "Emergency contacts";
-  return [
-    new Paragraph({ heading: HeadingLevel.HEADING_1, spacing: { before: 360 }, children: [new TextRun(contactLabel)] }),
-    new Paragraph({ children: [command("FOR contact IN qs.emergency_contacts")] }),
-    new Paragraph({ children: [command("INS $contact.label"), new TextRun(" · "), command("INS $contact.name"), new TextRun(" · "), command("INS $contact.phone")] }),
-    new Paragraph({ children: [command("END-FOR contact")] }),
-  ];
-}
-
-function standardSupportingTemplate(documentType: DocumentType, locale: Locale): Document {
-  const titles: Record<Locale, Record<string, string>> = {
-    de: { site_rules: "Baustellengrundsätze", alarm_plan: "Alarmplan", fire_safety: "Verhalten im Brandfall", first_aid: "Erste Hilfe", participants: "Projektbeteiligte", advance_notice: "Vorankündigung", a4_plan: "SiGe-Plan" },
-    en: { site_rules: "Site principles", alarm_plan: "Emergency plan", fire_safety: "Fire response", first_aid: "First aid", participants: "Project participants", advance_notice: "Advance notice", a4_plan: "Safety plan" },
-  };
-  return new Document({
-    creator: "QuickSiGe", title: titles[locale][documentType],
-    styles: { default: { document: { run: { font: "Aptos", size: 20, color: "263A34" }, paragraph: { spacing: { after: 120 } } } } },
-    sections: [{
-      properties: { page: { margin: { top: 900, right: 900, bottom: 900, left: 900 } } },
-      footers: { default: new Footer({ children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun("QuickSiGe · "), new TextRun({ children: [PageNumber.CURRENT] })] })] }) },
-      children: [
-        new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [new TableRow({ children: [new TableCell({ shading: { fill: "10251F", type: ShadingType.CLEAR }, children: [new Paragraph({ children: [new TextRun({ text: "QUICKSiGe", bold: true, color: "D5FF3F", size: 18 })] }), new Paragraph({ heading: HeadingLevel.TITLE, children: [new TextRun({ text: titles[locale][documentType], bold: true, color: "FFFFFF", size: 36 })] })] })] })] }),
-        new Paragraph({ spacing: { before: 360 }, children: [label(locale === "de" ? "Projekt: " : "Project: "), command("INS qs.project.name")] }),
-        new Paragraph({ children: [label(locale === "de" ? "Projektnummer: " : "Project number: "), command("INS qs.project.number")] }),
-        new Paragraph({ children: [label(locale === "de" ? "Adresse: " : "Address: "), command("INS qs.project.address"), new TextRun(", "), command("INS qs.project.city")] }),
-        ...standardSupportingBody(documentType, locale),
-      ],
-    }],
-  });
+  const styledReport = await applyDynamicCellFills(reportBuffer);
+  return new Blob([styledReport], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
 }
 
 function standardA4Template(locale: Locale): Document {
-  const title = locale === "de" ? "Sicherheits- und Gesundheitsschutzplan" : "Safety and Health Plan";
+  const border = { style: BorderStyle.SINGLE, size: 4, color: "D9D9D9" };
+  const noBorder = { style: BorderStyle.NONE, size: 0, color: "FFFFFF" };
+  const tableBorders = { top: border, bottom: border, left: border, right: border, insideHorizontal: border, insideVertical: border };
+  const noBorders = { top: noBorder, bottom: noBorder, left: noBorder, right: noBorder, insideHorizontal: noBorder, insideVertical: noBorder };
+  const placeholder = (path: string, options: { bold?: boolean; color?: string; size?: number } = {}) => new TextRun({
+    text: `{{${path}}}`,
+    bold: options.bold,
+    color: options.color ?? "296C5D",
+    font: "Arial",
+    size: options.size,
+  });
+  const control = (marker: string) => new Paragraph({ spacing: { before: 0, after: 0 }, children: [placeholder(marker, { size: 16 })] });
+  const categoryHeader = new Paragraph({
+    keepNext: true,
+    shading: { fill: "496F5F", type: ShadingType.CLEAR },
+    spacing: { before: 120, after: 120 },
+    children: [
+      new TextRun({ text: "  ", font: "Arial", size: 28 }),
+      placeholder("qs.category.color", { color: "FFFFFF", size: 28 }),
+      placeholder("qs.category.title", { bold: true, color: "FFFFFF", size: 28 }),
+    ],
+  });
+  const sectionHeader = new Paragraph({
+    keepNext: true,
+    shading: { fill: "E7F1ED", type: ShadingType.CLEAR },
+    spacing: { before: 90, after: 90 },
+    children: [
+      new TextRun({ text: "  ", font: "Arial", size: 22 }),
+      placeholder("qs.section.heading", { bold: true, color: "10251F", size: 22 }),
+    ],
+  });
+  const blockCardContents = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    layout: TableLayoutType.FIXED,
+    columnWidths: [BLOCK_IMAGE_COLUMN_WIDTH_DXA, BLOCK_DESCRIPTION_COLUMN_WIDTH_DXA],
+    borders: tableBorders,
+    rows: [
+      new TableRow({ cantSplit: true, children: [new TableCell({
+        columnSpan: 2,
+        shading: { fill: "D5FF3F", type: ShadingType.CLEAR },
+        margins: { top: 90, bottom: 90, left: 150, right: 150 },
+        children: [new Paragraph({ keepNext: true, spacing: { before: 0, after: 0 }, children: [
+          placeholder("qs.block.color", { color: "10251F", size: 22 }),
+          placeholder("qs.block.title", { bold: true, color: "10251F", size: 22 }),
+        ] })],
+      })] }),
+      new TableRow({ cantSplit: true, children: [
+        new TableCell({
+          width: { size: BLOCK_IMAGE_COLUMN_WIDTH_DXA, type: WidthType.DXA },
+          margins: { top: 140, bottom: 140, left: 140, right: 140 },
+          verticalAlign: VerticalAlign.CENTER,
+          children: [new Paragraph({ keepNext: true, alignment: AlignmentType.CENTER, spacing: { before: 0, after: 0 }, children: [placeholder("qs.block.image", { size: 18 })] })],
+        }),
+        new TableCell({
+          width: { size: BLOCK_DESCRIPTION_COLUMN_WIDTH_DXA, type: WidthType.DXA },
+          margins: { top: 160, bottom: 160, left: 170, right: 170 },
+          verticalAlign: VerticalAlign.CENTER,
+          children: [new Paragraph({ keepNext: true, spacing: { before: 0, after: 0, line: 276 }, children: [placeholder("qs.block.a4_description", { color: "263A34", size: 20 })] })],
+        }),
+      ] }),
+      new TableRow({ cantSplit: true, children: [new TableCell({
+        columnSpan: 2,
+        shading: { fill: "F7F9F8", type: ShadingType.CLEAR },
+        margins: { top: 70, bottom: 70, left: 150, right: 150 },
+        children: [new Paragraph({ spacing: { before: 0, after: 0 }, children: [placeholder("qs.block.regulations", { color: "5B6A65", size: 17 })] })],
+      })] }),
+    ],
+  });
+  const blockCard = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    layout: TableLayoutType.FIXED,
+    columnWidths: [A4_CONTENT_WIDTH_DXA],
+    borders: noBorders,
+    rows: [new TableRow({ cantSplit: true, children: [new TableCell({
+      width: { size: A4_CONTENT_WIDTH_DXA, type: WidthType.DXA },
+      borders: noBorders,
+      margins: { top: 0, bottom: 0, left: 0, right: 0 },
+      children: [blockCardContents],
+    })] })],
+  });
   return new Document({
-    creator: "QuickSiGe", title,
-    styles: { default: { document: { run: { font: "Aptos", size: 19, color: "263A34" }, paragraph: { spacing: { after: 90 } } } } },
+    creator: "QuickSiGe",
+    title: locale === "de" ? "QuickSiGe A4 Vorlage" : "QuickSiGe A4 Template",
+    styles: { default: { document: { run: { font: "Arial", size: 20, color: "263A34" }, paragraph: { spacing: { after: 80 } } } } },
     sections: [{
-      properties: { page: { margin: { top: 720, right: 720, bottom: 720, left: 720 } } },
-      footers: { default: new Footer({ children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun("QuickSiGe · "), new TextRun({ children: [PageNumber.CURRENT] })] })] }) },
+      properties: {
+        page: {
+          size: { width: A4_PAGE_WIDTH_DXA, height: A4_PAGE_HEIGHT_DXA },
+          margin: { top: A4_PAGE_MARGIN_DXA, right: A4_PAGE_MARGIN_DXA, bottom: A4_PAGE_MARGIN_DXA, left: A4_PAGE_MARGIN_DXA },
+        },
+      },
       children: [
-        new Paragraph({ heading: HeadingLevel.TITLE, children: [new TextRun({ text: title, color: "10251F", bold: true })] }),
-        new Paragraph({ children: [label(locale === "de" ? "Projekt: " : "Project: "), command("INS qs.project.name"), new TextRun(" · "), command("INS qs.project.number")] }),
-        new Paragraph({ children: [command("FOR block IN qs.plan.blocks")] }),
-        new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [
-          new TableRow({ children: [new TableCell({ shading: { fill: "E7F1ED", type: ShadingType.CLEAR }, children: [new Paragraph({ children: [command("INS $block.title")] })] })] }),
-          new TableRow({ children: [new TableCell({ children: [new Paragraph({ children: [command("IMAGE $block.image")] }), new Paragraph({ children: [command("INS $block.short_description")] }), new Paragraph({ children: [command("INS $block.long_description")] }), new Paragraph({ children: [label(locale === "de" ? "Regelwerk: " : "References: "), command("INS $block.regulations")] })] })] }),
-        ] }),
-        new Paragraph({ children: [command("END-FOR block")] }),
+        control("#qs.plan.categories"),
+        categoryHeader,
+        new Paragraph({ keepNext: true, spacing: { before: 0, after: 60 } }),
+        control("#qs.category.sections"),
+        sectionHeader,
+        new Paragraph({ keepNext: true, spacing: { before: 0, after: 40 } }),
+        control("#qs.section.blocks"),
+        blockCard,
+        new Paragraph({ spacing: { before: 0, after: 100 } }),
+        control("/qs.section.blocks"),
+        control("/qs.category.sections"),
+        control("/qs.plan.categories"),
       ],
     }],
   });
 }
 
 export async function createStandardTemplate(documentType: DocumentType, locale: Locale): Promise<Blob> {
-  const document = documentType === "a4_plan" ? standardA4Template(locale) : standardSupportingTemplate(documentType, locale);
-  return Packer.toBlob(document);
+  if (documentType !== "a4_plan") throw new Error(`No standard Word template exists for ${documentType}.`);
+  return Packer.toBlob(standardA4Template(locale));
 }
 
 export async function blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {

@@ -1,6 +1,7 @@
 import { createPlanFromAssessment } from "../domain/recommendationEngine";
 import { defaultBlockImageSource } from "../domain/blockImages";
 import { blockHierarchyColor, categoryPlacementIds } from "../domain/categoryTree";
+import { legacyProjectOverviewSections } from "../domain/projectOverview";
 import type {
   AppDatabase,
   AssessmentAnswers,
@@ -504,6 +505,7 @@ const demoProject: Project = {
     { id: "asset-site-image", filename: "baustellenlage.png", mimeType: "image/png", byteSize: 70, dataUrl: demoImageDataUrl, width: 800, height: 450, createdAt },
     { id: "asset-multipage-plan", filename: "lageplan-zweiseitig.pdf", mimeType: "application/pdf", byteSize: 3_600, dataUrl: demoPdfDataUrl, pageCount: 2, createdAt },
   ],
+  documentFolders: [],
   createdAt,
   updatedAt: createdAt,
 };
@@ -540,8 +542,16 @@ const englishProject: Project = {
   ],
   emergencyContacts: [{ id: "emergency-en", label: "Emergency services", name: "Emergency call", phone: "999" }],
   customFields: [{ id: "field-en-client", key: "Client reference", value: "RE-24", placeholderKey: "client_reference" }],
-  customSections: [], overviewSections: [], assets: [], createdAt, updatedAt: createdAt,
+  customSections: [], overviewSections: [], assets: [], documentFolders: [], createdAt, updatedAt: createdAt,
 };
+
+function seedOverviewSections(project: Project) {
+  let identifierIndex = 0;
+  return legacyProjectOverviewSections(project, (prefix) => `${project.id}-${prefix}-${identifierIndex++}`);
+}
+
+demoProject.overviewSections = seedOverviewSections(demoProject);
+englishProject.overviewSections = seedOverviewSections(englishProject);
 
 const englishAssessment: AssessmentAnswers = {
   ...demoAssessment, employerCount: 6, maxWorkers: 24, workDays: 160, estimatedPersonDays: 2_100,
@@ -563,22 +573,22 @@ export function createSeedDatabase(): AppDatabase {
     { id: "layout-demo-document", kind: "document", documentType: "alarm_plan", displayVariant: "emergency_card", x: 8_500, y: 4_980, width: 3_000, height: 700, zIndex: 802, semanticOrder: 10_002 },
   );
   const englishPlan = createPlanFromAssessment(englishProject, englishAssessment, seedBlocks, seedCategories);
-  const documentTemplates = (["site_rules", "alarm_plan", "fire_safety", "first_aid", "participants", "advance_notice", "a4_plan"] as const).flatMap((documentType) => (["de", "en"] as const).map((locale) => ({
-    id: `standard-${documentType}-${locale}`,
+  const documentTemplates = (["de", "en"] as const).map((locale) => ({
+    id: `standard-a4_plan-${locale}`,
     organizationId: "organization-demo",
-    name: locale === "de" ? "QuickSiGe Standard" : "QuickSiGe standard",
-    documentType,
+    name: "QuickSiGe Standard",
+    documentType: "a4_plan" as const,
     locale,
     origin: "standard" as const,
-    filename: `${documentType}-${locale}.docx`,
+    filename: `a4_plan-${locale}.docx`,
     description: locale === "de" ? "Bearbeitbare Word-Vorlage" : "Editable Word template",
     lifecycle: "active" as const,
     revision: 1,
     createdAt,
     updatedAt: createdAt,
-  })));
+  }));
   return {
-    schemaVersion: 13,
+    schemaVersion: 18,
     organization: {
       id: "organization-demo",
       name: "Sicher Planen Ingenieure",
@@ -612,15 +622,17 @@ export function createSeedDatabase(): AppDatabase {
         id: "overview-template-standard",
         organizationId: "organization-demo",
         name: "Allgemein",
+        sourceLocale: "de",
+        translations: { en: { name: "General" } },
         entries: [
-          { id: "template-field-client", label: "Bauherr", type: "text", defaultValue: "", children: [] },
-          { id: "template-field-site-access", label: "Baustellenzufahrt", type: "text", defaultValue: "", children: [] },
-          { id: "template-field-start", label: "Geplanter Beginn", type: "date", defaultValue: "", children: [] },
+          { id: "template-field-client", label: "Bauherr", type: "text", defaultValue: "", children: [], translations: { en: { label: "Client", defaultValue: "" } } },
+          { id: "template-field-site-access", label: "Baustellenzufahrt", type: "text", defaultValue: "", children: [], translations: { en: { label: "Site access", defaultValue: "" } } },
+          { id: "template-field-start", label: "Geplanter Beginn", type: "date", defaultValue: "", children: [], translations: { en: { label: "Planned start", defaultValue: "" } } },
           {
-            id: "template-group-address", label: "Projektadresse", type: "group", defaultValue: "", children: [
-              { id: "template-field-street", label: "Straße", type: "text", defaultValue: "", children: [] },
-              { id: "template-field-postcode", label: "Postleitzahl", type: "text", defaultValue: "", children: [] },
-              { id: "template-field-city", label: "Ort", type: "text", defaultValue: "", children: [] },
+            id: "template-group-address", label: "Projektadresse", type: "group", defaultValue: "", translations: { en: { label: "Project address", defaultValue: "" } }, children: [
+              { id: "template-field-street", label: "Straße", type: "text", defaultValue: "", children: [], translations: { en: { label: "Street", defaultValue: "" } } },
+              { id: "template-field-postcode", label: "Postleitzahl", type: "text", defaultValue: "", children: [], translations: { en: { label: "Postal code", defaultValue: "" } } },
+              { id: "template-field-city", label: "Ort", type: "text", defaultValue: "", children: [], translations: { en: { label: "City", defaultValue: "" } } },
             ],
           },
         ],
@@ -631,12 +643,14 @@ export function createSeedDatabase(): AppDatabase {
         id: "overview-template-emergency",
         organizationId: "organization-demo",
         name: "Notfallkontakte",
+        sourceLocale: "de",
+        translations: { en: { name: "Emergency contacts" } },
         entries: [
           {
-            id: "template-emergency-contacts", label: "Kontakte", type: "repeating_group", defaultValue: "", children: [
-              { id: "template-emergency-label", label: "Bezeichnung", type: "text", defaultValue: "Feuerwehr / Rettungsdienst", children: [] },
-              { id: "template-emergency-name", label: "Ansprechpartner", type: "text", defaultValue: "Notruf", children: [] },
-              { id: "template-emergency-phone", label: "Telefon", type: "text", defaultValue: "112", children: [] },
+            id: "template-emergency-contacts", label: "Kontakte", type: "repeating_group", defaultValue: "", translations: { en: { label: "Contacts", defaultValue: "" } }, children: [
+              { id: "template-emergency-label", label: "Bezeichnung", type: "text", defaultValue: "Feuerwehr / Rettungsdienst", children: [], translations: { en: { label: "Service", defaultValue: "Fire brigade / emergency services" } } },
+              { id: "template-emergency-name", label: "Ansprechpartner", type: "text", defaultValue: "Notruf", children: [], translations: { en: { label: "Contact", defaultValue: "Emergency call" } } },
+              { id: "template-emergency-phone", label: "Telefon", type: "text", defaultValue: "112", children: [], translations: { en: { label: "Phone", defaultValue: "112" } } },
             ],
           },
         ],
@@ -647,15 +661,35 @@ export function createSeedDatabase(): AppDatabase {
         id: "overview-template-logistics",
         organizationId: "organization-demo",
         name: "Baustellenlogistik",
+        sourceLocale: "de",
+        translations: { en: { name: "Site logistics" } },
         entries: [
           {
-            id: "template-group-delivery", label: "Anlieferung", type: "group", defaultValue: "", children: [
-              { id: "template-field-delivery", label: "Anlieferzeitfenster", type: "text", defaultValue: "", children: [] },
-              { id: "template-field-waiting", label: "Wartebereich", type: "text", defaultValue: "", children: [] },
+            id: "template-group-delivery", label: "Anlieferung", type: "group", defaultValue: "", translations: { en: { label: "Deliveries", defaultValue: "" } }, children: [
+              { id: "template-field-delivery", label: "Anlieferzeitfenster", type: "text", defaultValue: "", children: [], translations: { en: { label: "Delivery time window", defaultValue: "" } } },
+              { id: "template-field-waiting", label: "Wartebereich", type: "text", defaultValue: "", children: [], translations: { en: { label: "Waiting area", defaultValue: "" } } },
             ],
           },
         ],
         createdAt, updatedAt: createdAt,
+      },
+      {
+        id: "overview-template-participants",
+        organizationId: "organization-demo",
+        name: "Projektbeteiligte",
+        sourceLocale: "de",
+        translations: { en: { name: "Project participants" } },
+        entries: [{
+          id: "template-project-participants", label: "Beteiligte", type: "repeating_group", defaultValue: "", translations: { en: { label: "Participants", defaultValue: "" } }, children: [
+            { id: "template-participant-name", label: "Name", type: "text", defaultValue: "", children: [], translations: { en: { label: "Name", defaultValue: "" } } },
+            { id: "template-participant-company", label: "Unternehmen", type: "text", defaultValue: "", children: [], translations: { en: { label: "Company", defaultValue: "" } } },
+            { id: "template-participant-role", label: "Rolle", type: "text", defaultValue: "", children: [], translations: { en: { label: "Role", defaultValue: "" } } },
+            { id: "template-participant-email", label: "E-Mail", type: "text", defaultValue: "", children: [], translations: { en: { label: "Email", defaultValue: "" } } },
+            { id: "template-participant-phone", label: "Telefon", type: "text", defaultValue: "", children: [], translations: { en: { label: "Phone", defaultValue: "" } } },
+          ],
+        }],
+        createdAt,
+        updatedAt: createdAt,
       },
     ],
     documentTemplates,

@@ -1,23 +1,19 @@
-import { ArrowRight, CheckCircle2, ClipboardList, FileCheck2, FolderKanban, Plus, Search } from "lucide-react";
+import { ArrowRight, CheckCircle2, ClipboardList, FileCheck2, FolderKanban, Plus, Search, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { Badge, Button, EmptyState, PageHeader } from "../components/Ui";
-import type { ProjectStatus } from "../domain/types";
+import { Badge, Button, EmptyState, Modal, PageHeader } from "../components/Ui";
+import type { Project, ProjectStatus } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
 import { useApp } from "../state/AppProvider";
 
-function statusTone(status: ProjectStatus): "neutral" | "success" | "warning" | "info" {
-  if (status === "published") return "success";
-  if (status === "in_review") return "warning";
-  if (status === "archived") return "neutral";
-  return "info";
-}
+const projectStatuses: ProjectStatus[] = ["draft", "in_review", "published", "archived"];
 
 export function DashboardPage() {
-  const { database } = useApp();
+  const { database, deleteProject, updateProjectStatus } = useApp();
   const { t, formatDate } = useI18n();
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<ProjectStatus | "all">("all");
+  const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
   const filteredProjects = useMemo(() => database.projects.filter((project) => {
     const matchesQuery = `${project.name} ${project.city} ${project.projectNumber}`.toLowerCase().includes(query.toLowerCase());
     return matchesQuery && (status === "all" || project.status === status);
@@ -55,7 +51,7 @@ export function DashboardPage() {
           <div className="search-shell"><Search size={17} /><input aria-label={t("dashboard.searchPlaceholder")} className="search-input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("dashboard.searchPlaceholder")} /></div>
           <select aria-label={t("dashboard.allStatuses")} className="search-input" value={status} onChange={(event) => setStatus(event.target.value as ProjectStatus | "all")}>
             <option value="all">{t("dashboard.allStatuses")}</option>
-            {(["draft", "in_review", "published", "archived"] as ProjectStatus[]).map((projectStatus) => <option key={projectStatus} value={projectStatus}>{t(`status.${projectStatus}`)}</option>)}
+            {projectStatuses.map((projectStatus) => <option key={projectStatus} value={projectStatus}>{t(`status.${projectStatus}`)}</option>)}
           </select>
         </div>
         {filteredProjects.length === 0 ? (
@@ -66,19 +62,23 @@ export function DashboardPage() {
                 <article className="project-row" key={project.id}>
                   <div className="project-identity">
                     <span className="project-icon"><FolderKanban size={21} /></span>
-                    <span><strong>{project.name}</strong><span>{project.projectNumber} · {project.city}</span></span>
+                    <span><strong>{project.name}</strong><span>{project.projectNumber}</span></span>
                   </div>
-                  <div><span className="project-meta-label">{t("project.type")}</span><span className="project-meta-value">{t(`project.type.${project.constructionType}`)}</span></div>
-                  <div><span className="project-meta-label">{t("project.schedule")}</span><span className="project-meta-value">{formatDate(project.startDate)} – {formatDate(project.endDate)}</span></div>
+                  <div><span className="project-meta-label">{t("project.informationSections")}</span><span className="project-meta-value">{project.overviewSections.length}</span></div>
+                  <div><span className="project-meta-label">{t("project.updated")}</span><span className="project-meta-value">{formatDate(project.updatedAt)}</span></div>
                   <div style={{ display: "grid", justifyItems: "end", gap: 10 }}>
-                    <Badge tone={statusTone(project.status)}>{t(`status.${project.status}`)}</Badge>
-                    <Link to={`/projects/${project.id}`}><Button variant="ghost" size="small">{t("common.open")}<ArrowRight size={14} /></Button></Link>
+                    <select className={`project-status-select status-${project.status}`} aria-label={`${t("project.status")}: ${project.name}`} value={project.status} onChange={(event) => updateProjectStatus(project.id, event.target.value as ProjectStatus)}>{projectStatuses.map((projectStatus) => <option key={projectStatus} value={projectStatus}>{t(`status.${projectStatus}`)}</option>)}</select>
+                    <div className="row-actions"><button type="button" className="icon-button danger-icon" aria-label={`${t("common.delete")}: ${project.name}`} onClick={() => setProjectToDelete(project)}><Trash2 size={14} /></button><Link to={`/projects/${project.id}`}><Button variant="ghost" size="small">{t("common.open")}<ArrowRight size={14} /></Button></Link></div>
                   </div>
                 </article>
             ))}
           </div>
         )}
       </section>
+      <Modal open={Boolean(projectToDelete)} title={t("project.deleteTitle")} onClose={() => setProjectToDelete(null)}>
+        <div className="modal-body"><p>{t("project.deleteText", { name: projectToDelete?.name ?? "" })}</p></div>
+        <div className="modal-footer"><Button variant="secondary" onClick={() => setProjectToDelete(null)}>{t("common.cancel")}</Button><Button variant="danger" onClick={() => { if (!projectToDelete) return; const projectId = projectToDelete.id; setProjectToDelete(null); void deleteProject(projectId); }}>{t("common.delete")}</Button></div>
+      </Modal>
     </div>
   );
 }

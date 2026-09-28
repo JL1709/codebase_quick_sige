@@ -306,8 +306,6 @@ function CategoryEditorModal({ open, category, categories, locale: uiLocale, onC
     translations: { de: { name: "", description: "" }, en: { name: "", description: "" } },
   }));
   const unavailableParentIds = category ? categoryDescendantIds(category.id, categories) : new Set<string>();
-  const hierarchyCategories = [...categories.filter((candidate) => candidate.id !== draft.id), draft];
-  const displayedColor = categoryHierarchyColor(draft.id, hierarchyCategories);
   const updateParent = (parentId: string | undefined) => setDraft((current) => ({
     ...current,
     parentId,
@@ -321,12 +319,10 @@ function CategoryEditorModal({ open, category, categories, locale: uiLocale, onC
     },
   }));
   return <Modal open={open} title={category ? t("catalog.editCategory") : t("catalog.addCategory")} onClose={onClose}>
-    <form onSubmit={(event) => { event.preventDefault(); onSave({ ...draft, color: draft.parentId ? displayedColor : draft.color }); }}>
+    <form onSubmit={(event) => { event.preventDefault(); onSave(draft); }}>
       <div className="modal-body form-grid">
         <label className="field"><span>{t("catalog.parentCategory")}</span><select value={draft.parentId ?? ""} onChange={(event) => updateParent(event.target.value || undefined)}><option value="">—</option>{categories.filter((candidate) => candidate.lifecycle === "active" && !unavailableParentIds.has(candidate.id)).map((candidate) => <option key={candidate.id} value={candidate.id}>{categoryPath(candidate.id, categories, uiLocale)}</option>)}</select></label>
-        {draft.parentId
-          ? <div className="field"><span>{t("catalog.derivedColor")}</span><div className="derived-category-color"><i style={{ backgroundColor: displayedColor }} /><code>{displayedColor}</code></div></div>
-          : <label className="field"><span>{t("catalog.color")}</span><input type="color" value={draft.color} onChange={(event) => setDraft({ ...draft, color: event.target.value })} /></label>}
+        <label className="field"><span>{t("catalog.color")}</span><input type="color" value={draft.color} onChange={(event) => setDraft({ ...draft, color: event.target.value })} /></label>
         <label className="field span-two"><span>{t("catalog.categoryName")}</span><input required value={draft.translations[uiLocale].name} onChange={(event) => updateName(event.target.value)} /></label>
       </div>
       <div className="modal-footer">{onArchive && <Button type="button" variant="danger" onClick={onArchive}>{t("common.archive")}</Button>}{onRestore && <Button type="button" variant="secondary" onClick={onRestore}>{t("common.restore")}</Button>}<Button type="button" variant="secondary" onClick={onClose}>{t("common.cancel")}</Button><Button type="submit">{t("common.save")}</Button></div>

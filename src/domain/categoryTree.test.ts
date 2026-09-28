@@ -31,7 +31,7 @@ describe("recursive category tree", () => {
     expect(blockMatchesCategory(block, block.categoryIds[0], database.categories)).toBe(true);
   });
 
-  it("derives one progressively lighter color family and a complete placement path", () => {
+  it("uses each catalog category's own color and a complete placement path", () => {
     const rootColor = categoryHierarchyColor("site-setup", database.categories);
     const firstLevelColor = categoryHierarchyColor("site-access-emergency", database.categories);
     const siblingColor = categoryHierarchyColor("site-utilities", database.categories);
@@ -39,9 +39,10 @@ describe("recursive category tree", () => {
     const emergencyBlock = database.blocks.find((block) => block.id === "block-first-aid")!;
 
     expect(rootColor).toBe("#c8644d");
-    expect(firstLevelColor).toBe(siblingColor);
+    expect(firstLevelColor).toBe("#d56b54");
+    expect(siblingColor).toBe("#d69228");
     expect(firstLevelColor).not.toBe(rootColor);
-    expect(deepestColor).not.toBe(firstLevelColor);
+    expect(deepestColor).toBe("#d69228");
     expect(blockHierarchyColor(emergencyBlock, database.categories)).toBe(firstLevelColor);
     expect(categoryPlacementIds("mobile-distribution-units", database.categories)).toEqual([
       "site-setup", "site-utilities", "site-power-water", "temporary-electrical-distribution", "mobile-distribution-units",

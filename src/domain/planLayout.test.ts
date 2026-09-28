@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { createSeedDatabase } from "../data/seed";
-import type { Plan } from "./types";
+import type { Plan, PlanBlockElement } from "./types";
 import {
   A0_LANDSCAPE_HEIGHT, A0_LANDSCAPE_WIDTH, clampElementToPage, createSectionElement,
   cssPixelsToLayoutUnits, ensurePlanLayout, findNextFreeBlockPosition, findNextFreeNonBlockPosition,
-  fitBlocksInArea, getBlockArea, layoutUnitsToCssPixels, layoutUnitsToMillimetres, PLAN_UNITS_PER_MILLIMETRE, snapToGrid,
+  fitBlocksInArea, getBlockArea, layoutUnitsToCssPixels, layoutUnitsToMillimetres, PLAN_UNITS_PER_MILLIMETRE,
+  reconcilePlanSectionsWithCatalog, resizeElementFromCssMeasurement, snapToGrid,
 } from "./planLayout";
 
 describe("physical A0 layout", () => {
@@ -67,6 +68,31 @@ describe("physical A0 layout", () => {
     expect(blocks.every((element) => area && element.x >= area.x && element.y >= area.y && element.x + element.width <= area.x + area.width && element.y + element.height <= area.y + area.height)).toBe(true);
   });
 
+  it("reconciles existing plan membership with current catalog category assignments before fitting", () => {
+    const database = createSeedDatabase();
+    const plan = structuredClone(database.plans[0]);
+    const sourceSection = plan.sections.find((section) => section.categoryId === "site-access-emergency");
+    const movedItem = sourceSection?.items[0];
+    expect(movedItem).toBeDefined();
+    movedItem!.customTitle = { de: "Planspezifischer Titel" };
+    const blocks = database.blocks.map((block) => block.id === movedItem!.blockId
+      ? { ...block, primaryCategoryId: "earthworks" }
+      : block);
+
+    const sections = reconcilePlanSectionsWithCatalog(plan.sections, database.categories, blocks);
+    const targetSection = sections.find((section) => section.categoryId === "earthworks");
+    const reconciledItem = targetSection?.items.find((item) => item.id === movedItem!.id);
+    expect(reconciledItem?.customTitle?.de).toBe("Planspezifischer Titel");
+    expect(sections.find((section) => section.categoryId === "site-access-emergency")?.items.some((item) => item.id === movedItem!.id)).toBe(false);
+    expect(sections.every((section) => section.items.length > 0)).toBe(true);
+
+    const fitted = fitBlocksInArea(plan.layout, sections, database.categories, blocks, "best_fit");
+    const movedElement = fitted.layout.elements.find(
+      (element): element is PlanBlockElement => element.kind === "block" && element.itemId === movedItem!.id,
+    );
+    expect(movedElement?.sectionId).toBe(targetSection?.id);
+  });
+
   it("keeps user-placed files unchanged while fitting blocks", () => {
     const database = createSeedDatabase();
     const plan = structuredClone(database.plans[0]);
@@ -82,6 +108,49 @@ describe("physical A0 layout", () => {
     expect(free.width).toBe(2_500);
     expect(free.height).toBe(1_600);
     expect(area && free.x >= area.x + area.width).toBe(true);
+  });
+
+  it("preserves the inactive dimension when an edge resize reports distorted DOM measurements", () => {
+    const layout = createSeedDatabase().plans[0].layout;
+    const element = layout.elements.find((candidate) => candidate.kind === "block");
+    expect(element).toBeDefined();
+    const horizontallyResized = resizeElementFromCssMeasurement(element!, layout, {
+      width: element!.width * 0.1 + 40,
+      height: 9_999,
+      translateX: 0,
+      translateY: 9_999,
+      directionX: 1,
+      directionY: 0,
+    });
+    expect(horizontallyResized.width).toBe(element!.width + 400);
+    expect(horizontallyResized.height).toBe(element!.height);
+    expect(horizontallyResized.y).toBe(element!.y);
+
+    const verticallyResized = resizeElementFromCssMeasurement(element!, layout, {
+      width: 9_999,
+      height: element!.height * 0.1 + 30,
+      translateX: 9_999,
+      translateY: 0,
+      directionX: 0,
+      directionY: 1,
+    });
+    expect(verticallyResized.width).toBe(element!.width);
+    expect(verticallyResized.height).toBe(element!.height + 300);
+    expect(verticallyResized.x).toBe(element!.x);
+
+    const insetElement = { ...element!, x: element!.x + 1_000, y: element!.y + 1_000 };
+    const resizedFromNorthWest = resizeElementFromCssMeasurement(insetElement, layout, {
+      width: insetElement.width * 0.1 + 40,
+      height: insetElement.height * 0.1 + 30,
+      translateX: -40,
+      translateY: -30,
+      directionX: -1,
+      directionY: -1,
+    });
+    expect(resizedFromNorthWest.x).toBe(insetElement.x - 400);
+    expect(resizedFromNorthWest.y).toBe(insetElement.y - 300);
+    expect(resizedFromNorthWest.width).toBe(insetElement.width + 400);
+    expect(resizedFromNorthWest.height).toBe(insetElement.height + 300);
   });
 
   it.each([0.55, 0.78, 1, 1.1])("round-trips exact physical coordinates at %s zoom", (zoom) => {

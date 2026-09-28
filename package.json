@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "qa:exports": "tsx scripts/generate_demo_exports.ts",
+    "qa:a4-template": "tsx scripts/generate_a4_word_template.ts",
     "check": "npm run lint && npm run test && npm run build && npm run test:e2e && npm audit --audit-level=high"
   },
   "dependencies": {

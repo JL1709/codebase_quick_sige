@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { flattenOverviewEntries, localizeOverviewTemplate } from "../domain/overviewTemplates";
 import { createSeedDatabase } from "./seed";
 
 describe("seed data", () => {
@@ -36,6 +37,22 @@ describe("seed data", () => {
     expect(project.assets.some((asset) => asset.mimeType === "application/pdf" && asset.pageCount === 2)).toBe(true);
   });
 
+  it("provides distinct German and English overview template examples", () => {
+    const database = createSeedDatabase();
+    for (const template of database.overviewTemplates) {
+      expect(template.translations?.en?.name).toBeTruthy();
+      expect(flattenOverviewEntries(template.entries).every(({ entry }) => Boolean(entry.translations?.en))).toBe(true);
+    }
+
+    const emergencyTemplate = database.overviewTemplates.find((template) => template.id === "overview-template-emergency")!;
+    const germanEmergencyTemplate = localizeOverviewTemplate(emergencyTemplate, "de");
+    const englishEmergencyTemplate = localizeOverviewTemplate(emergencyTemplate, "en");
+    expect(germanEmergencyTemplate.name).toBe("Notfallkontakte");
+    expect(englishEmergencyTemplate.name).toBe("Emergency contacts");
+    expect(germanEmergencyTemplate.entries[0].children[0].defaultValue).toBe("Feuerwehr / Rettungsdienst");
+    expect(englishEmergencyTemplate.entries[0].children[0].defaultValue).toBe("Fire brigade / emergency services");
+  });
+
   it("keeps the release fixture inventory stable", () => {
     const database = createSeedDatabase();
     expect({
@@ -60,7 +77,7 @@ describe("seed data", () => {
         "revisionIds": [
           "revision-demo-a",
         ],
-        "templateCount": 14,
+        "templateCount": 2,
       }
     `);
   });

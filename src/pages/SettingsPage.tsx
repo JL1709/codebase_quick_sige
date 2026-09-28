@@ -3,30 +3,29 @@ import { CSS } from "@dnd-kit/utilities";
 import { ArchiveRestore, CircleHelp, Copy, Database, Download, FilePlus2, GripVertical, Languages, MoreVertical, Pencil, Plus, RotateCcw, Search, ShieldCheck, Trash2 } from "lucide-react";
 import { type ChangeEvent, type CSSProperties, type FormEvent, useEffect, useMemo, useState } from "react";
 import { Button, Modal, PageHeader } from "../components/Ui";
+import { FieldTypeHelpModal } from "../components/FieldTypeHelpModal";
 import { getBlob, saveBlob } from "../data/blobRepository";
 import {
   countOverviewEntries,
+  localizeOverviewTemplate,
+  mergeOverviewTemplateLocale,
   moveOverviewEntry,
   normalizeOverviewKey,
   overviewEntryClipboardValue,
-  overviewEntryPath,
+  overviewTemplateName,
   validateOverviewTemplate,
   type OverviewDropPosition,
 } from "../domain/overviewTemplates";
-import type { DocumentTemplate, DocumentType, Locale, OverviewEntryType, OverviewTemplate, OverviewTemplateEntry } from "../domain/types";
+import type { DocumentTemplate, Locale, OverviewEntryType, OverviewTemplate, OverviewTemplateEntry } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
 import { newId, useApp } from "../state/AppProvider";
 
-const documentTypes: DocumentType[] = ["site_rules", "alarm_plan", "fire_safety", "first_aid", "participants", "advance_notice", "a4_plan"];
 const overviewEntryTypes: OverviewEntryType[] = ["text", "date", "group", "repeating_group"];
 const placeholderReference = [
-  "{{INS qs.project.name}}", "{{INS qs.project.number}}", "{{INS qs.project.description}}", "{{INS qs.project.address}}",
-  "{{INS qs.project.city}}", "{{INS qs.project.start_date}}", "{{INS qs.project.end_date}}",
-  "{{INS qs.overview.your_template.your_field}}", "{{FOR contact IN qs.emergency_contacts}}", "{{INS $contact.label}}",
-  "{{FOR participant IN qs.participants}}", "{{INS $participant.role_label}}", "{{FOR section IN qs.plan.sections}}",
-  "{{FOR block IN qs.plan.blocks}}", "{{INS $block.category}}", "{{INS $block.title}}",
-  "{{INS $block.a0_description}}", "{{INS $block.a4_description}}", "{{INS $block.regulations}}", "{{IMAGE $block.image}}",
-  "{{INS $block.expert_note}}", "{{PAGEBREAK}}",
+  "{{#qs.plan.categories}}", "{{qs.category.title}}", "{{qs.category.color}}",
+  "{{#qs.category.sections}}", "{{qs.section.heading}}", "{{#qs.section.blocks}}",
+  "{{qs.block.color}}", "{{qs.block.title}}", "{{qs.block.a4_description}}", "{{qs.block.regulations}}",
+  "{{qs.block.image}}", "{{/qs.section.blocks}}", "{{/qs.category.sections}}", "{{/qs.plan.categories}}",
 ];
 
 export function SettingsPage() {
@@ -48,31 +47,29 @@ export function TemplatesPage() {
     database,
     saveOverviewTemplate, deleteOverviewTemplate, saveDocumentTemplate, deleteDocumentTemplate,
   } = useApp();
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const [overviewOpen, setOverviewOpen] = useState(false);
   const [editingOverview, setEditingOverview] = useState<OverviewTemplate | null>(null);
   const [documentOpen, setDocumentOpen] = useState(false);
   const [editingDocument, setEditingDocument] = useState<DocumentTemplate | null>(null);
   const [placeholderQuery, setPlaceholderQuery] = useState("");
-  const [showArchived, setShowArchived] = useState(false);
   const [overviewToDelete, setOverviewToDelete] = useState<OverviewTemplate | null>(null);
+  const [documentToDelete, setDocumentToDelete] = useState<DocumentTemplate | null>(null);
   const openOverview = (template?: OverviewTemplate) => { setEditingOverview(template ?? null); setOverviewOpen(true); };
   const openDocument = (template?: DocumentTemplate) => { setEditingDocument(template ?? null); setDocumentOpen(true); };
+  const visibleDocumentTemplates = database.documentTemplates.filter(
+    (template) => template.locale === locale && template.lifecycle !== "archived",
+  );
 
-  const removeDocumentTemplate = (template: DocumentTemplate) => {
-    if (template.origin === "standard") return;
-    deleteDocumentTemplate(template.id);
-  };
-  const duplicateDocumentTemplate = async (template: DocumentTemplate) => {
-    const now = new Date().toISOString();
-    const blobId = newId("blob");
+  const downloadDocumentTemplate = async (template: DocumentTemplate) => {
+    const { createStandardTemplate, downloadBlob } = await import("../documents/templateEngine");
+    let blob: Blob | undefined;
     if (template.origin === "standard") {
-      const { createStandardTemplate } = await import("../documents/templateEngine");
-      await saveBlob(blobId, await createStandardTemplate(template.documentType, template.locale));
+      blob = await createStandardTemplate(template.documentType, template.locale);
     } else if (template.blobId) {
-      const blob = await getBlob(template.blobId); if (!blob) return; await saveBlob(blobId, blob);
-    } else return;
-    saveDocumentTemplate({ ...structuredClone(template), id: newId("document-template"), name: `${template.name} – Copy`, origin: "custom", blobId, lifecycle: "active", revision: 1, createdAt: now, updatedAt: now });
+      blob = await getBlob(template.blobId);
+    }
+    if (blob) downloadBlob(blob, template.filename);
   };
 
   return <div className="page settings-page">
@@ -86,29 +83,52 @@ export function TemplatesPage() {
       <div className="template-list">
         {database.overviewTemplates.map((template) => (
           <article className="template-row" key={template.id}>
-            <div><strong>{template.name}</strong><span>{countOverviewEntries(template.entries)} {t("overview.entries")}</span></div>
+            <div><strong>{overviewTemplateName(template, locale)}</strong><span>{countOverviewEntries(template.entries)} {t("overview.entries")}</span></div>
             <div className="row-actions">
               <Button size="small" variant="secondary" onClick={() => openOverview(template)}><Pencil size={14} />{t("common.edit")}</Button>
-              <button className="icon-button danger-icon" onClick={() => setOverviewToDelete(template)} aria-label={`${t("common.delete")}: ${template.name}`}><Trash2 size={14} /></button>
+              <button className="icon-button danger-icon" onClick={() => setOverviewToDelete(template)} aria-label={`${t("common.delete")}: ${overviewTemplateName(template, locale)}`}><Trash2 size={14} /></button>
             </div>
           </article>
         ))}
       </div>
     </section>
 
-    <section className="settings-section"><div className="settings-section-header"><div><h2>{t("templates.wordTitle")}</h2><p>{t("templates.wordText")}</p></div><div className="row-actions"><Button variant="secondary" onClick={() => setShowArchived((value) => !value)}><ArchiveRestore size={15} />{t("templates.archived")}</Button><Button onClick={() => openDocument()}><FilePlus2 size={15} />{t("templates.uploadWord")}</Button></div></div><div className="template-list">{database.documentTemplates.filter((template) => showArchived || template.lifecycle !== "archived").map((template) => <article className="template-row" key={template.id}><div><strong>{template.name}</strong><span>{t(`documents.${template.documentType}`)} · {t(`common.language.${template.locale}`)} · {template.origin === "standard" ? t("templates.standard") : template.filename} · v{template.revision ?? 1}{template.lifecycle === "archived" ? ` · ${t("common.archived")}` : ""}</span></div><div className="row-actions"><Button size="small" variant="secondary" onClick={() => void import("../documents/templateEngine").then(async ({ createStandardTemplate, downloadBlob }) => { const blob = template.origin === "standard" ? await createStandardTemplate(template.documentType, template.locale) : template.blobId ? await getBlob(template.blobId) : undefined; if (blob) downloadBlob(blob, template.filename); })}><Download size={14} />{t("common.download")}</Button><button className="icon-button" onClick={() => void duplicateDocumentTemplate(template)} aria-label={t("common.duplicate")}><Copy size={14} /></button>{template.origin === "custom" && <><Button size="small" variant="secondary" onClick={() => openDocument(template)}><Pencil size={14} />{t("common.edit")}</Button>{template.lifecycle === "archived" ? <><button className="icon-button" onClick={() => saveDocumentTemplate({ ...template, lifecycle: "active", updatedAt: new Date().toISOString() })} aria-label={t("common.restore")}><ArchiveRestore size={14} /></button><button className="icon-button danger-icon" onClick={() => { if (window.confirm(t("common.confirmDelete"))) removeDocumentTemplate(template); }} aria-label={t("common.delete")}><Trash2 size={14} /></button></> : <button className="icon-button danger-icon" onClick={() => saveDocumentTemplate({ ...template, lifecycle: "archived", updatedAt: new Date().toISOString() })} aria-label={t("common.archive")}><Trash2 size={14} /></button>}</>}</div></article>)}</div></section>
+    <section className="settings-section">
+      <div className="settings-section-header">
+        <div><h2>{t("templates.wordTitle")}</h2><p>{t("templates.wordText")}</p></div>
+        <Button onClick={() => openDocument()}><FilePlus2 size={15} />{t("templates.uploadWord")}</Button>
+      </div>
+      <div className="template-list">
+        {visibleDocumentTemplates.map((template) => (
+          <article className="template-row" key={template.id}>
+            <div>
+              <strong>{template.origin === "standard" ? t(`documents.${template.documentType}`) : template.name}</strong>
+              <span>{template.origin === "standard" ? `${template.name} · ` : ""}{t(`common.language.${template.locale}`)} · {template.origin === "standard" ? t("templates.standard") : template.filename} · v{template.revision ?? 1}</span>
+            </div>
+            <div className="row-actions">
+              <Button size="small" variant="secondary" onClick={() => void downloadDocumentTemplate(template)}><Download size={14} />{t("common.download")}</Button>
+              {template.origin === "custom" && <>
+                <Button size="small" variant="secondary" onClick={() => openDocument(template)}><Pencil size={14} />{t("common.edit")}</Button>
+                <button className="icon-button danger-icon" onClick={() => setDocumentToDelete(template)} aria-label={`${t("common.delete")}: ${template.name}`}><Trash2 size={14} /></button>
+              </>}
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
 
     <section className="panel template-reference"><div><h2>{t("templates.placeholderTitle")}</h2><p>{t("templates.placeholderText")}</p><div className="search-shell"><Search size={15} /><input className="search-input" value={placeholderQuery} onChange={(event) => setPlaceholderQuery(event.target.value)} placeholder={t("templates.searchPlaceholders")} /></div></div><div className="placeholder-examples">{placeholderReference.filter((token) => token.toLowerCase().includes(placeholderQuery.toLowerCase())).map((token) => <button className="placeholder-copy" key={token} onClick={() => void navigator.clipboard.writeText(token)}><code>{token}</code><Copy size={13} /></button>)}</div><p className="field-help">{t("templates.placeholderLocations")}</p></section>
 
-    <OverviewTemplateModal key={`overview-${editingOverview?.id ?? "new"}-${overviewOpen}`} open={overviewOpen} template={editingOverview} templates={database.overviewTemplates} organizationId={database.organization.id} onClose={() => setOverviewOpen(false)} onSave={(template) => { saveOverviewTemplate(template); setOverviewOpen(false); }} t={t} />
-    <Modal open={Boolean(overviewToDelete)} title={t("templates.deleteTitle")} onClose={() => setOverviewToDelete(null)}><div className="modal-body"><p>{t("templates.deleteText", { name: overviewToDelete?.name ?? "" })}</p></div><div className="modal-footer"><Button variant="secondary" onClick={() => setOverviewToDelete(null)}>{t("common.cancel")}</Button><Button variant="danger" onClick={() => { if (!overviewToDelete) return; deleteOverviewTemplate(overviewToDelete.id); setOverviewToDelete(null); }}>{t("common.delete")}</Button></div></Modal>
-    <DocumentTemplateModal key={`document-${editingDocument?.id ?? "new"}-${documentOpen}`} open={documentOpen} template={editingDocument} organizationId={database.organization.id} onClose={() => setDocumentOpen(false)} onSave={(template) => { saveDocumentTemplate(template); setDocumentOpen(false); }} t={t} />
+    <OverviewTemplateModal key={`overview-${editingOverview?.id ?? "new"}-${overviewOpen}`} open={overviewOpen} template={editingOverview} templates={database.overviewTemplates} organizationId={database.organization.id} locale={locale} onClose={() => setOverviewOpen(false)} onSave={(template) => { saveOverviewTemplate(template, locale); setOverviewOpen(false); }} t={t} />
+    <Modal open={Boolean(overviewToDelete)} title={t("templates.deleteTitle")} onClose={() => setOverviewToDelete(null)}><div className="modal-body"><p>{t("templates.deleteText", { name: overviewToDelete ? overviewTemplateName(overviewToDelete, locale) : "" })}</p></div><div className="modal-footer"><Button variant="secondary" onClick={() => setOverviewToDelete(null)}>{t("common.cancel")}</Button><Button variant="danger" onClick={() => { if (!overviewToDelete) return; deleteOverviewTemplate(overviewToDelete.id); setOverviewToDelete(null); }}>{t("common.delete")}</Button></div></Modal>
+    <Modal open={Boolean(documentToDelete)} title={t("templates.deleteWordTitle")} onClose={() => setDocumentToDelete(null)}><div className="modal-body"><p>{t("templates.deleteWordText", { name: documentToDelete?.name ?? "" })}</p></div><div className="modal-footer"><Button variant="secondary" onClick={() => setDocumentToDelete(null)}>{t("common.cancel")}</Button><Button variant="danger" onClick={() => { if (!documentToDelete) return; deleteDocumentTemplate(documentToDelete.id); setDocumentToDelete(null); }}>{t("common.delete")}</Button></div></Modal>
+    <DocumentTemplateModal key={`document-${editingDocument?.id ?? "new"}-${documentOpen}`} open={documentOpen} template={editingDocument} templates={database.documentTemplates} organizationId={database.organization.id} defaultLocale={locale} onClose={() => setDocumentOpen(false)} onSave={(template) => { saveDocumentTemplate(template); setDocumentOpen(false); }} t={t} />
   </div>;
 }
 
-function blankOverviewTemplate(organizationId: string): OverviewTemplate {
+function blankOverviewTemplate(organizationId: string, locale: Locale): OverviewTemplate {
   const now = new Date().toISOString();
-  return { id: newId("overview-template"), organizationId, name: "", entries: [], createdAt: now, updatedAt: now };
+  return { id: newId("overview-template"), organizationId, name: "", sourceLocale: locale, entries: [], createdAt: now, updatedAt: now };
 }
 
 type Translate = (key: string, params?: Record<string, string | number>) => string;
@@ -129,25 +149,18 @@ function deleteOverviewEntry(entries: OverviewTemplateEntry[], entryId: string):
     .map((entry) => ({ ...entry, children: deleteOverviewEntry(entry.children, entryId) }));
 }
 
-function placeholderPaths(template: OverviewTemplate): Map<string, string> {
-  const paths = new Map<string, string>();
-  const visit = (entries: OverviewTemplateEntry[]) => entries.forEach((entry) => {
-    paths.set(entry.id, overviewEntryPath(template.name, entry.id, template.entries));
-    visit(entry.children);
-  });
-  visit(template.entries);
-  return paths;
-}
-
-function OverviewTemplateModal({ open, template, templates, organizationId, onClose, onSave, t }: { open: boolean; template: OverviewTemplate | null; templates: OverviewTemplate[]; organizationId: string; onClose: () => void; onSave: (template: OverviewTemplate) => void; t: Translate }) {
-  const [draft, setDraft] = useState(() => template ? structuredClone(template) : blankOverviewTemplate(organizationId));
+function OverviewTemplateModal({ open, template, templates, organizationId, locale, onClose, onSave, t }: { open: boolean; template: OverviewTemplate | null; templates: OverviewTemplate[]; organizationId: string; locale: Locale; onClose: () => void; onSave: (template: OverviewTemplate) => void; t: Translate }) {
+  const [draft, setDraft] = useState(() => template ? localizeOverviewTemplate(template, locale) : blankOverviewTemplate(organizationId, locale));
   const [entryType, setEntryType] = useState<OverviewEntryType>("text");
   const [fieldTypeHelpOpen, setFieldTypeHelpOpen] = useState(false);
   const [copiedEntryId, setCopiedEntryId] = useState<string | null>(null);
   const [dropIndicator, setDropIndicator] = useState<{ entryId: string; position: OverviewDropPosition } | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
-  const validation = useMemo(() => validateOverviewTemplate(draft, templates), [draft, templates]);
-  const initialPaths = useMemo(() => template ? placeholderPaths(template) : new Map<string, string>(), [template]);
+  const localizedTemplates = useMemo(
+    () => templates.map((candidate) => localizeOverviewTemplate(candidate, locale)),
+    [locale, templates],
+  );
+  const validation = useMemo(() => validateOverviewTemplate(draft, localizedTemplates), [draft, localizedTemplates]);
   const templateNameMissing = normalizeOverviewKey(draft.name, "").length === 0;
   const templateNameError = templateNameMissing ? t("templates.nameRequired") : validation.nameConflict ? t("templates.nameUnique") : "";
 
@@ -208,12 +221,7 @@ function OverviewTemplateModal({ open, template, templates, organizationId, onCl
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
     if (!validation.valid) return;
-    if (template) {
-      const currentPaths = placeholderPaths(draft);
-      const placeholdersChanged = [...initialPaths].some(([id, path]) => currentPaths.get(id) !== path);
-      if (placeholdersChanged && !window.confirm(t("templates.placeholderChangeWarning"))) return;
-    }
-    onSave({ ...draft, updatedAt: new Date().toISOString() });
+    onSave(mergeOverviewTemplateLocale(template, { ...draft, updatedAt: new Date().toISOString() }, locale));
   };
 
   return <>
@@ -233,24 +241,7 @@ function OverviewTemplateModal({ open, template, templates, organizationId, onCl
         <div className="modal-footer"><Button type="button" variant="secondary" onClick={onClose}>{t("common.cancel")}</Button><Button type="submit" disabled={!validation.valid}>{t("common.save")}</Button></div>
       </form>
     </Modal>
-    <Modal className="field-type-help-modal" open={fieldTypeHelpOpen} title={t("templates.fieldTypeHelpTitle")} onClose={() => setFieldTypeHelpOpen(false)}>
-      <div className="modal-body field-type-help-content">
-        <p>{t("templates.fieldTypeHelpIntro")}</p>
-        <div className="field-type-help-examples">
-          <article>
-            <strong>{t("templates.entryType.group")}</strong>
-            <p>{t("templates.groupHelpText")}</p>
-            <div className="field-type-example"><b>{t("templates.groupHelpExample")}</b><span>{t("templates.groupHelpFields")}</span></div>
-          </article>
-          <article>
-            <strong>{t("templates.entryType.repeating_group")}</strong>
-            <p>{t("templates.repeatingGroupHelpText")}</p>
-            <div className="field-type-example"><b>{t("templates.repeatingGroupHelpExample")}</b><span>{t("templates.repeatingGroupHelpFields")}</span><em>{t("templates.repeatingGroupHelpAction")}</em></div>
-          </article>
-        </div>
-      </div>
-      <div className="modal-footer"><Button type="button" onClick={() => setFieldTypeHelpOpen(false)}>{t("common.close")}</Button></div>
-    </Modal>
+    <FieldTypeHelpModal open={fieldTypeHelpOpen} onClose={() => setFieldTypeHelpOpen(false)} t={t} />
   </>;
 }
 
@@ -299,15 +290,27 @@ function TemplateBuilderEntry({ entry, depth, template, invalidEntryIds, dropInd
   </div>;
 }
 
-function DocumentTemplateModal({ open, template, organizationId, onClose, onSave, t }: { open: boolean; template: DocumentTemplate | null; organizationId: string; onClose: () => void; onSave: (template: DocumentTemplate) => void; t: (key: string) => string }) {
+function normalizeDocumentTemplateName(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+function DocumentTemplateModal({ open, template, templates, organizationId, defaultLocale, onClose, onSave, t }: { open: boolean; template: DocumentTemplate | null; templates: DocumentTemplate[]; organizationId: string; defaultLocale: Locale; onClose: () => void; onSave: (template: DocumentTemplate) => void; t: (key: string) => string }) {
   const now = new Date().toISOString();
-  const [draft, setDraft] = useState<DocumentTemplate>(() => template ? structuredClone(template) : { id: newId("document-template"), organizationId, name: "", documentType: "a4_plan", locale: "de", origin: "custom", filename: "", description: "", createdAt: now, updatedAt: now });
+  const [draft, setDraft] = useState<DocumentTemplate>(() => template ? structuredClone(template) : { id: newId("document-template"), organizationId, name: "", documentType: "a4_plan", locale: defaultLocale, origin: "custom", filename: "", description: "", createdAt: now, updatedAt: now });
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState("");
   const [validating, setValidating] = useState(false);
+  const normalizedName = normalizeDocumentTemplateName(draft.name);
+  const nameConflict = templates.some((candidate) => (
+    candidate.id !== draft.id
+    && candidate.lifecycle !== "archived"
+    && normalizeDocumentTemplateName(candidate.name) === normalizedName
+  ));
+  const nameError = normalizedName.length === 0 ? t("templates.nameRequired") : nameConflict ? t("templates.nameUnique") : "";
   const handleFile = (event: ChangeEvent<HTMLInputElement>) => { const selected = event.target.files?.[0]; if (selected) { setFile(selected); setDraft((current) => ({ ...current, filename: selected.name })); } };
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault(); setError(""); setValidating(true);
+    if (nameError) { setValidating(false); return; }
     if (!template && !file) { setError(t("templates.fileRequired")); setValidating(false); return; }
     if (file && !file.name.toLowerCase().endsWith(".docx")) { setError(t("templates.docxOnly")); setValidating(false); return; }
     try {
@@ -321,10 +324,10 @@ function DocumentTemplateModal({ open, template, organizationId, onClose, onSave
         await saveBlob(blobId, file);
         validation = { status: "valid", checkedAt: new Date().toISOString(), placeholders: result.placeholders, messages: result.warnings };
       }
-      onSave({ ...draft, blobId, validation, lifecycle: "active", filename: file?.name ?? draft.filename, updatedAt: new Date().toISOString() });
+      onSave({ ...draft, name: draft.name.trim(), blobId, validation, lifecycle: "active", filename: file?.name ?? draft.filename, updatedAt: new Date().toISOString() });
     } catch (validationError) {
       setError(validationError instanceof Error ? validationError.message : t("templates.validationFailed"));
     } finally { setValidating(false); }
   };
-  return <Modal open={open} title={template ? t("templates.editWord") : t("templates.uploadWord")} onClose={onClose}><form onSubmit={(event) => void handleSubmit(event)}><div className="modal-body form-grid">{error && <div className="form-error span-two">{error}</div>}<label className="field"><span>{t("templates.name")}</span><input required value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label><label className="field"><span>{t("templates.documentType")}</span><select value={draft.documentType} onChange={(event) => setDraft({ ...draft, documentType: event.target.value as DocumentType })}>{documentTypes.map((type) => <option key={type} value={type}>{t(`documents.${type}`)}</option>)}</select></label><label className="field"><span>{t("project.documentLanguage")}</span><select value={draft.locale} onChange={(event) => setDraft({ ...draft, locale: event.target.value as Locale })}><option value="de">Deutsch</option><option value="en">English</option></select></label><label className="field"><span>{t("templates.wordFile")}</span><input type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={handleFile} /><small>{file?.name ?? draft.filename}</small></label><label className="field span-two"><span>{t("templates.description")}</span><textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label><div className="template-security span-two">{t("templates.securityNote")}</div></div><div className="modal-footer"><Button type="button" variant="secondary" onClick={onClose}>{t("common.cancel")}</Button><Button type="submit" disabled={validating}>{validating ? t("templates.validating") : t("common.save")}</Button></div></form></Modal>;
+  return <Modal open={open} title={template ? t("templates.editWord") : t("templates.uploadWord")} onClose={onClose}><form onSubmit={(event) => void handleSubmit(event)}><div className="modal-body form-grid">{error && <div className="form-error span-two">{error}</div>}<label className="field"><span>{t("templates.name")}</span><input required aria-invalid={Boolean(nameError)} aria-describedby={nameError ? "document-template-name-error" : undefined} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />{nameError && <small id="document-template-name-error" className="field-error" role="alert">{nameError}</small>}</label><label className="field"><span>{t("project.documentLanguage")}</span><select value={draft.locale} onChange={(event) => setDraft({ ...draft, locale: event.target.value as Locale })}><option value="de">Deutsch</option><option value="en">English</option></select></label><label className="field"><span>{t("templates.wordFile")}</span><input type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={handleFile} /><small>{file?.name ?? draft.filename}</small></label><label className="field span-two"><span>{t("templates.description")}</span><textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label><div className="template-security span-two">{t("templates.securityNote")}</div></div><div className="modal-footer"><Button type="button" variant="secondary" onClick={onClose}>{t("common.cancel")}</Button><Button type="submit" disabled={validating || Boolean(nameError)}>{validating ? t("templates.validating") : t("common.save")}</Button></div></form></Modal>;
 }

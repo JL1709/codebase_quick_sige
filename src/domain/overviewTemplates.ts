@@ -21,6 +21,93 @@ export interface OverviewTemplateValidation {
   invalidEntryIds: Set<string>;
 }
 
+const LEGACY_OVERVIEW_TEMPLATE_LOCALE: Locale = "de";
+
+function templateSourceLocale(template: OverviewTemplate): Locale {
+  return template.sourceLocale ?? LEGACY_OVERVIEW_TEMPLATE_LOCALE;
+}
+
+export function overviewTemplateName(template: OverviewTemplate, locale: Locale): string {
+  return template.translations?.[locale]?.name ?? template.name;
+}
+
+function localizedEntry(entry: OverviewTemplateEntry, locale: Locale): OverviewTemplateEntry {
+  const localizedContent = entry.translations?.[locale];
+  return {
+    ...entry,
+    label: localizedContent?.label ?? entry.label,
+    defaultValue: localizedContent?.defaultValue ?? entry.defaultValue,
+    children: entry.children.map((child) => localizedEntry(child, locale)),
+  };
+}
+
+export function localizeOverviewTemplate(template: OverviewTemplate, locale: Locale): OverviewTemplate {
+  return {
+    ...structuredClone(template),
+    sourceLocale: templateSourceLocale(template),
+    name: overviewTemplateName(template, locale),
+    entries: template.entries.map((entry) => localizedEntry(entry, locale)),
+  };
+}
+
+function mergeEntryLocale(
+  originalEntry: OverviewTemplateEntry | undefined,
+  editedEntry: OverviewTemplateEntry,
+  locale: Locale,
+  sourceLocale: Locale,
+): OverviewTemplateEntry {
+  const baseEntry = originalEntry ?? editedEntry;
+  const translations = {
+    ...baseEntry.translations,
+    [locale]: {
+      label: editedEntry.label,
+      defaultValue: editedEntry.defaultValue,
+    },
+  };
+  return {
+    ...baseEntry,
+    id: editedEntry.id,
+    type: editedEntry.type,
+    label: locale === sourceLocale ? editedEntry.label : baseEntry.label,
+    defaultValue: locale === sourceLocale ? editedEntry.defaultValue : baseEntry.defaultValue,
+    translations,
+    children: editedEntry.children.map((child) => mergeEntryLocale(
+      originalEntry?.children.find((candidate) => candidate.id === child.id),
+      child,
+      locale,
+      sourceLocale,
+    )),
+  };
+}
+
+export function mergeOverviewTemplateLocale(
+  originalTemplate: OverviewTemplate | null,
+  editedTemplate: OverviewTemplate,
+  locale: Locale,
+): OverviewTemplate {
+  const sourceLocale = originalTemplate ? templateSourceLocale(originalTemplate) : locale;
+  const baseTemplate = originalTemplate ?? editedTemplate;
+  return {
+    ...baseTemplate,
+    id: editedTemplate.id,
+    organizationId: editedTemplate.organizationId,
+    sourceLocale,
+    name: locale === sourceLocale ? editedTemplate.name : baseTemplate.name,
+    translations: {
+      ...baseTemplate.translations,
+      [locale]: { name: editedTemplate.name },
+    },
+    entries: editedTemplate.entries.map((entry) => mergeEntryLocale(
+      originalTemplate?.entries.find((candidate) => candidate.id === entry.id),
+      entry,
+      locale,
+      sourceLocale,
+    )),
+    createdAt: editedTemplate.createdAt,
+    updatedAt: editedTemplate.updatedAt,
+  };
+}
+
 export function normalizeOverviewKey(value: string, fallback = "field"): string {
   const transliterated = value
     .replaceAll("Ä", "Ae")
@@ -69,8 +156,7 @@ function entryExpression(template: OverviewTemplate, location: OverviewEntryLoca
   const repeatingAncestor = location.ancestors[repeatingAncestorIndex];
   const relativeParts = [...location.ancestors.slice(repeatingAncestorIndex + 1).map((entry) => entry.label), location.entry.label]
     .map((part) => normalizeOverviewKey(part));
-  const alias = `${normalizeOverviewKey(repeatingAncestor.label)}_item`;
-  return `$${alias}.${relativeParts.join(".")}`;
+  return `qs.${normalizeOverviewKey(repeatingAncestor.label)}.${relativeParts.join(".")}`;
 }
 
 export function overviewEntryClipboardValue(template: OverviewTemplate, entryId: string): string {
@@ -78,11 +164,10 @@ export function overviewEntryClipboardValue(template: OverviewTemplate, entryId:
   if (!location) return "";
   const expression = entryExpression(template, location);
   if (location.entry.type === "repeating_group") {
-    const alias = `${normalizeOverviewKey(location.entry.label)}_item`;
-    return `{{FOR ${alias} IN ${expression}}}\n{{END-FOR ${alias}}}`;
+    return `{{#${expression}}}\n{{/${expression}}}`;
   }
   if (location.entry.type === "group") return expression;
-  return `{{INS ${expression}}}`;
+  return `{{${expression}}}`;
 }
 
 export function validateOverviewTemplate(
@@ -189,13 +274,18 @@ export function instantiateRepeatingItem(entry: ProjectOverviewEntry, createId: 
   return entry.children.map((child) => cloneProjectEntry(child, createId));
 }
 
-export function instantiateOverviewSection(template: OverviewTemplate, createId: (prefix: string) => string): ProjectOverviewSection {
+export function instantiateOverviewSection(
+  template: OverviewTemplate,
+  createId: (prefix: string) => string,
+  locale: Locale = templateSourceLocale(template),
+): ProjectOverviewSection {
+  const localizedTemplate = localizeOverviewTemplate(template, locale);
   return {
     id: createId("overview-section"),
     templateId: template.id,
-    name: template.name,
-    placeholderKey: normalizeOverviewKey(template.name, "template"),
-    entries: template.entries.map((entry) => instantiateEntry(entry, createId)),
+    name: localizedTemplate.name,
+    placeholderKey: normalizeOverviewKey(localizedTemplate.name, "template"),
+    entries: localizedTemplate.entries.map((entry) => instantiateEntry(entry, createId)),
   };
 }
 

@@ -17,7 +17,7 @@ export function ProjectWorkspaceLayout() {
         <Link className="icon-button" to="/" aria-label={t("nav.projects")}><ArrowLeft size={18} /></Link>
         <div className="project-workspace-title">
           <strong>{project.name}</strong>
-          <span>{project.projectNumber} · {project.address}, {project.city}</span>
+          <span>{project.projectNumber}</span>
         </div>
       </header>
       <ProjectNavigation projectId={project.id} />

@@ -7,6 +7,7 @@ import type {
   PlanBlockAreaElement,
   PlanBlockElement,
   PlanElement,
+  PlanItem,
   PlanLayout,
   PlanSection,
   PlanSectionElement,
@@ -30,6 +31,11 @@ const BLOCK_ASPECT_RATIO = 1.6;
 const BLOCK_SIZE_STEP = 40;
 const NEW_SECTION_HEIGHT = 1_220;
 const DEFAULT_BLOCK_AREA_WIDTH_RATIO = 0.7;
+
+export const MINIMUM_PLAN_ELEMENT_WIDTH = 600;
+export const MINIMUM_PLAN_ELEMENT_HEIGHT = 240;
+export const MINIMUM_BLOCK_AREA_WIDTH = 2_400;
+export const MINIMUM_BLOCK_AREA_HEIGHT = 1_600;
 
 export const PLAN_BLOCK_AREA_ELEMENT_ID = "layout-block-area";
 export const PLAN_HEADER_ELEMENT_ID = "layout-header";
@@ -61,6 +67,15 @@ export interface FitBlocksResult {
   fits: boolean;
   blockWidth?: number;
   blockHeight?: number;
+}
+
+export interface ElementResizeMeasurement {
+  width: number;
+  height: number;
+  translateX: number;
+  translateY: number;
+  directionX: number;
+  directionY: number;
 }
 
 function defaultBlockAreaGeometry(): Pick<PlanBlockAreaElement, "x" | "y" | "width" | "height"> {
@@ -101,6 +116,40 @@ export function cssPixelsToLayoutUnits(cssPixels: number, zoom = 1): number {
   return cssPixels / CSS_PIXELS_PER_LAYOUT_UNIT / zoom;
 }
 
+export function minimumElementSize(element: PlanElement): { width: number; height: number } {
+  return element.kind === "block_area"
+    ? { width: MINIMUM_BLOCK_AREA_WIDTH, height: MINIMUM_BLOCK_AREA_HEIGHT }
+    : { width: MINIMUM_PLAN_ELEMENT_WIDTH, height: MINIMUM_PLAN_ELEMENT_HEIGHT };
+}
+
+export function resizeElementFromCssMeasurement(
+  element: PlanElement,
+  layout: PlanLayout,
+  measurement: ElementResizeMeasurement,
+): PlanElement {
+  const minimum = minimumElementSize(element);
+  // Moveable reports untransformed CSS dimensions. Preserve the inactive axis explicitly;
+  // DOM bounds can contain transformed or stale values when an edge handle is released.
+  const width = measurement.directionX === 0
+    ? element.width
+    : Math.max(minimum.width, snapToGrid(cssPixelsToLayoutUnits(measurement.width), layout.gridSize));
+  const height = measurement.directionY === 0
+    ? element.height
+    : Math.max(minimum.height, snapToGrid(cssPixelsToLayoutUnits(measurement.height), layout.gridSize));
+  const x = measurement.directionX < 0
+    ? element.x + cssPixelsToLayoutUnits(measurement.translateX)
+    : element.x;
+  const y = measurement.directionY < 0
+    ? element.y + cssPixelsToLayoutUnits(measurement.translateY)
+    : element.y;
+  const positioned = clampElementToPage({ ...element, x, y, width, height }, layout);
+  return {
+    ...positioned,
+    width: Math.min(positioned.width, layout.width - layout.safeMargin - positioned.x),
+    height: Math.min(positioned.height, layout.height - layout.safeMargin - positioned.y),
+  };
+}
+
 function compareCategoryOrder(leftId: string, rightId: string, categories: BuildingBlockCategory[]): number {
   const leftTrail = categoryTrail(leftId, categories);
   const rightTrail = categoryTrail(rightId, categories);
@@ -112,6 +161,62 @@ function compareCategoryOrder(leftId: string, rightId: string, categories: Build
     if (orderDifference) return orderDifference;
   }
   return leftId.localeCompare(rightId);
+}
+
+export function reconcilePlanSectionsWithCatalog(
+  sections: PlanSection[],
+  categories: BuildingBlockCategory[],
+  blocks: BuildingBlock[],
+): PlanSection[] {
+  const blockById = new Map(blocks.map((block) => [block.id, block]));
+  const knownCategoryIds = new Set(categories.map((category) => category.id));
+  const existingSectionByCategory = new Map<string, PlanSection>();
+  sections.forEach((section) => {
+    if (!existingSectionByCategory.has(section.categoryId)) existingSectionByCategory.set(section.categoryId, section);
+  });
+
+  const itemsByCategory = new Map<string, PlanItem[]>();
+  sections.forEach((section) => {
+    section.items.forEach((item) => {
+      const catalogCategoryId = blockById.get(item.blockId)?.primaryCategoryId;
+      const categoryId = catalogCategoryId && knownCategoryIds.has(catalogCategoryId)
+        ? catalogCategoryId
+        : section.categoryId;
+      const items = itemsByCategory.get(categoryId) ?? [];
+      items.push(item);
+      itemsByCategory.set(categoryId, items);
+    });
+  });
+
+  const existingSectionIds = new Set(sections.map((section) => section.id));
+  const usedSectionIds = new Set<string>();
+  const sectionIdForCategory = (categoryId: string): string => {
+    const existingId = existingSectionByCategory.get(categoryId)?.id;
+    if (existingId && !usedSectionIds.has(existingId)) {
+      usedSectionIds.add(existingId);
+      return existingId;
+    }
+    const baseId = `section-${categoryId}`;
+    let candidateId = baseId;
+    let suffix = 2;
+    while (existingSectionIds.has(candidateId) || usedSectionIds.has(candidateId)) {
+      candidateId = `${baseId}-${suffix}`;
+      suffix += 1;
+    }
+    usedSectionIds.add(candidateId);
+    return candidateId;
+  };
+
+  return [...itemsByCategory.entries()]
+    .sort(([leftCategoryId], [rightCategoryId]) => compareCategoryOrder(leftCategoryId, rightCategoryId, categories))
+    .map(([categoryId, items]) => {
+      const existingSection = existingSectionByCategory.get(categoryId);
+      return {
+        ...(existingSection ?? { id: sectionIdForCategory(categoryId), categoryId }),
+        categoryId,
+        items,
+      };
+    });
 }
 
 function orderedSections(

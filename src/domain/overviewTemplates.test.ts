@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { OverviewTemplate } from "./types";
 import {
   instantiateOverviewSection,
+  localizeOverviewTemplate,
+  mergeOverviewTemplateLocale,
   moveOverviewEntry,
   normalizeOverviewKey,
   overviewEntryClipboardValue,
@@ -35,9 +37,11 @@ describe("overview template hierarchy", () => {
   it("creates predictable localized placeholder keys and engine-ready clipboard values", () => {
     expect(normalizeOverviewKey("Größe & Straße")).toBe("groesse_strasse");
     expect(overviewEntryPath(template.name, "city", template.entries)).toBe("allgemein.adresse.stadt");
-    expect(overviewEntryClipboardValue(template, "city")).toBe("{{INS qs.overview.allgemein.adresse.stadt}}");
-    expect(overviewEntryClipboardValue(template, "participant-name")).toBe("{{INS $projektbeteiligte_item.name}}");
-    expect(overviewEntryClipboardValue(template, "participants")).toContain("FOR projektbeteiligte_item IN qs.overview.allgemein.projektbeteiligte");
+    expect(overviewEntryClipboardValue(template, "city")).toBe("{{qs.overview.allgemein.adresse.stadt}}");
+    expect(overviewEntryClipboardValue(template, "participant-name")).toBe("{{qs.projektbeteiligte.name}}");
+    expect(overviewEntryClipboardValue(template, "participants")).toBe(
+      "{{#qs.overview.allgemein.projektbeteiligte}}\n{{/qs.overview.allgemein.projektbeteiligte}}",
+    );
   });
 
   it("rejects duplicate normalized entry labels and template names", () => {
@@ -69,5 +73,31 @@ describe("overview template hierarchy", () => {
     const section = instantiateOverviewSection(dateTemplate, (prefix) => `${prefix}-${++id}`);
     expect(section.placeholderKey).toBe("allgemein");
     expect(overviewSectionTemplateData(section, "de")).toEqual({ uebergabe: "27.09.2026" });
+  });
+
+  it("keeps structure shared while names, labels, and default values are language-specific", () => {
+    const englishFallback = localizeOverviewTemplate(template, "en");
+    expect(englishFallback.name).toBe("Allgemein");
+    expect(englishFallback.entries[0].label).toBe("Bauherr");
+
+    const englishDraft = structuredClone(englishFallback);
+    englishDraft.name = "General";
+    englishDraft.entries[0].label = "Client";
+    englishDraft.entries[0].defaultValue = "Example Ltd";
+    englishDraft.entries.reverse();
+    const withEnglish = mergeOverviewTemplateLocale(template, englishDraft, "en");
+
+    expect(localizeOverviewTemplate(withEnglish, "de").name).toBe("Allgemein");
+    expect(localizeOverviewTemplate(withEnglish, "de").entries.find((entry) => entry.id === "client")?.label).toBe("Bauherr");
+    expect(localizeOverviewTemplate(withEnglish, "en").name).toBe("General");
+    expect(localizeOverviewTemplate(withEnglish, "en").entries.find((entry) => entry.id === "client")).toMatchObject({
+      label: "Client",
+      defaultValue: "Example Ltd",
+    });
+    expect(withEnglish.entries.map((entry) => entry.id)).toEqual(["participants", "address", "client"]);
+
+    const englishSection = instantiateOverviewSection(withEnglish, (prefix) => `${prefix}-localized`, "en");
+    expect(englishSection.name).toBe("General");
+    expect(englishSection.entries.find((entry) => entry.label === "Client")?.value).toBe("Example Ltd");
   });
 });

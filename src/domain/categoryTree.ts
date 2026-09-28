@@ -1,15 +1,9 @@
 import type { BuildingBlock, BuildingBlockCategory, Locale } from "./types";
 
-const CATEGORY_DEPTH_LIGHTENING_STEP = 0.14;
-const MAXIMUM_CATEGORY_LIGHTENING = 0.56;
 const FALLBACK_CATEGORY_COLOR = "#496f5f";
 
-function mixWithWhite(color: string, amount: number): string {
-  const normalized = color.replace("#", "");
-  if (!/^[0-9a-f]{6}$/i.test(normalized)) return FALLBACK_CATEGORY_COLOR;
-  const channels = [0, 2, 4].map((offset) => Number.parseInt(normalized.slice(offset, offset + 2), 16));
-  const mixed = channels.map((channel) => Math.round(channel + (255 - channel) * amount));
-  return `#${mixed.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+function validCategoryColor(color: string): string {
+  return /^#[0-9a-f]{6}$/i.test(color) ? color : FALLBACK_CATEGORY_COLOR;
 }
 
 export function categoryDescendantIds(categoryId: string, categories: BuildingBlockCategory[]): Set<string> {
@@ -44,13 +38,10 @@ export function categoryTrail(categoryId: string, categories: BuildingBlockCateg
   return trail;
 }
 
-/** Root categories own the hue; depth supplies a predictable lightness hierarchy. */
+/** Category colors are catalog-owned and must remain identical in every consumer. */
 export function categoryHierarchyColor(categoryId: string, categories: BuildingBlockCategory[]): string {
-  const trail = categoryTrail(categoryId, categories);
-  if (!trail.length) return FALLBACK_CATEGORY_COLOR;
-  const depth = trail.length - 1;
-  const lightening = Math.min(depth * CATEGORY_DEPTH_LIGHTENING_STEP, MAXIMUM_CATEGORY_LIGHTENING);
-  return mixWithWhite(trail[0].color, lightening);
+  const category = categories.find((candidate) => candidate.id === categoryId);
+  return category ? validCategoryColor(category.color) : FALLBACK_CATEGORY_COLOR;
 }
 
 export function blockHierarchyColor(block: BuildingBlock, categories: BuildingBlockCategory[]): string {

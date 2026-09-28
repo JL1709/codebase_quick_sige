@@ -1,13 +1,14 @@
 import { createContext, type ReactNode, useCallback, useContext, useMemo, useRef, useState } from "react";
 import { LocalStorageRepository, type AppRepository } from "../data/localRepository";
+import { deleteBlob } from "../data/blobRepository";
 import { defaultAssessmentAnswers } from "../data/seed";
 import { createPlanFromAssessment } from "../domain/recommendationEngine";
 import { buildRevisionSnapshot } from "../domain/revisionSnapshot";
 import { blockHierarchyColor, categoryPlacementIds } from "../domain/categoryTree";
-import { instantiateOverviewSection, normalizeOverviewKey, validateOverviewTemplate } from "../domain/overviewTemplates";
+import { instantiateOverviewSection, localizeOverviewTemplate, normalizeOverviewKey, validateOverviewTemplate } from "../domain/overviewTemplates";
 import type {
   AppDatabase, AssessmentAnswers, BuildingBlock, BuildingBlockCategory, DocumentTemplate, GeneratedDocument,
-  Locale, OverviewTemplate, Plan, PlanRevision, Project, ProjectDocumentConfiguration, ProjectFormValues, Recommendation,
+  Locale, OverviewTemplate, Plan, PlanRevision, Project, ProjectDocumentConfiguration, ProjectFormValues, ProjectStatus, Recommendation,
 } from "../domain/types";
 
 interface PublishInput { index: string; changeSummary: string; approvedBy: string }
@@ -16,7 +17,9 @@ interface AppContextValue {
   database: AppDatabase;
   setLocale: (locale: Locale) => void;
   createProject: (values: ProjectFormValues) => Project;
+  deleteProject: (projectId: string) => Promise<void>;
   updateProject: (project: Project) => void;
+  updateProjectStatus: (projectId: string, status: ProjectStatus) => void;
   saveAssessment: (projectId: string, answers: AssessmentAnswers) => void;
   createPlan: (projectId: string, recommendations?: Recommendation[]) => Plan;
   updatePlan: (plan: Plan) => void;
@@ -29,7 +32,7 @@ interface AppContextValue {
   archiveCategory: (categoryId: string) => void;
   restoreCategory: (categoryId: string) => void;
   applyOverviewTemplates: (projectId: string, templateIds: string[]) => void;
-  saveOverviewTemplate: (template: OverviewTemplate) => void;
+  saveOverviewTemplate: (template: OverviewTemplate, locale?: Locale) => void;
   deleteOverviewTemplate: (templateId: string) => void;
   saveDocumentTemplate: (template: DocumentTemplate) => void;
   deleteDocumentTemplate: (templateId: string) => void;
@@ -51,11 +54,12 @@ export function newId(prefix: string): string {
   return `${prefix}-${randomId}`;
 }
 
-function applyProjectTemplates(project: Project, templateIds: string[], templates: OverviewTemplate[]): Project {
+function applyProjectTemplates(project: Project, templateIds: string[], templates: OverviewTemplate[], locale: Locale): Project {
   return templateIds.reduce((current, templateId) => {
     const template = templates.find((candidate) => candidate.id === templateId);
-    if (!template || current.overviewSections.some((section) => section.templateId === template.id || section.placeholderKey === normalizeOverviewKey(template.name, "template"))) return current;
-    return { ...current, overviewSections: [...current.overviewSections, instantiateOverviewSection(template, newId)] };
+    const localizedTemplate = template && localizeOverviewTemplate(template, locale);
+    if (!template || !localizedTemplate || current.overviewSections.some((section) => section.templateId === template.id || section.placeholderKey === normalizeOverviewKey(localizedTemplate.name, "template"))) return current;
+    return { ...current, overviewSections: [...current.overviewSections, instantiateOverviewSection(template, newId, locale)] };
   }, project);
 }
 
@@ -69,27 +73,77 @@ export function AppProvider({ children, repository: providedRepository }: { chil
   const setLocale = useCallback((locale: Locale) => commit((current) => ({ ...current, user: { ...current.user, preferredLocale: locale } })), [commit]);
   const createProject = useCallback((values: ProjectFormValues): Project => {
     const now = new Date().toISOString();
-    const { templateIds = [], ...projectValues } = values;
+    const today = now.slice(0, 10);
     const initialProject: Project = {
-      ...projectValues, id: newId("project"), organizationId: database.organization.id, status: "draft",
-      participants: [], emergencyContacts: [], customFields: [], customSections: [], overviewSections: [], assets: [], createdAt: now, updatedAt: now,
+      id: newId("project"), organizationId: database.organization.id,
+      projectNumber: `QS-${new Date().getFullYear()}-${String(Math.floor(Math.random() * 900) + 100)}`,
+      name: values.name,
+      description: "",
+      address: "",
+      city: "",
+      constructionType: "new_build",
+      startDate: today,
+      endDate: today,
+      status: "draft",
+      documentLocale: database.user.preferredLocale,
+      participants: [], emergencyContacts: [], customFields: [], customSections: [],
+      overviewSections: values.overviewSections,
+      assets: [], documentFolders: [], createdAt: now, updatedAt: now,
     };
-    const project = applyProjectTemplates(initialProject, templateIds, database.overviewTemplates);
+    const project = initialProject;
     commit((current) => ({
       ...current, projects: [project, ...current.projects],
       assessments: { ...current.assessments, [project.id]: { ...defaultAssessmentAnswers } },
       auditEvents: [...current.auditEvents, { id: newId("audit"), projectId: project.id, action: "project.created", actorName: current.user.name, createdAt: now, details: project.name }],
     }));
     return project;
-  }, [commit, database.organization.id, database.overviewTemplates]);
+  }, [commit, database.organization.id, database.user.preferredLocale]);
+
+  const deleteProject = useCallback(async (projectId: string): Promise<void> => {
+    const project = database.projects.find((candidate) => candidate.id === projectId);
+    if (!project) return;
+    const projectDocuments = database.generatedDocuments.filter((document) => document.projectId === projectId);
+    const projectRevisions = database.revisions.filter((revision) => revision.projectId === projectId);
+    const revisionDocuments = projectRevisions.flatMap((revision) => revision.snapshot.generatedDocuments);
+    const revisionAssets = projectRevisions.flatMap((revision) => revision.snapshot.project.assets);
+    const blobIds = new Set([
+      ...project.assets.flatMap((asset) => [asset.blobId, asset.previewBlobId]),
+      ...revisionAssets.flatMap((asset) => [asset.blobId, asset.previewBlobId]),
+      ...projectDocuments.map((document) => document.blobId),
+      ...revisionDocuments.map((document) => document.blobId),
+    ].filter((blobId): blobId is string => Boolean(blobId)));
+    await Promise.all([...blobIds].map((blobId) => deleteBlob(blobId)));
+    commit((current) => {
+      const assessments = { ...current.assessments };
+      Reflect.deleteProperty(assessments, projectId);
+      return {
+        ...current,
+        projects: current.projects.filter((candidate) => candidate.id !== projectId),
+        assessments,
+        plans: current.plans.filter((plan) => plan.projectId !== projectId),
+        revisions: current.revisions.filter((revision) => revision.projectId !== projectId),
+        documentConfigurations: current.documentConfigurations.filter((configuration) => configuration.projectId !== projectId),
+        generatedDocuments: current.generatedDocuments.filter((document) => document.projectId !== projectId),
+        auditEvents: current.auditEvents.filter((event) => event.projectId !== projectId),
+      };
+    });
+  }, [commit, database.generatedDocuments, database.projects, database.revisions]);
 
   const updateProject = useCallback((project: Project) => {
     const now = new Date().toISOString();
     commit((current) => ({
       ...current,
-      projects: current.projects.map((candidate) => candidate.id === project.id ? { ...project, status: current.plans.some((plan) => plan.projectId === project.id) ? "in_review" : "draft", updatedAt: now } : candidate),
+      projects: current.projects.map((candidate) => candidate.id === project.id ? { ...project, updatedAt: now } : candidate),
       plans: current.plans.map((plan) => plan.projectId === project.id ? { ...plan, status: "draft", updatedAt: now } : plan),
       generatedDocuments: current.generatedDocuments.map((document) => document.projectId === project.id ? { ...document, stale: true } : document),
+    }));
+  }, [commit]);
+
+  const updateProjectStatus = useCallback((projectId: string, status: ProjectStatus) => {
+    const now = new Date().toISOString();
+    commit((current) => ({
+      ...current,
+      projects: current.projects.map((project) => project.id === projectId ? { ...project, status, updatedAt: now } : project),
     }));
   }, [commit]);
 
@@ -97,7 +151,7 @@ export function AppProvider({ children, repository: providedRepository }: { chil
     const now = new Date().toISOString();
     commit((current) => ({
       ...current, assessments: { ...current.assessments, [projectId]: answers },
-      projects: current.projects.map((project) => project.id === projectId ? { ...project, status: "in_review", updatedAt: now } : project),
+      projects: current.projects.map((project) => project.id === projectId ? { ...project, updatedAt: now } : project),
       auditEvents: [...current.auditEvents, { id: newId("audit"), projectId, action: "assessment.saved", actorName: current.user.name, createdAt: now, details: "Guided assessment updated" }],
     }));
   }, [commit]);
@@ -106,7 +160,7 @@ export function AppProvider({ children, repository: providedRepository }: { chil
     const project = database.projects.find((candidate) => candidate.id === projectId);
     if (!project) throw new Error(`Project ${projectId} not found`);
     const plan = createPlanFromAssessment(project, database.assessments[projectId] ?? defaultAssessmentAnswers, database.blocks, database.categories, recommendations);
-    commit((current) => ({ ...current, plans: [plan, ...current.plans.filter((candidate) => candidate.projectId !== projectId)], projects: current.projects.map((candidate) => candidate.id === projectId ? { ...candidate, status: "in_review", updatedAt: plan.updatedAt } : candidate) }));
+    commit((current) => ({ ...current, plans: [plan, ...current.plans.filter((candidate) => candidate.projectId !== projectId)], projects: current.projects.map((candidate) => candidate.id === projectId ? { ...candidate, updatedAt: plan.updatedAt } : candidate) }));
     return plan;
   }, [commit, database.assessments, database.blocks, database.categories, database.projects]);
 
@@ -115,7 +169,7 @@ export function AppProvider({ children, repository: providedRepository }: { chil
     commit((current) => ({
       ...current,
       plans: current.plans.map((candidate) => candidate.id === plan.id ? updatedPlan : candidate),
-      projects: current.projects.map((project) => project.id === plan.projectId ? { ...project, status: "in_review", updatedAt: updatedPlan.updatedAt } : project),
+      projects: current.projects.map((project) => project.id === plan.projectId ? { ...project, updatedAt: updatedPlan.updatedAt } : project),
       generatedDocuments: current.generatedDocuments.map((document) => document.projectId === plan.projectId ? { ...document, stale: true } : document),
     }));
   }, [commit]);
@@ -128,9 +182,9 @@ export function AppProvider({ children, repository: providedRepository }: { chil
     const publishedPlan: Plan = { ...plan, status: "published", updatedAt: publishedAt };
     const revision: PlanRevision = {
       id: newId("revision"), projectId: project.id, planId: plan.id, ...input, publishedAt,
-      snapshot: buildRevisionSnapshot(database, { ...project, status: "published", updatedAt: publishedAt }, publishedPlan),
+      snapshot: buildRevisionSnapshot(database, { ...project, updatedAt: publishedAt }, publishedPlan),
     };
-    commit((current) => ({ ...current, plans: current.plans.map((candidate) => candidate.id === planId ? publishedPlan : candidate), projects: current.projects.map((candidate) => candidate.id === project.id ? { ...candidate, status: "published", updatedAt: publishedAt } : candidate), revisions: [revision, ...current.revisions] }));
+    commit((current) => ({ ...current, plans: current.plans.map((candidate) => candidate.id === planId ? publishedPlan : candidate), projects: current.projects.map((candidate) => candidate.id === project.id ? { ...candidate, updatedAt: publishedAt } : candidate), revisions: [revision, ...current.revisions] }));
     return revision;
   }, [commit, database]);
 
@@ -171,12 +225,15 @@ export function AppProvider({ children, repository: providedRepository }: { chil
     commit((current) => ({
       ...current,
       projects: current.projects.map((project) => project.id === projectId
-        ? { ...applyProjectTemplates(project, templateIds, current.overviewTemplates), updatedAt: new Date().toISOString() }
+        ? { ...applyProjectTemplates(project, templateIds, current.overviewTemplates, current.user.preferredLocale), updatedAt: new Date().toISOString() }
         : project),
     }));
   }, [commit]);
-  const saveOverviewTemplate = useCallback((template: OverviewTemplate) => commit((current) => {
-    if (!validateOverviewTemplate(template, current.overviewTemplates).valid) return current;
+  const saveOverviewTemplate = useCallback((template: OverviewTemplate, locale?: Locale) => commit((current) => {
+    const validationLocale = locale ?? current.user.preferredLocale;
+    const localizedTemplate = localizeOverviewTemplate(template, validationLocale);
+    const localizedTemplates = current.overviewTemplates.map((candidate) => localizeOverviewTemplate(candidate, validationLocale));
+    if (!validateOverviewTemplate(localizedTemplate, localizedTemplates).valid) return current;
     return { ...current, overviewTemplates: current.overviewTemplates.some((candidate) => candidate.id === template.id) ? current.overviewTemplates.map((candidate) => candidate.id === template.id ? template : candidate) : [template, ...current.overviewTemplates] };
   }), [commit]);
   const deleteOverviewTemplate = useCallback((templateId: string) => commit((current) => ({ ...current, overviewTemplates: current.overviewTemplates.filter((template) => template.id !== templateId) })), [commit]);
@@ -186,14 +243,12 @@ export function AppProvider({ children, repository: providedRepository }: { chil
     return { ...current, documentTemplates: existing ? current.documentTemplates.map((candidate) => candidate.id === template.id ? saved : candidate) : [saved, ...current.documentTemplates] };
   }), [commit]);
   const deleteDocumentTemplate = useCallback((templateId: string) => commit((current) => {
-    const referenced = current.documentConfigurations.some((configuration) => configuration.templateId === templateId)
-      || current.generatedDocuments.some((document) => document.templateId === templateId)
-      || current.revisions.some((revision) => revision.snapshot.documentConfigurations.some((configuration) => configuration.templateId === templateId));
+    const template = current.documentTemplates.find((candidate) => candidate.id === templateId);
+    if (!template || template.origin === "standard") return current;
     return {
       ...current,
-      documentTemplates: referenced
-        ? current.documentTemplates.map((template) => template.id === templateId ? { ...template, lifecycle: "archived" } : template)
-        : current.documentTemplates.filter((template) => template.id !== templateId),
+      documentTemplates: current.documentTemplates.filter((candidate) => candidate.id !== templateId),
+      documentConfigurations: current.documentConfigurations.filter((configuration) => configuration.templateId !== templateId),
     };
   }), [commit]);
   const setDocumentTemplate = useCallback((configuration: ProjectDocumentConfiguration) => commit((current) => ({ ...current, documentConfigurations: [...current.documentConfigurations.filter((candidate) => !(candidate.projectId === configuration.projectId && candidate.documentType === configuration.documentType)), configuration] })), [commit]);
@@ -209,7 +264,7 @@ export function AppProvider({ children, repository: providedRepository }: { chil
   }, []);
   const resetDemo = useCallback(() => setDatabase(repository.current.reset()), []);
   const value = useMemo<AppContextValue>(() => ({
-    database, setLocale, createProject, updateProject, saveAssessment, createPlan, updatePlan, publishPlan,
+    database, setLocale, createProject, deleteProject, updateProject, updateProjectStatus, saveAssessment, createPlan, updatePlan, publishPlan,
     saveBlock, archiveBlock, restoreBlock, saveCategory, reorderCategories, archiveCategory, restoreCategory,
     applyOverviewTemplates: applyTemplatesToProject, saveOverviewTemplate, deleteOverviewTemplate,
     saveDocumentTemplate, deleteDocumentTemplate, setDocumentTemplate, addGeneratedDocument, resetDemo,
@@ -221,7 +276,7 @@ export function AppProvider({ children, repository: providedRepository }: { chil
     getProject: (projectId) => database.projects.find((project) => project.id === projectId),
     getPlanForProject: (projectId) => database.plans.find((plan) => plan.projectId === projectId),
     getAssessment: (projectId) => database.assessments[projectId] ?? { ...defaultAssessmentAnswers },
-  }), [database, setLocale, createProject, updateProject, saveAssessment, createPlan, updatePlan, publishPlan, saveBlock, archiveBlock, restoreBlock, saveCategory, reorderCategories, archiveCategory, restoreCategory, applyTemplatesToProject, saveOverviewTemplate, deleteOverviewTemplate, saveDocumentTemplate, deleteDocumentTemplate, setDocumentTemplate, addGeneratedDocument, restoreMigrationBackup, downloadMigrationBackup, resetDemo]);
+  }), [database, setLocale, createProject, deleteProject, updateProject, updateProjectStatus, saveAssessment, createPlan, updatePlan, publishPlan, saveBlock, archiveBlock, restoreBlock, saveCategory, reorderCategories, archiveCategory, restoreCategory, applyTemplatesToProject, saveOverviewTemplate, deleteOverviewTemplate, saveDocumentTemplate, deleteDocumentTemplate, setDocumentTemplate, addGeneratedDocument, restoreMigrationBackup, downloadMigrationBackup, resetDemo]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

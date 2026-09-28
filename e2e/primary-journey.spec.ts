@@ -53,11 +53,15 @@ test.beforeEach(async ({ page }) => {
 
 test("complete project workflow remains localized and revision-safe", async ({ page, browserName }) => {
   await useEnglishInterface(page);
-  await page.getByRole("link", { name: "Projects" }).click();
+  await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Projects" }).click();
   await expect(page.getByRole("heading", { name: /Good morning/ })).toBeVisible();
   await expect(page.locator("body")).not.toContainText(/local prototype|\bmvp\b|multilingual catalog/i);
 
-  await page.getByRole("article").filter({ hasText: "Logistikzentrum West" }).getByRole("link", { name: "Open" }).click();
+  const dashboardProject = page.getByRole("article").filter({ hasText: "Logistikzentrum West" });
+  const projectStatus = dashboardProject.getByLabel("Project status: Logistikzentrum West");
+  await projectStatus.selectOption("draft");
+  await expect(projectStatus).toHaveValue("draft");
+  await dashboardProject.getByRole("link", { name: "Open" }).click();
   const navigation = page.getByRole("navigation", { name: "Project navigation" });
   const initialNavigationBox = await navigation.boundingBox();
   expect(initialNavigationBox).not.toBeNull();
@@ -69,22 +73,56 @@ test("complete project workflow remains localized and revision-safe", async ({ p
     expect(Math.round(box?.width ?? -1)).toBe(Math.round(initialNavigationBox?.width ?? -2));
   }
 
-  await page.getByRole("button", { name: "Edit", exact: true }).first().click();
-  await page.getByRole("button", { name: "Add field" }).click();
-  const keyInputs = page.getByLabel("Label");
-  await keyInputs.last().fill("Site induction room");
-  await page.getByLabel("Value (optional)").last().fill("");
-  await page.getByRole("button", { name: "Save", exact: true }).first().click();
-  await expect(page.getByText("Site induction room")).toBeVisible();
+  const generalInformation = page.locator(".overview-template-section").filter({ has: page.getByRole("heading", { name: "Allgemein" }) });
+  await expect(page.getByText(/^Record \d+$/)).toHaveCount(0);
+  await generalInformation.getByRole("button", { name: "Edit", exact: true }).click();
+  await generalInformation.getByRole("textbox", { name: "Bauherr", exact: true }).fill("Westpark Projektgesellschaft mbH");
+  await generalInformation.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(generalInformation.getByText("Westpark Projektgesellschaft mbH", { exact: true })).toBeVisible();
+
+  const logisticsInformation = page.locator(".overview-template-section").filter({ has: page.getByRole("heading", { name: "Baustellenlogistik" }) });
+  await logisticsInformation.getByRole("button", { name: "Edit", exact: true }).click();
+  const topLevelRows = logisticsInformation.locator(".project-overview-entry-tree > .project-overview-builder-node");
+  await expect(topLevelRows.nth(0).locator(".overview-entry-label-input")).toHaveValue("Anlieferzeitfenster");
+  await expect(topLevelRows.nth(1).locator(".overview-entry-label-input")).toHaveValue("Wartebereich");
+  const sourceHandle = topLevelRows.nth(1).getByRole("button", { name: "Move entry" });
+  const sourceBox = await sourceHandle.boundingBox();
+  const targetBox = await topLevelRows.nth(0).locator(".project-overview-builder-row").boundingBox();
+  expect(sourceBox).not.toBeNull(); expect(targetBox).not.toBeNull();
+  await page.mouse.move((sourceBox?.x ?? 0) + (sourceBox?.width ?? 0) / 2, (sourceBox?.y ?? 0) + (sourceBox?.height ?? 0) / 2);
+  await page.mouse.down();
+  await page.mouse.move((sourceBox?.x ?? 0) + (sourceBox?.width ?? 0) / 2 + 8, (sourceBox?.y ?? 0) + (sourceBox?.height ?? 0) / 2, { steps: 4 });
+  await page.mouse.move((targetBox?.x ?? 0) + 100, targetBox?.y ?? 0, { steps: 10 });
+  await page.mouse.up();
+  await expect(topLevelRows.nth(0).locator(".overview-entry-label-input")).toHaveValue("Wartebereich");
+  const topLevelAddEntry = logisticsInformation.locator(".panel-body > .project-overview-editor > .project-overview-add-entry");
+  await topLevelAddEntry.getByRole("button", { name: "Add entry" }).click();
+  await logisticsInformation.locator(".overview-entry-label-input").last().fill("Ladehinweis");
+  await logisticsInformation.getByRole("textbox", { name: "Ladehinweis", exact: true }).fill("Nur nach Anmeldung");
+  await logisticsInformation.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(logisticsInformation.getByText("Nur nach Anmeldung", { exact: true })).toBeVisible();
+  await expect(logisticsInformation.locator(".panel-body > .overview-template-values > .overview-template-value > label").first()).toHaveText("Wartebereich");
+  await logisticsInformation.getByRole("button", { name: "Edit", exact: true }).click();
+  await logisticsInformation.getByRole("button", { name: "Delete: Ladehinweis", exact: true }).click();
+  await logisticsInformation.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(logisticsInformation.getByText("Nur nach Anmeldung", { exact: true })).toHaveCount(0);
+
+  const emergencyInformation = page.locator(".overview-template-section").filter({ has: page.getByRole("heading", { name: "Notfallkontakte" }) });
+  await emergencyInformation.getByRole("button", { name: "Edit", exact: true }).click();
+  const records = emergencyInformation.locator(".project-overview-record");
+  await expect(records).toHaveCount(3);
+  await expect(records.nth(0).getByRole("textbox", { name: "Bezeichnung" })).toHaveValue("Feuerwehr / Rettungsdienst");
+  await expect(records.nth(1).getByRole("textbox", { name: "Bezeichnung" })).toHaveValue("Polizei");
+  await expect(records.getByRole("button", { name: "Move entry" })).toHaveCount(3);
+  await emergencyInformation.getByRole("button", { name: "Save", exact: true }).click();
 
   await navigation.getByRole("link", { name: "Safety plan", exact: true }).click();
   await expect.poll(() => page.locator(".canvas-block").count()).toBeGreaterThan(0);
   await expect(page.locator(".canvas-asset")).toHaveCount(2);
   await expect(page.locator(".canvas-document")).toHaveCount(1);
+  await expect(page.getByText("All changes saved", { exact: true })).toHaveCount(0);
   await page.locator('[data-element-id="layout-demo-pdf"]').click({ force: true });
-  await page.getByRole("button", { name: "Selected element options" }).click();
-  await expect(page.getByLabel("PDF page")).toHaveValue("2");
-  await page.keyboard.press("Escape");
+  await expect(page.getByRole("button", { name: "Selected element options" })).toHaveCount(0);
   await page.getByRole("button", { name: /block library/i }).click();
   await expect(page.locator(".editor-sidebar")).toHaveCount(0);
   await page.getByRole("button", { name: /block library/i }).click();
@@ -131,49 +169,54 @@ test("complete project workflow remains localized and revision-safe", async ({ p
     page.getByRole("button", { name: "A4 Word" }).first().click(),
   ]);
   expect(wordDownload.suggestedFilename()).toMatch(/sige-plan-b\.docx$/i);
+  await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Projects" }).click();
+  await expect(page.getByRole("article").filter({ hasText: "Logistikzentrum West" }).getByLabel("Project status: Logistikzentrum West")).toHaveValue("draft");
 });
 
 test("project creation applies templates and guided assessment creates a plan", async ({ page }) => {
   await useEnglishInterface(page);
-  await page.getByRole("link", { name: "Projects" }).click();
+  await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Projects" }).click();
   await page.getByRole("link", { name: "New project" }).click();
+  await expect(page.getByLabel("Project number")).toHaveCount(0);
+  await expect(page.getByLabel("Address")).toHaveCount(0);
+  await expect(page.getByLabel("Construction project type")).toHaveCount(0);
   await page.getByLabel("Project name").fill("Minimal project");
-  await page.getByLabel("Address").fill("1 Test Street");
-  await page.getByLabel("City").fill("Berlin");
-  await page.getByLabel("Planned end").fill("2027-09-27");
-  await page.getByRole("button", { name: "Continue" }).click();
+  const additionalInformation = page.locator(".project-additional-fields");
+  await additionalInformation.getByRole("button", { name: "Add entry" }).click();
+  await additionalInformation.getByPlaceholder("Label").fill("Internal reference");
+  await additionalInformation.getByLabel("Value (optional)").fill("MP-01");
+  await page.getByRole("button", { name: "Create project" }).click();
   await expect(page.getByText("Minimal project", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Internal reference", { exact: true })).toBeVisible();
+  await expect(page.getByText("MP-01", { exact: true })).toBeVisible();
 
   await page.goto("/projects/new");
   await page.getByLabel("Project name").fill("Single-template project");
-  await page.getByLabel("Address").fill("2 Test Street");
-  await page.getByLabel("City").fill("Berlin");
-  await page.getByLabel("Planned end").fill("2027-09-27");
-  await page.getByRole("checkbox", { name: /Allgemein/ }).check();
-  await page.getByRole("button", { name: "Continue" }).click();
+  const generalTemplate = page.locator(".project-template-card").filter({ hasText: "General" });
+  await generalTemplate.getByRole("button", { name: "Preview" }).click();
+  await expect(generalTemplate.getByText("Client", { exact: true })).toBeVisible();
+  await generalTemplate.getByRole("button", { name: "Include" }).click();
+  const includedGeneral = page.locator(".project-included-section").filter({ has: page.getByRole("heading", { name: "General" }) });
+  await includedGeneral.getByLabel("Client").fill("Template Client GmbH");
+  await page.getByRole("button", { name: "Create project" }).click();
   await expect(page.getByText("Single-template project", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("Bauherr", { exact: true })).toBeVisible();
-  await expect(page.getByText("Feuerwehr / Rettungsdienst", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Client", { exact: true })).toBeVisible();
+  await expect(page.getByText("Template Client GmbH", { exact: true })).toBeVisible();
+  await expect(page.getByText("Fire brigade / emergency services", { exact: true })).toHaveCount(0);
 
   await page.goto("/projects/new");
   await page.getByLabel("Project name").fill("North Campus Extension");
-  await page.getByLabel("Address").fill("10 Campus Way");
-  await page.getByLabel("City").fill("Hamburg");
-  await page.getByLabel("Planned end").fill("2027-12-18");
-  const projectInformationTemplate = page.getByRole("checkbox", { name: /Allgemein/ });
-  const emergencyServicesTemplate = page.getByRole("checkbox", { name: /Notfallkontakte/ });
-  await projectInformationTemplate.check();
-  await emergencyServicesTemplate.check();
-  await expect(projectInformationTemplate).toBeChecked();
-  await expect(emergencyServicesTemplate).toBeChecked();
-  await page.getByRole("button", { name: "Continue" }).click();
+  const projectInformationTemplate = page.locator(".project-template-card").filter({ hasText: "General" });
+  const emergencyServicesTemplate = page.locator(".project-template-card").filter({ hasText: "Emergency contacts" });
+  await projectInformationTemplate.getByRole("button", { name: "Include" }).click();
+  await emergencyServicesTemplate.getByRole("button", { name: "Include" }).click();
+  await expect(projectInformationTemplate.getByRole("button", { name: "Included" })).toBeDisabled();
+  await expect(emergencyServicesTemplate.getByRole("button", { name: "Included" })).toBeDisabled();
+  await page.locator(".project-included-section").filter({ has: page.getByRole("heading", { name: "General" }) }).getByLabel("Client").fill("North Campus GmbH");
+  await page.getByRole("button", { name: "Create project" }).click();
 
-  await expect(page.getByText("Bauherr", { exact: true })).toBeVisible();
-  await expect(page.getByText("Feuerwehr / Rettungsdienst", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Add section" }).click();
-  await page.getByLabel("Section name").fill("Site logistics");
-  await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Site logistics" })).toBeVisible();
+  await expect(page.getByText("Client", { exact: true })).toBeVisible();
+  await expect(page.getByText("Fire brigade / emergency services", { exact: true })).toBeVisible();
 
   await page.getByRole("navigation", { name: "Project navigation" }).getByRole("link", { name: "Project assessment" }).click();
   for (let step = 0; step < 3; step += 1) await page.getByRole("button", { name: "Continue" }).click();
@@ -184,17 +227,56 @@ test("project creation applies templates and guided assessment creates a plan", 
 
   await page.getByRole("navigation", { name: "Project navigation" }).getByRole("link", { name: "Documents" }).click();
   const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+X0YV5wAAAABJRU5ErkJggg==", "base64");
-  await page.getByLabel("Add file").setInputFiles({ name: "north-campus.png", mimeType: "image/png", buffer: png });
+  await page.getByRole("button", { name: "Upload file" }).click();
+  const uploadDialog = page.getByRole("dialog", { name: "Upload project file" });
+  await uploadDialog.getByLabel("File").setInputFiles({ name: "north-campus.png", mimeType: "image/png", buffer: png });
+  await uploadDialog.getByRole("button", { name: "Upload file" }).click();
   await expect(page.getByText(/north-campus\.png was added/)).toBeVisible();
+  const deletionState = await page.evaluate(() => {
+    const stored = JSON.parse(window.localStorage.getItem("quicksige.database.v3") ?? "{}") as { projects: Array<{ id: string; name: string; assets: Array<{ blobId?: string }> }> };
+    const project = stored.projects.find((candidate) => candidate.name === "North Campus Extension");
+    return { projectId: project?.id ?? "", blobId: project?.assets[0]?.blobId ?? "" };
+  });
+  expect(deletionState.projectId).not.toBe("");
+  await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Projects" }).click();
+  const projectRow = page.getByRole("article").filter({ hasText: "North Campus Extension" });
+  await projectRow.getByRole("button", { name: /Delete: North Campus Extension/ }).click();
+  await expect(page.getByRole("heading", { name: "Delete project" })).toBeVisible();
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(page.getByText("North Campus Extension", { exact: true })).toHaveCount(0);
+  await expect.poll(() => page.evaluate((projectId) => {
+    const stored = JSON.parse(window.localStorage.getItem("quicksige.database.v3") ?? "{}") as { projects: Array<{ id: string }>; plans: Array<{ projectId: string }> };
+    return stored.projects.some((project) => project.id === projectId) || stored.plans.some((plan) => plan.projectId === projectId);
+  }, deletionState.projectId)).toBe(false);
+  await expect.poll(() => page.evaluate(async (blobId) => {
+    if (!blobId) return false;
+    return new Promise<boolean>((resolve) => {
+      const request = indexedDB.open("quicksige-files");
+      request.onsuccess = () => {
+        const valueRequest = request.result.transaction("blobs", "readonly").objectStore("blobs").get(blobId);
+        valueRequest.onsuccess = () => resolve(Boolean(valueRequest.result));
+        valueRequest.onerror = () => resolve(true);
+      };
+      request.onerror = () => resolve(true);
+    });
+  }, deletionState.blobId)).toBe(false);
 });
 
 test("custom Word template reports missing data and generates with explicit consent", async ({ page }) => {
   await useEnglishInterface(page);
   await page.getByRole("link", { name: "Templates" }).click();
-  const customTemplate = new Document({ sections: [{ children: [new Paragraph("Project: {{INS qs.project.name}}"), new Paragraph("Missing: {{INS qs.overview.intentionally_missing}}"), new Paragraph("{{PAGEBREAK}}"), new Paragraph("Second page")] }] });
+  const wordTemplates = page.locator("section.settings-section").filter({ has: page.getByRole("heading", { name: "Word templates" }) });
+  await expect(wordTemplates.getByRole("article")).toHaveCount(1);
+  await expect(wordTemplates.getByText("A4 safety plan", { exact: true })).toBeVisible();
+  await expect(wordTemplates.getByText("Site principles", { exact: true })).toHaveCount(0);
+  await expect(wordTemplates.getByText(/QuickSiGe Standard · English · Standard/).first()).toBeVisible();
+  await expect(wordTemplates.getByRole("button", { name: "Duplicate" })).toHaveCount(0);
+  await expect(wordTemplates.getByRole("button", { name: "Show archived" })).toHaveCount(0);
+  const customTemplate = new Document({ sections: [{ children: [new Paragraph("Project: {{qs.project.name}}"), new Paragraph("Missing: {{qs.overview.intentionally_missing}}"), new Paragraph("{{PAGEBREAK}}"), new Paragraph("Second page")] }] });
   const templateBuffer = await Packer.toBuffer(customTemplate);
 
   await page.getByRole("button", { name: "Add Word template" }).click();
+  await expect(page.getByLabel("Document type")).toHaveCount(0);
   await page.getByLabel("Name").fill("Missing field template");
   await page.getByLabel("DOCX file").setInputFiles({ name: "missing-template.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", buffer: templateBuffer });
   await page.getByRole("button", { name: "Save", exact: true }).click();
@@ -204,19 +286,118 @@ test("custom Word template reports missing data and generates with explicit cons
   })).toContain("Missing field template");
   await expect(page.getByText("Missing field template")).toBeVisible();
 
-  await page.goto("/projects/project-logistics-center/documents");
-  const a4Card = page.locator(".document-card").first();
-  const customOptionValue = await a4Card.locator("option").filter({ hasText: "Missing field template" }).getAttribute("value");
-  expect(customOptionValue).not.toBeNull();
-  await a4Card.locator("select").selectOption(customOptionValue ?? "");
-  await a4Card.getByRole("button", { name: "Create Word" }).click();
+  await page.evaluate(() => {
+    const storageKey = "quicksige.database.v3";
+    const stored = JSON.parse(window.localStorage.getItem(storageKey) ?? "{}") as {
+      documentTemplates: Array<{ id: string; name: string }>;
+      documentConfigurations: Array<{ id: string; projectId: string; documentType: string; templateId: string }>;
+    };
+    const templateId = stored.documentTemplates.find((template) => template.name === "Missing field template")?.id;
+    if (!templateId) throw new Error("Missing field template was not saved");
+    stored.documentConfigurations.push({
+      id: "e2e-custom-a4-configuration",
+      projectId: "project-riverside-renovation",
+      documentType: "a4_plan",
+      templateId,
+    });
+    window.localStorage.setItem(storageKey, JSON.stringify(stored));
+  });
+  await page.goto("/projects/project-riverside-renovation/plan");
+  await page.getByRole("button", { name: "Word documents" }).click();
   await expect(page.getByRole("heading", { name: "Undefined placeholders" })).toBeVisible();
   await expect(page.getByText("{{qs.overview.intentionally_missing}}", { exact: true })).toBeVisible();
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Continue with empty fields" }).click();
   const download = await downloadPromise;
-  expect(download.suggestedFilename()).toMatch(/a4_plan.*\.docx$/);
+  expect(download.suggestedFilename()).toMatch(/a4-plan.*\.docx$/);
   await expect(page.getByText(/was created/)).toBeVisible();
+});
+
+test("Word documents action creates and downloads the A4 plan without leaving the safety plan", async ({ page }) => {
+  await useEnglishInterface(page);
+  await page.goto("/projects/project-logistics-center/plan");
+  await expect.poll(() => page.locator(".canvas-block").count()).toBeGreaterThan(0);
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Word documents" }).click();
+  const download = await downloadPromise;
+
+  expect(download.suggestedFilename()).toMatch(/^qs-2026-014-a4-plan-\d{4}-\d{2}-\d{2}\.docx$/);
+  await expect(page).toHaveURL(/\/projects\/project-logistics-center\/plan$/);
+  await expect(page.locator(".editor-word-message")).toContainText("was created");
+  await expect.poll(() => page.evaluate(() => {
+    const stored = window.localStorage.getItem("quicksige.database.v3");
+    if (!stored) return [];
+    return (JSON.parse(stored) as { generatedDocuments: Array<{ projectId: string; documentType: string }> })
+      .generatedDocuments
+      .filter((document) => document.projectId === "project-logistics-center")
+      .map((document) => document.documentType);
+  })).toContain("a4_plan");
+});
+
+test("project documents is a simple folder-based file library", async ({ page }) => {
+  await useEnglishInterface(page);
+  await page.goto("/projects/project-logistics-center/documents");
+
+  await expect(page.getByRole("heading", { name: "Project documents" })).toBeVisible();
+  await expect(page.getByText("Site principles", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Emergency plan", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Generated documents", { exact: true })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Add folder" }).click();
+  const addFolderDialog = page.getByRole("dialog", { name: "Add folder" });
+  await addFolderDialog.getByLabel("Folder name").fill("Permits");
+  await addFolderDialog.getByRole("button", { name: "Save" }).click();
+  const allFilesCount = page.getByRole("button", { name: /^All files/ }).locator("small");
+  const permitsFolderButton = page.getByRole("button", { name: /^Permits/ });
+  const permitsCount = permitsFolderButton.locator("small");
+  const allFilesCountBox = await allFilesCount.boundingBox();
+  const permitsCountBox = await permitsCount.boundingBox();
+  expect(allFilesCountBox).not.toBeNull();
+  expect(permitsCountBox).not.toBeNull();
+  expect(Math.abs((allFilesCountBox!.x + allFilesCountBox!.width) - (permitsCountBox!.x + permitsCountBox!.width))).toBeLessThanOrEqual(1);
+  await permitsFolderButton.hover();
+  await expect(permitsCount).toHaveCSS("opacity", "0");
+  await expect(page.getByRole("button", { name: "Edit: Permits" })).toBeVisible();
+  await permitsFolderButton.click();
+
+  const documentBuffer = await Packer.toBuffer(new Document({ sections: [{ children: [new Paragraph("Permit register")] }] }));
+  await page.locator(".overview-heading").getByRole("button", { name: "Upload file" }).click();
+  const uploadDialog = page.getByRole("dialog", { name: "Upload project file" });
+  await uploadDialog.getByLabel("File").setInputFiles({
+    name: "permit-register.docx",
+    mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    buffer: documentBuffer,
+  });
+  await uploadDialog.getByLabel("Folder").selectOption({ label: "Permits" });
+  await uploadDialog.getByRole("button", { name: "Upload file" }).click();
+
+  const uploadedFile = page.getByRole("article").filter({ hasText: "permit-register.docx" });
+  await expect(uploadedFile).toContainText("Permits");
+  const downloadPromise = page.waitForEvent("download");
+  await uploadedFile.getByRole("button", { name: "Download" }).click();
+  expect((await downloadPromise).suggestedFilename()).toBe("permit-register.docx");
+
+  await uploadedFile.getByRole("button", { name: "Edit: permit-register.docx" }).click();
+  const editFileDialog = page.getByRole("dialog", { name: "Edit file" });
+  await editFileDialog.getByLabel("File name").fill("updated-permit-register.docx");
+  await editFileDialog.getByLabel("Folder").selectOption({ label: "Unsorted" });
+  await editFileDialog.getByRole("button", { name: "Save" }).click();
+  await page.getByRole("button", { name: /^Unsorted/ }).click();
+
+  const renamedFile = page.getByRole("article").filter({ hasText: "updated-permit-register.docx" });
+  await expect(renamedFile).toBeVisible();
+  await renamedFile.getByRole("button", { name: "Delete: updated-permit-register.docx" }).click();
+  const deleteFileDialog = page.getByRole("dialog", { name: "Delete file" });
+  await deleteFileDialog.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(renamedFile).toHaveCount(0);
+
+  const permitsFolderRow = page.locator(".document-folder-row").filter({ hasText: "Permits" });
+  await permitsFolderRow.hover();
+  await permitsFolderRow.getByRole("button", { name: "Delete: Permits" }).click();
+  const deleteFolderDialog = page.getByRole("dialog", { name: "Delete folder" });
+  await deleteFolderDialog.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(page.getByRole("button", { name: /^Permits/ })).toHaveCount(0);
 });
 
 test("catalog content is manageable and primary pages meet critical accessibility checks", async ({ page }) => {
@@ -235,8 +416,8 @@ test("catalog content is manageable and primary pages meet critical accessibilit
   expect(Math.abs(catalogImageBox!.width - catalogDescriptionBox!.width)).toBeLessThanOrEqual(1);
   const firstAidCard = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Organize first aid" }) });
   const temporaryPowerCard = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Temporary construction power" }) });
-  await expect(firstAidCard.locator("h3")).toHaveCSS("background-color", await temporaryPowerCard.locator("h3").evaluate((element) => getComputedStyle(element).backgroundColor));
-  await expect(portableDistributionCard.locator("h3")).not.toHaveCSS("background-color", await firstAidCard.locator("h3").evaluate((element) => getComputedStyle(element).backgroundColor));
+  await expect(firstAidCard.locator("h3")).not.toHaveCSS("background-color", await temporaryPowerCard.locator("h3").evaluate((element) => getComputedStyle(element).backgroundColor));
+  await expect(portableDistributionCard.locator("h3")).toHaveCSS("background-color", await temporaryPowerCard.locator("h3").evaluate((element) => getComputedStyle(element).backgroundColor));
   const categoryBrowser = page.locator(".category-browser");
   await categoryBrowser.getByRole("button", { name: "Edit: Site setup", exact: true }).click();
   const categoryDialog = page.getByRole("dialog");
@@ -264,10 +445,16 @@ test("catalog content is manageable and primary pages meet critical accessibilit
   await expect.poll(() => categoryBrowser.locator('[data-parent-id="site-setup"]').evaluateAll((rows) => rows.map((row) => row.getAttribute("data-category-id")))).toEqual([
     "site-utilities", "imported-site-security", "site-access-emergency",
   ]);
+  // Start the independent editor checks with a fresh pointer sensor and verify the reorder persisted.
+  await page.reload();
+  await expect.poll(() => categoryBrowser.locator('[data-parent-id="site-setup"]').evaluateAll((rows) => rows.map((row) => row.getAttribute("data-category-id")))).toEqual([
+    "site-utilities", "imported-site-security", "site-access-emergency",
+  ]);
   await expect(portableDistributionCard.getByRole("button", { name: /Edit:/ })).toBeVisible();
   await expect(portableDistributionCard.getByRole("button", { name: /More actions/ })).toHaveCount(0);
   await portableDistributionCard.getByRole("button", { name: /Edit:/ }).click();
   const blockDialog = page.getByRole("dialog");
+  await expect(blockDialog.getByRole("heading", { name: "Edit block" })).toBeVisible();
   await expect(blockDialog.getByText("Provenance and professional review", { exact: true })).toHaveCount(0);
   await expect(blockDialog.getByLabel("Provenance", { exact: true })).toHaveCount(0);
   await expect(blockDialog.getByLabel("Source reference", { exact: true })).toHaveCount(0);
@@ -366,17 +553,17 @@ test("primary layouts remain usable at supported desktop widths", async ({ page 
   ]) {
     await page.setViewportSize(viewport);
     await page.goto("/projects/new");
-    const picker = page.locator(".project-template-picker");
+    const picker = page.locator(".project-template-browser");
     await expect(picker).toBeVisible();
-    for (const row of await picker.locator(".project-template-list > label").all()) {
+    for (const row of await picker.locator(".project-template-card").all()) {
       const rowBox = await row.boundingBox();
       const pickerBox = await picker.boundingBox();
       expect(rowBox).not.toBeNull(); expect(pickerBox).not.toBeNull();
       expect((rowBox?.x ?? 0) + (rowBox?.width ?? 0)).toBeLessThanOrEqual((pickerBox?.x ?? 0) + (pickerBox?.width ?? 0) + 1);
     }
-    const footer = page.locator(".form-footer");
-    expect(await footer.evaluate((element) => getComputedStyle(element).paddingRight)).not.toBe("0px");
-    expect(await footer.evaluate((element) => getComputedStyle(element).paddingBottom)).not.toBe("0px");
+    const footer = page.locator(".project-composer-footer");
+    await expect(footer).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    await expect(footer).toHaveCSS("box-shadow", "none");
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width + 1);
   }
 
@@ -419,7 +606,7 @@ test("Templates is separate from Settings and retains complete template manageme
   await expect(page.locator(".form-error")).toHaveCount(0);
   const firstEntryMenu = page.locator(".template-entry-menu").first();
   await firstEntryMenu.locator("summary").click();
-  await expect(firstEntryMenu.getByText("{{INS qs.overview.e2e_project_details.permit_number}}", { exact: true })).toBeVisible();
+  await expect(firstEntryMenu.getByText("{{qs.overview.e2e_project_details.permit_number}}", { exact: true })).toBeVisible();
   await page.getByLabel("Template name").click();
   await expect(firstEntryMenu.locator(".template-entry-menu-popover")).not.toBeVisible();
   await firstEntryMenu.locator("summary").click();
@@ -459,22 +646,21 @@ test("overview template builder supports hierarchy, drag placement, dates, and p
   const nestedPermitRow = page.locator(".template-builder-children .template-builder-row").filter({ has: page.locator('input[value="Permit number"]') });
   await expect(nestedPermitRow).toBeVisible();
   await nestedPermitRow.locator(".template-entry-menu summary").click();
-  await expect(page.getByText("{{INS qs.overview.site_handover.handover_details.permit_number}}", { exact: true })).toBeVisible();
+  await expect(page.getByText("{{qs.overview.site_handover.handover_details.permit_number}}", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Save", exact: true }).click();
 
   await page.goto("/projects/new");
   await page.getByLabel("Project name").fill("Template-driven project");
-  await page.getByLabel("Address").fill("4 Template Road");
-  await page.getByLabel("City").fill("Berlin");
-  await page.getByLabel("Planned end").fill("2027-09-27");
-  await page.getByRole("checkbox", { name: /Site handover/ }).check();
-  await page.getByRole("button", { name: "Continue" }).click();
+  const handoverTemplate = page.locator(".project-template-card").filter({ hasText: "Site handover" });
+  await handoverTemplate.getByRole("button", { name: "Preview" }).click();
+  await expect(handoverTemplate.getByText("Handover details", { exact: true })).toBeVisible();
+  await handoverTemplate.getByRole("button", { name: "Include" }).click();
+  const includedHandover = page.locator(".project-included-section").filter({ has: page.getByRole("heading", { name: "Site handover" }) });
+  await includedHandover.getByLabel("Permit number").fill("B-2042");
+  await page.getByRole("button", { name: "Create project" }).click();
   const overviewSection = page.locator(".overview-template-section").filter({ hasText: "Site handover" });
   await expect(overviewSection.getByText("Inspector", { exact: true })).toBeVisible();
   await expect(overviewSection.getByText("27/09/2026", { exact: true })).toBeVisible();
-  await overviewSection.getByRole("button", { name: "Edit" }).click();
-  await overviewSection.getByLabel("Permit number").fill("B-2042");
-  await overviewSection.getByRole("button", { name: "Save" }).click();
   await expect(overviewSection.getByText("B-2042", { exact: true })).toBeVisible();
 });
 
@@ -616,6 +802,222 @@ test("block fitting preserves free elements and canvas selection follows desktop
   await expect(legacyHeader).toHaveCount(0);
 });
 
+test("plan library reflects catalog membership, language, placement, and category color", async ({ page }) => {
+  await useEnglishInterface(page);
+  await page.goto("/projects/project-logistics-center/plan");
+
+  const documentLanguage = page.getByLabel("Document language");
+  await expect(documentLanguage).toHaveValue("de");
+  await page.getByRole("button", { name: /Zugänge und Notfallorganisation/ }).click();
+  await expect(page.getByRole("button", { name: "Included: Erste Hilfe organisieren" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Add: Digitale Anlieferungsanmeldung" })).toBeEnabled();
+
+  await documentLanguage.selectOption("en");
+  await expect(page.locator(".library-category-header").filter({ hasText: "Access and emergency organization" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Included: Organize first aid" })).toBeDisabled();
+  await expect(page.locator(".canvas-block").filter({ hasText: "Organize first aid" })).toHaveCount(1);
+
+  await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Block catalog" }).click();
+  const firstAidCard = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Organize first aid" }) });
+  await firstAidCard.getByRole("button", { name: "Edit: Organize first aid" }).click();
+  await page.getByRole("tree", { name: "Catalog placement" }).getByRole("checkbox", { name: "Earthworks" }).click();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  const catalogColor = await firstAidCard.locator("h3").evaluate((element) => getComputedStyle(element).backgroundColor);
+
+  await page.goto("/projects/project-logistics-center/plan");
+  await page.getByRole("button", { name: "Fit blocks" }).click();
+  const reconciledPlanState = await page.evaluate(() => {
+    const database = JSON.parse(window.localStorage.getItem("quicksige.database.v3") ?? "{}") as {
+      plans?: Array<{
+        projectId: string;
+        sections: Array<{ id: string; categoryId: string; items: Array<{ id: string; blockId: string }> }>;
+        layout: { elements: Array<{ kind: string; itemId?: string; sectionId?: string }> };
+      }>;
+    };
+    const plan = database.plans?.find((candidate) => candidate.projectId === "project-logistics-center");
+    const section = plan?.sections.find((candidate) => candidate.items.some((item) => item.blockId === "block-first-aid"));
+    const item = section?.items.find((candidate) => candidate.blockId === "block-first-aid");
+    const element = plan?.layout.elements.find((candidate) => candidate.kind === "block" && candidate.itemId === item?.id);
+    return { categoryId: section?.categoryId, sectionId: section?.id, elementSectionId: element?.sectionId };
+  });
+  expect(reconciledPlanState.categoryId).toBe("earthworks");
+  expect(reconciledPlanState.elementSectionId).toBe(reconciledPlanState.sectionId);
+  await expect(page.locator(".canvas-block").filter({ hasText: "Organize first aid" }).locator(".canvas-block-title"))
+    .toHaveCSS("background-color", catalogColor);
+});
+
+test("single-axis resize handles preserve perpendicular dimensions", async ({ page }) => {
+  await useEnglishInterface(page);
+  await page.setViewportSize({ width: 1_920, height: 1_400 });
+  await page.goto("/projects/project-logistics-center/plan");
+  await page.getByRole("button", { name: "Fit plan" }).click();
+  await page.getByRole("button", { name: "Zoom in" }).click();
+  await expect.poll(async () => Number((await page.locator(".editor-toolbar .badge").filter({ hasText: "%" }).textContent())?.replace("%", "") ?? 0)).toBeGreaterThan(115);
+  await page.locator(".editor-canvas-shell").evaluate((shell) => shell.scrollTo({ left: 0, top: 0 }));
+
+  const readGeometry = (elementId: string) => page.evaluate((id) => {
+    const database = JSON.parse(window.localStorage.getItem("quicksige.database.v3") ?? "{}") as { plans?: Array<{ projectId: string; layout: { elements: Array<{ id: string; x: number; y: number; width: number; height: number }> } }> };
+    return database.plans?.find((candidate) => candidate.projectId === "project-logistics-center")?.layout.elements.find((element) => element.id === id);
+  }, elementId);
+
+  for (const [selector, selectTarget] of [
+    [".canvas-block-area", () => page.getByRole("button", { name: "Edit block area" }).click()],
+    [".canvas-section", () => page.locator(".canvas-section > div").first().click({ force: true })],
+    [".canvas-block", () => page.locator(".canvas-block-title").first().click({ force: true })],
+  ] as const) {
+    const target = page.locator(selector).first();
+    const elementId = await target.getAttribute("data-element-id");
+    expect(elementId).toBeTruthy();
+    await selectTarget();
+    await expect(target).toHaveClass(/is-selected/);
+    const beforeCornerBox = await target.boundingBox();
+    expect(beforeCornerBox).not.toBeNull();
+    const southEastHandle = page.locator(".moveable-control.moveable-se");
+    await expect(southEastHandle).toBeVisible();
+    const southEastBox = await southEastHandle.boundingBox();
+    expect(southEastBox).not.toBeNull();
+    await page.mouse.move(southEastBox!.x + southEastBox!.width / 2, southEastBox!.y + southEastBox!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(southEastBox!.x + southEastBox!.width / 2 - 17, southEastBox!.y + southEastBox!.height / 2 - 17, { steps: 6 });
+    const cornerPreviewBox = await target.boundingBox();
+    await page.mouse.up();
+    const afterCornerBox = await target.boundingBox();
+    expect(cornerPreviewBox).not.toBeNull();
+    expect(afterCornerBox).not.toBeNull();
+    expect(afterCornerBox?.width).toBeLessThan(beforeCornerBox?.width ?? 0);
+    expect(afterCornerBox?.height).toBeLessThan(beforeCornerBox?.height ?? 0);
+    expect(Math.abs((afterCornerBox?.width ?? 0) - (cornerPreviewBox?.width ?? 0))).toBeLessThan(0.1);
+    expect(Math.abs((afterCornerBox?.height ?? 0) - (cornerPreviewBox?.height ?? 0))).toBeLessThan(0.1);
+
+    await selectTarget();
+    await expect(target).toHaveClass(/is-selected/);
+    const beforeHorizontal = await readGeometry(elementId as string);
+    const beforeHorizontalBox = await target.boundingBox();
+    expect(beforeHorizontalBox).not.toBeNull();
+    const eastHandle = page.locator(".moveable-control.moveable-e");
+    await expect(eastHandle).toBeVisible();
+    const eastBox = await eastHandle.boundingBox();
+    expect(eastBox).not.toBeNull();
+    await page.mouse.move(eastBox!.x + eastBox!.width / 2, eastBox!.y + eastBox!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(eastBox!.x + eastBox!.width / 2 + 40, eastBox!.y + eastBox!.height / 2, { steps: 6 });
+    const horizontalPreviewBox = await target.boundingBox();
+    await page.mouse.up();
+    const afterHorizontal = await readGeometry(elementId as string);
+    const afterHorizontalBox = await target.boundingBox();
+    expect(horizontalPreviewBox).not.toBeNull();
+    expect(afterHorizontalBox).not.toBeNull();
+    expect(afterHorizontal?.width).toBeGreaterThan(beforeHorizontal?.width ?? 0);
+    expect(afterHorizontal?.width).toBeLessThan((beforeHorizontal?.width ?? 0) + 1_500);
+    expect(afterHorizontal?.height).toBeCloseTo(beforeHorizontal?.height ?? 0, 2);
+    expect(afterHorizontalBox?.width).toBeGreaterThan(beforeHorizontalBox?.width ?? 0);
+    expect(afterHorizontalBox?.height).toBeCloseTo(beforeHorizontalBox?.height ?? 0, 1);
+    expect(Math.abs((afterHorizontalBox?.width ?? 0) - (horizontalPreviewBox?.width ?? 0))).toBeLessThan(0.1);
+    expect(Math.abs((afterHorizontalBox?.height ?? 0) - (horizontalPreviewBox?.height ?? 0))).toBeLessThan(0.1);
+
+    await selectTarget();
+    await expect(target).toHaveClass(/is-selected/);
+    const beforeVertical = await readGeometry(elementId as string);
+    const beforeVerticalBox = await target.boundingBox();
+    expect(beforeVerticalBox).not.toBeNull();
+    const southHandle = page.locator(".moveable-control.moveable-s");
+    await expect(southHandle).toBeVisible();
+    const southBox = await southHandle.boundingBox();
+    expect(southBox).not.toBeNull();
+    await page.mouse.move(southBox!.x + southBox!.width / 2, southBox!.y + southBox!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(southBox!.x + southBox!.width / 2, southBox!.y + southBox!.height / 2 - 30, { steps: 6 });
+    const verticalPreviewBox = await target.boundingBox();
+    await page.mouse.up();
+    const afterVertical = await readGeometry(elementId as string);
+    const afterVerticalBox = await target.boundingBox();
+    expect(verticalPreviewBox).not.toBeNull();
+    expect(afterVerticalBox).not.toBeNull();
+    expect(afterVertical?.height).toBeLessThan(beforeVertical?.height ?? 0);
+    expect(afterVertical?.height).toBeGreaterThan((beforeVertical?.height ?? 0) - 1_500);
+    expect(afterVertical?.width).toBeCloseTo(beforeVertical?.width ?? 0, 2);
+    expect(afterVerticalBox?.height).toBeLessThan(beforeVerticalBox?.height ?? 0);
+    expect(afterVerticalBox?.width).toBeCloseTo(beforeVerticalBox?.width ?? 0, 1);
+    expect(Math.abs((afterVerticalBox?.width ?? 0) - (verticalPreviewBox?.width ?? 0))).toBeLessThan(0.1);
+    expect(Math.abs((afterVerticalBox?.height ?? 0) - (verticalPreviewBox?.height ?? 0))).toBeLessThan(0.1);
+  }
+});
+
+test("primary navigation collapses to a persistent icon rail", async ({ page }) => {
+  await useEnglishInterface(page);
+  await page.goto("/projects/project-logistics-center/plan");
+  const appFrame = page.locator(".app-frame");
+  const sidebar = page.locator(".sidebar");
+  const expandedWidth = (await sidebar.boundingBox())?.width ?? 0;
+
+  await page.getByRole("button", { name: "Collapse navigation" }).click();
+  await expect(appFrame).toHaveClass(/navigation-collapsed/);
+  await expect.poll(async () => (await sidebar.boundingBox())?.width ?? expandedWidth).toBeLessThan(100);
+  await expect(page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Projects" })).toBeVisible();
+
+  await page.reload();
+  await expect(appFrame).toHaveClass(/navigation-collapsed/);
+  await page.getByRole("button", { name: "Expand navigation" }).click();
+  await expect(appFrame).not.toHaveClass(/navigation-collapsed/);
+  await expect.poll(async () => (await sidebar.boundingBox())?.width ?? 0).toBeGreaterThan(200);
+});
+
+test("responsive plan toolbar stays contained and selection keeps the canvas stationary", async ({ page }) => {
+  await useEnglishInterface(page);
+  for (const viewport of [
+    { width: 1728, height: 1117 },
+    { width: 1440, height: 900 },
+    { width: 1180, height: 820 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/projects/project-logistics-center/plan");
+    await expect.poll(() => page.locator(".canvas-block").count()).toBeGreaterThan(1);
+
+    const toolbarOverflow = await page.locator(".editor-toolbar").evaluate((toolbar) => toolbar.scrollWidth - toolbar.clientWidth);
+    expect(toolbarOverflow).toBeLessThanOrEqual(1);
+  }
+
+  await page.setViewportSize({ width: 1728, height: 1117 });
+  await page.goto("/projects/project-logistics-center/plan");
+  await expect(page.getByRole("button", { name: "A0 PDF" })).toHaveText("A0");
+  await expect(page.getByRole("button", { name: "Word documents" })).toHaveText("A4");
+  await expect(page.getByRole("button", { name: /Undo/ }).locator("xpath=../..")).toHaveClass(/editor-toolbar-trailing/);
+  await page.getByRole("button", { name: "Fit plan" }).click();
+  const blocks = page.locator(".canvas-block");
+  await expect(blocks).not.toHaveCount(0);
+
+  const readCanvasViewport = () => page.evaluate(() => {
+    const shell = document.querySelector<HTMLElement>(".editor-canvas-shell");
+    const stage = document.querySelector<HTMLElement>(".canvas-stage");
+    if (!shell || !stage) throw new Error("Canvas viewport is unavailable");
+    const shellBounds = shell.getBoundingClientRect();
+    const stageBounds = stage.getBoundingClientRect();
+    return {
+      shellLeft: shellBounds.left,
+      shellWidth: shellBounds.width,
+      stageLeft: stageBounds.left,
+      stageTop: stageBounds.top,
+      scrollLeft: shell.scrollLeft,
+      scrollTop: shell.scrollTop,
+    };
+  });
+  const settleLayout = () => page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+
+  await blocks.nth(0).click({ force: true });
+  await settleLayout();
+  const firstSelection = await readCanvasViewport();
+  await blocks.nth(1).click({ force: true });
+  await settleLayout();
+  const secondSelection = await readCanvasViewport();
+
+  expect(secondSelection.shellLeft).toBeCloseTo(firstSelection.shellLeft, 2);
+  expect(secondSelection.shellWidth).toBeCloseTo(firstSelection.shellWidth, 2);
+  expect(secondSelection.stageLeft).toBeCloseTo(firstSelection.stageLeft, 2);
+  expect(secondSelection.stageTop).toBeCloseTo(firstSelection.stageTop, 2);
+  expect(secondSelection.scrollLeft).toBe(firstSelection.scrollLeft);
+  expect(secondSelection.scrollTop).toBe(firstSelection.scrollTop);
+});
+
 test("contextual toolbar covers every seeded canvas element family and drag selection stays synchronized", async ({ page }) => {
   await useEnglishInterface(page);
   await page.goto("/projects/project-logistics-center/plan");
@@ -634,11 +1036,10 @@ test("contextual toolbar covers every seeded canvas element family and drag sele
     ".canvas-title-block",
   ]) {
     await page.locator(selector).first().click({ force: true });
-    await expect(page.getByRole("button", { name: "Selected element options" })).toBeVisible();
-    await page.getByRole("button", { name: "Selected element options" }).click();
-    await expect(page.getByRole("dialog", { name: "Selected element options" })).toBeVisible();
-    await page.keyboard.press("Escape");
-    await expect(page.getByRole("button", { name: "Selected element options" })).toBeFocused();
+    await expect(page.getByRole("button", { name: "Bring forward" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Send backward" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^(Lock|Unlock)$/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Selected element options" })).toHaveCount(0);
   }
 
   const block = page.locator(".canvas-block").first();

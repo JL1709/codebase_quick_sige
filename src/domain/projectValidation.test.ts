@@ -2,30 +2,26 @@ import { describe, expect, it } from "vitest";
 import { validateProjectForm } from "./projectValidation";
 
 const validProject = {
-  projectNumber: "QS-100",
   name: "Campus",
-  description: "New building",
-  address: "Test Street 1",
-  city: "Berlin",
-  constructionType: "new_build" as const,
-  startDate: "2026-10-01",
-  endDate: "2027-03-01",
-  documentLocale: "en" as const,
-  templateIds: ["overview-template-standard"],
+  overviewSections: [{
+    id: "section-1",
+    name: "Project information",
+    placeholderKey: "project_information",
+    entries: [{ id: "entry-1", label: "Client", placeholderKey: "client", type: "text" as const, value: "Example Ltd", children: [], items: [] }],
+  }],
 };
 
 describe("project form validation", () => {
-  it("accepts a complete chronological project", () => {
+  it("accepts a named project with flexible overview sections", () => {
     expect(validateProjectForm(validProject).success).toBe(true);
   });
 
-  it("rejects missing and reversed dates", () => {
-    expect(validateProjectForm({ ...validProject, endDate: "" }).success).toBe(false);
-    expect(validateProjectForm({ ...validProject, endDate: "2026-09-30" }).success).toBe(false);
+  it("rejects a missing project name", () => {
+    expect(validateProjectForm({ ...validProject, name: "" }).success).toBe(false);
   });
 
-  it("preserves selected overview templates after validation", () => {
+  it("preserves overview sections after validation", () => {
     const result = validateProjectForm(validProject);
-    expect(result.success && result.data.templateIds).toEqual(["overview-template-standard"]);
+    expect(result.success && result.data.overviewSections).toEqual(validProject.overviewSections);
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { hasValidProjectAssetSignature, MAX_PROJECT_ASSET_BYTES, readValidatedImageDataUrl, sanitizeAssetFilename, validateProjectAsset } from "./projectAssets";
+import JSZip from "jszip";
+import { hasValidProjectAssetSignature, isValidProjectAssetFilename, MAX_PROJECT_ASSET_BYTES, readValidatedImageDataUrl, sanitizeAssetFilename, validateProjectAsset } from "./projectAssets";
 
 describe("project asset validation", () => {
   it("accepts supported files when MIME type and extension agree", () => {
@@ -8,6 +9,11 @@ describe("project asset validation", () => {
       filename: "site-layout.pdf",
       mimeType: "application/pdf",
     });
+    expect(validateProjectAsset({
+      name: "risk-register.xlsx",
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      size: 42_000,
+    }).valid).toBe(true);
   });
 
   it("rejects mismatched types and oversized files", () => {
@@ -22,6 +28,29 @@ describe("project asset validation", () => {
   it("checks decoded file signatures instead of trusting browser metadata", async () => {
     expect(await hasValidProjectAssetSignature(new Blob([new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d])]), "application/pdf")).toBe(true);
     expect(await hasValidProjectAssetSignature(new Blob(["not a pdf"]), "application/pdf")).toBe(false);
+  });
+
+  it("accepts valid OOXML packages and rejects executable package parts", async () => {
+    const validArchive = new JSZip();
+    validArchive.file("[Content_Types].xml", "<Types />");
+    validArchive.file("word/document.xml", "<document />");
+    const validDocument = new Blob([await validArchive.generateAsync({ type: "arraybuffer" })]);
+    await expect(hasValidProjectAssetSignature(
+      validDocument,
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )).resolves.toBe(true);
+
+    validArchive.file("word/vbaProject.bin", new Uint8Array([1, 2, 3]));
+    const unsafeDocument = new Blob([await validArchive.generateAsync({ type: "arraybuffer" })]);
+    await expect(hasValidProjectAssetSignature(
+      unsafeDocument,
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )).resolves.toBe(false);
+  });
+
+  it("keeps renamed files within their original supported type", () => {
+    expect(isValidProjectAssetFilename("site plan.pdf", "application/pdf")).toBe(true);
+    expect(isValidProjectAssetFilename("site plan.docx", "application/pdf")).toBe(false);
   });
 
   it("only converts small signature-verified PNG and JPEG files to data URLs", async () => {

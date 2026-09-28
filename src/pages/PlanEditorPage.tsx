@@ -1,30 +1,32 @@
 import { DndContext, type DragEndEvent, KeyboardSensor, PointerSensor, useDraggable, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
 import {
   AlignCenterHorizontal, AlignCenterVertical, AlignHorizontalDistributeCenter, AlignVerticalDistributeCenter,
-  ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronRight,
+  Check, CheckCircle2, ChevronDown, ChevronRight,
   Copy, FileOutput, Image, Lock, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Search, ShieldCheck,
-  LayoutGrid, Maximize2, Scan, SlidersHorizontal, Trash2, TriangleAlert, Type, Undo2, Unlock, ZoomIn, ZoomOut,
+  LayoutGrid, Maximize2, Scan, Trash2, TriangleAlert, Type, Undo2, Unlock, ZoomIn, ZoomOut,
 } from "lucide-react";
-import Moveable from "react-moveable";
+import Moveable, { type OnResize } from "react-moveable";
 import Selecto from "react-selecto";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { Link, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { BlockVisual } from "../components/BlockVisual";
 import { Badge, Button, EmptyState, Modal } from "../components/Ui";
-import { blobObjectUrl, getBlob } from "../data/blobRepository";
+import { blobObjectUrl, getBlob, saveBlob } from "../data/blobRepository";
 import { renderPdfPage } from "../documents/pdfPreview";
+import { hydrateBlockImages } from "../domain/blockImages";
 import { calculateAnchoredScroll, calculateFitZoom, clampCanvasZoom, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, stepCanvasZoom } from "../domain/canvasViewport";
 import { readableTextColor } from "../domain/colorContrast";
 import { blockHierarchyColor, categoryDescendantIds, categoryHierarchyColor } from "../domain/categoryTree";
 import {
   A0_LANDSCAPE_HEIGHT, A0_LANDSCAPE_WIDTH, clampElementToPage, createBlockAreaElement,
   createSectionElement, CSS_PIXELS_PER_LAYOUT_UNIT, findNextFreeBlockPosition, findNextFreeNonBlockPosition,
-  fitBlocksInArea, getBlockArea, snapToGrid,
+  fitBlocksInArea, getBlockArea, minimumElementSize, reconcilePlanSectionsWithCatalog,
+  resizeElementFromCssMeasurement, snapToGrid,
+  type ElementResizeMeasurement,
 } from "../domain/planLayout";
 import { createPlanValidationIssues, type PlanValidationIssue } from "../domain/planValidation";
-import { readValidatedImageDataUrl } from "../domain/projectAssets";
-import type { BlockLayoutMode, BuildingBlock, BuildingBlockCategory, Plan, PlanBlockElement, PlanElement, PlanItem, PlanSection, Project, SupportingDocumentType } from "../domain/types";
+import type { BlockLayoutMode, BuildingBlockCategory, DocumentTemplate, Locale, Plan, PlanBlockElement, PlanElement, PlanItem, PlanSection, Project, SupportingDocumentType } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
 import { translate } from "../i18n/translations";
 import { newId, useApp } from "../state/AppProvider";
@@ -34,10 +36,44 @@ const documentTypes: SupportingDocumentType[] = ["site_rules", "alarm_plan", "fi
 const DOUBLE_CLICK_INTERVAL_MS = 500;
 const DOUBLE_CLICK_DISTANCE_PX = 8;
 
+interface PendingWordPlanGeneration {
+  template: DocumentTemplate;
+  templateBuffer: ArrayBuffer;
+  missingPlaceholders: string[];
+}
+
 type InlineField = "brandText" | "titleText" | "projectNameText" | "projectDetailsText" | "statusText" | "coordinatorText" | "referenceText" | "sectionTitle" | "blockTitle" | "blockDescription" | "text";
 interface InlineEditingState { elementId: string; field: InlineField }
 
 interface SelectedBlock { sectionId: string; itemId: string; elementId: string }
+
+interface ResizeSession {
+  element: PlanElement;
+  latestElement?: PlanElement;
+}
+
+function resizeMeasurementFromMoveableEvent(
+  element: PlanElement,
+  event: Pick<OnResize, "direction" | "drag" | "height" | "width">,
+): ElementResizeMeasurement {
+  const [directionX, directionY] = event.direction;
+  return {
+    width: directionX === 0 ? element.width * CSS_PIXELS_PER_LAYOUT_UNIT : event.width,
+    height: directionY === 0 ? element.height * CSS_PIXELS_PER_LAYOUT_UNIT : event.height,
+    translateX: directionX < 0 ? event.drag.beforeTranslate[0] : 0,
+    translateY: directionY < 0 ? event.drag.beforeTranslate[1] : 0,
+    directionX,
+    directionY,
+  };
+}
+
+function applyResizePreview(target: HTMLElement | SVGElement, initialElement: PlanElement, resizedElement: PlanElement, measurement: ElementResizeMeasurement) {
+  if (measurement.directionX !== 0) target.style.width = `${resizedElement.width * CSS_PIXELS_PER_LAYOUT_UNIT}px`;
+  if (measurement.directionY !== 0) target.style.height = `${resizedElement.height * CSS_PIXELS_PER_LAYOUT_UNIT}px`;
+  const translateX = (resizedElement.x - initialElement.x) * CSS_PIXELS_PER_LAYOUT_UNIT;
+  const translateY = (resizedElement.y - initialElement.y) * CSS_PIXELS_PER_LAYOUT_UNIT;
+  target.style.transform = `translate(${translateX}px, ${translateY}px)`;
+}
 
 function findItem(plan: Plan, selected: SelectedBlock | null): { section: PlanSection; item: PlanItem; element: PlanBlockElement } | null {
   if (!selected) return null;
@@ -49,7 +85,7 @@ function findItem(plan: Plan, selected: SelectedBlock | null): { section: PlanSe
 
 export function PlanEditorPage() {
   const { projectId = "" } = useParams();
-  const { database, getProject, getPlanForProject, updatePlan, publishPlan } = useApp();
+  const { database, getProject, getPlanForProject, updatePlan, publishPlan, addGeneratedDocument } = useApp();
   const { t } = useI18n();
   const project = getProject(projectId);
   const storedPlan = getPlanForProject(projectId);
@@ -66,9 +102,11 @@ export function PlanEditorPage() {
   const [zoom, setZoom] = useState(0.7);
   const [fitMode, setFitMode] = useState(true);
   const [libraryOpen, setLibraryOpen] = useState(true);
-  const [propertiesOpen, setPropertiesOpen] = useState(false);
   const [validationOpen, setValidationOpen] = useState(false);
   const [blockFitMessage, setBlockFitMessage] = useState("");
+  const [wordPlanGenerating, setWordPlanGenerating] = useState(false);
+  const [wordPlanMessage, setWordPlanMessage] = useState<{ tone: "success" | "danger"; text: string } | null>(null);
+  const [pendingWordPlan, setPendingWordPlan] = useState<PendingWordPlanGeneration | null>(null);
   const [editing, setEditing] = useState<InlineEditingState | null>(null);
   const [focusedIssueElementId, setFocusedIssueElementId] = useState<string | null>(null);
   const [moveableRevision, setMoveableRevision] = useState(0);
@@ -79,20 +117,19 @@ export function PlanEditorPage() {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const canvasShellRef = useRef<HTMLElement | null>(null);
   const moveableRef = useRef<{ updateRect: () => void } | null>(null);
-  const propertiesTriggerRef = useRef<HTMLButtonElement | null>(null);
   const validationTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const propertiesOpenRef = useRef(propertiesOpen);
   const validationOpenRef = useRef(validationOpen);
   const elementRefs = useRef(new Map<string, HTMLElement>());
   const transformSnapshot = useRef<Plan | null>(null);
-  const groupTransform = useRef(new Map<string, { dx: number; dy: number; width?: number; height?: number }>());
+  const resizeSession = useRef<ResizeSession | null>(null);
+  const groupTransform = useRef(new Map<string, { dx: number; dy: number }>());
+  const groupResizeElements = useRef(new Map<string, PlanElement>());
   const lastInlineClick = useRef<{ elementId: string; field: InlineField } | null>(null);
   const lastInlinePointer = useRef<{ elementId: string; field: InlineField; timestamp: number; clientX: number; clientY: number } | null>(null);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
     useSensor(KeyboardSensor),
   );
-  propertiesOpenRef.current = propertiesOpen;
   validationOpenRef.current = validationOpen;
 
   const recalculateFit = useCallback(() => {
@@ -148,16 +185,15 @@ export function PlanEditorPage() {
   }, [setZoomAroundPoint, zoom]);
 
   useEffect(() => {
-    if (!propertiesOpen && !validationOpen) return undefined;
+    if (!validationOpen) return undefined;
     const dismiss = (event: PointerEvent) => {
       if (!(event.target as HTMLElement | null)?.closest("[data-toolbar-popover]")) {
-        setPropertiesOpen(false);
         setValidationOpen(false);
       }
     };
     document.addEventListener("pointerdown", dismiss);
     return () => document.removeEventListener("pointerdown", dismiss);
-  }, [propertiesOpen, validationOpen]);
+  }, [validationOpen]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => moveableRef.current?.updateRect());
@@ -191,12 +227,6 @@ export function PlanEditorPage() {
       if (target?.matches("input, textarea, select, [contenteditable='true']")) return;
       const key = event.key.toLowerCase();
       if (event.key === "Escape") {
-        if (propertiesOpenRef.current) {
-          event.preventDefault();
-          setPropertiesOpen(false);
-          window.requestAnimationFrame(() => propertiesTriggerRef.current?.focus());
-          return;
-        }
         if (validationOpenRef.current) {
           event.preventDefault();
           setValidationOpen(false);
@@ -300,21 +330,126 @@ export function PlanEditorPage() {
   const blockingValidationIssues = validationIssues.filter((issue) => issue.severity === "error");
   const warningValidationIssues = validationIssues.filter((issue) => issue.severity === "warning");
 
+  const projectDocumentConfigurations = database.documentConfigurations.filter(
+    (configuration) => configuration.projectId === project.id,
+  );
+  const selectedA4Template = () => {
+    const configuredTemplateId = projectDocumentConfigurations.find(
+      (configuration) => configuration.documentType === "a4_plan",
+    )?.templateId;
+    const availableTemplates = database.documentTemplates.filter(
+      (template) => template.locale === plan.documentLocale
+        && template.documentType === "a4_plan"
+        && template.lifecycle !== "archived",
+    );
+    return availableTemplates.find((template) => template.id === configuredTemplateId)
+      ?? availableTemplates.find((template) => template.origin === "standard")
+      ?? availableTemplates.find((template) => template.origin === "custom");
+  };
+  const loadWordTemplate = async (template: DocumentTemplate): Promise<ArrayBuffer> => {
+    if (template.origin === "standard") {
+      const { blobToArrayBuffer, createStandardTemplate } = await import("../documents/templateEngine");
+      return blobToArrayBuffer(await createStandardTemplate("a4_plan", template.locale));
+    }
+    if (!template.blobId) throw new Error(t("documents.templateFileMissing"));
+    const templateBlob = await getBlob(template.blobId);
+    if (!templateBlob) throw new Error(t("documents.templateFileMissing"));
+    return templateBlob.arrayBuffer();
+  };
+  const finishWordPlanGeneration = async (template: DocumentTemplate, templateBuffer: ArrayBuffer) => {
+    const { buildTemplateData, documentDependencyFingerprint, downloadBlob, renderTemplate } = await import("../documents/templateEngine");
+    const blocksWithImages = await hydrateBlockImages(database.blocks);
+    const generatedDocument = await renderTemplate(
+      templateBuffer,
+      buildTemplateData(project, plan, blocksWithImages, database.categories, projectDocumentConfigurations),
+    );
+    const safeProjectNumber = project.projectNumber.replace(/[^a-z0-9-]+/gi, "-").toLowerCase();
+    const filename = `${safeProjectNumber}-a4-plan-${new Date().toISOString().slice(0, 10)}.docx`;
+    const generatedAt = new Date().toISOString();
+    const blobId = newId("generated-blob");
+    await saveBlob(blobId, generatedDocument);
+    addGeneratedDocument({
+      id: newId("generated-document"),
+      projectId: project.id,
+      documentType: "a4_plan",
+      templateId: template.id,
+      templateRevision: template.revision ?? 1,
+      filename,
+      blobId,
+      projectSnapshot: structuredClone(project),
+      planSnapshot: structuredClone(plan),
+      language: project.documentLocale,
+      generatedAt,
+      dependencyFingerprint: documentDependencyFingerprint(project, plan),
+      stale: false,
+    });
+    downloadBlob(generatedDocument, filename);
+    setWordPlanMessage({ tone: "success", text: t("documents.generated", { name: filename }) });
+  };
+  const createWordPlan = async () => {
+    const template = selectedA4Template();
+    if (!template) {
+      setWordPlanMessage({ tone: "danger", text: t("documents.noTemplate") });
+      return;
+    }
+    setWordPlanGenerating(true);
+    setWordPlanMessage(null);
+    try {
+      const { buildTemplateData, inspectTemplate } = await import("../documents/templateEngine");
+      const templateBuffer = await loadWordTemplate(template);
+      const templateData = buildTemplateData(project, plan, database.blocks, database.categories, projectDocumentConfigurations);
+      const inspection = await inspectTemplate(templateBuffer, templateData);
+      if (inspection.unsafeCommands.length) {
+        setWordPlanMessage({
+          tone: "danger",
+          text: t("documents.unsafeTemplate", { commands: inspection.unsafeCommands.join(", ") }),
+        });
+        return;
+      }
+      if (inspection.missingPlaceholders.length) {
+        setPendingWordPlan({ template, templateBuffer, missingPlaceholders: inspection.missingPlaceholders });
+        return;
+      }
+      await finishWordPlanGeneration(template, templateBuffer);
+    } catch (error) {
+      setWordPlanMessage({
+        tone: "danger",
+        text: error instanceof Error ? error.message : t("documents.generationFailed"),
+      });
+    } finally {
+      setWordPlanGenerating(false);
+    }
+  };
+  const proceedWithMissingWordPlaceholders = async () => {
+    if (!pendingWordPlan) return;
+    setWordPlanGenerating(true);
+    setWordPlanMessage(null);
+    try {
+      await finishWordPlanGeneration(pendingWordPlan.template, pendingWordPlan.templateBuffer);
+      setPendingWordPlan(null);
+    } catch {
+      setWordPlanMessage({ tone: "danger", text: t("documents.generationFailed") });
+    } finally {
+      setWordPlanGenerating(false);
+    }
+  };
+
   const addBlock = (blockId: string) => {
     const block = blockMap.get(blockId); if (!block) return;
     const item: PlanItem = { id: newId("item"), blockId };
     let targetSection = plan.sections.find((section) => section.categoryId === block.primaryCategoryId);
     const sections = targetSection ? plan.sections.map((section) => section.id === targetSection?.id ? { ...section, items: [...section.items, item] } : section) : [...plan.sections, { id: newId("section"), categoryId: block.primaryCategoryId, items: [item] }];
-    targetSection = sections.find((section) => section.items.some((candidate) => candidate.id === item.id));
+    const reconciledSections = reconcilePlanSectionsWithCatalog(sections, database.categories, database.blocks);
+    targetSection = reconciledSections.find((section) => section.items.some((candidate) => candidate.id === item.id));
     if (!targetSection) return;
     const free = findNextFreeBlockPosition(plan.layout);
     const element: PlanBlockElement = clampElementToPage({ id: newId("layout-block"), kind: "block", sectionId: targetSection.id, itemId: item.id, blockId, x: free.x, y: free.y, width: free.width, height: free.height, zIndex: 500 + plan.layout.elements.length, semanticOrder: Math.max(0, ...plan.layout.elements.map((candidate) => candidate.semanticOrder ?? 0)) + 1 }, plan.layout) as PlanBlockElement;
     const hasSectionElement = plan.layout.elements.some((candidate) => candidate.kind === "section" && candidate.sectionId === targetSection?.id);
     const sectionElement = hasSectionElement ? undefined : createSectionElement(targetSection.id, plan.layout, element.y);
     const draftLayout = { ...plan.layout, elements: [...plan.layout.elements, ...(sectionElement ? [sectionElement] : []), element] };
-    const fitted = fitBlocksInArea(draftLayout, sections, database.categories, database.blocks);
+    const fitted = fitBlocksInArea(draftLayout, reconciledSections, database.categories, database.blocks);
     setBlockFitMessage(fitted.fits ? "" : t("editor.fitBlocksTooSmall"));
-    applyPlan({ ...plan, sections, layout: fitted.layout });
+    applyPlan({ ...plan, sections: reconciledSections, layout: fitted.layout });
     setSelected({ sectionId: targetSection.id, itemId: item.id, elementId: element.id });
     setSelectedElementId(element.id);
     setSelectedElementIds([element.id]);
@@ -358,10 +493,6 @@ export function PlanEditorPage() {
     const y = (translated.top + translated.height / 2 - canvasRect.top) * plan.layout.height / canvasRect.height;
     addLibraryItem(String(event.active.id), { x: snapToGrid(x - 1_150), y: snapToGrid(y - 360) });
   };
-  const updateSelectedItem = (patch: Partial<PlanItem>) => {
-    if (!selectedData) return;
-    applyPlan({ ...plan, sections: plan.sections.map((section) => section.id === selectedData.section.id ? { ...section, items: section.items.map((item) => item.id === selectedData.item.id ? { ...item, ...patch } : item) } : section) });
-  };
   const updateElement = (elementId: string, patch: Partial<PlanElement>) => {
     applyPlan({ ...plan, layout: { ...plan.layout, elements: plan.layout.elements.map((element) => element.id === elementId ? { ...element, ...patch } as PlanElement : element) } });
   };
@@ -382,9 +513,17 @@ export function PlanEditorPage() {
   };
   const fitBlocks = () => {
     if (!blockArea) return;
-    const fitted = fitBlocksInArea(plan.layout, plan.sections, database.categories, database.blocks, blockArea.layoutMode);
+    const reconciledSections = reconcilePlanSectionsWithCatalog(plan.sections, database.categories, database.blocks);
+    const fitted = fitBlocksInArea(plan.layout, reconciledSections, database.categories, database.blocks, blockArea.layoutMode);
     setBlockFitMessage(fitted.fits ? "" : t("editor.fitBlocksTooSmall"));
-    if (fitted.fits) applyPlan({ ...plan, layout: fitted.layout });
+    if (!fitted.fits) return;
+    applyPlan({ ...plan, sections: reconciledSections, layout: fitted.layout });
+    const refittedSelection = selectedElementId
+      ? fitted.layout.elements.find((element) => element.id === selectedElementId)
+      : undefined;
+    setSelected(refittedSelection?.kind === "block"
+      ? { sectionId: refittedSelection.sectionId, itemId: refittedSelection.itemId, elementId: refittedSelection.id }
+      : null);
   };
   const updateSection = (sectionId: string, patch: Partial<PlanSection>) => {
     applyPlan({ ...plan, sections: plan.sections.map((section) => section.id === sectionId ? { ...section, ...patch } : section) });
@@ -431,12 +570,6 @@ export function PlanEditorPage() {
       target?.focus({ preventScroll: true });
       window.setTimeout(() => setFocusedIssueElementId(null), 1_500);
     });
-  };
-  const removeElement = (elementId: string) => {
-    const element = plan.layout.elements.find((candidate) => candidate.id === elementId); if (!element) return;
-    if (element.kind === "title_block") return;
-    const sections = element.kind === "block" ? plan.sections.map((section) => ({ ...section, items: section.items.filter((item) => item.id !== element.itemId) })) : plan.sections;
-    applyPlan({ ...plan, sections, layout: { ...plan.layout, elements: plan.layout.elements.filter((candidate) => candidate.id !== elementId) } }); setSelected(null); setSelectedElementId(null); setSelectedElementIds([]);
   };
   const removeSelectedElements = () => {
     const ids = new Set(selectedElementIds);
@@ -543,44 +676,47 @@ export function PlanEditorPage() {
 
   return <DndContext sensors={sensors} onDragEnd={handleDragEnd}><div className={`editor-page ${libraryOpen ? "" : "library-collapsed"}`}>
     <header className="editor-toolbar">
-      <button className="icon-button" onClick={() => setLibraryOpen((open) => !open)} aria-label={t("editor.toggleLibrary")}>{libraryOpen ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />}</button>
-      <div className="editor-toolbar-title"><strong>{t("editor.plan")}</strong><span>{t("editor.blocks", { count: presentBlockIds.size })} · A0 {t("editor.landscape")}</span></div>
-      <div className="editor-toolbar-group"><button className="icon-button" onClick={undo} disabled={!past.length} aria-label={`${t("editor.undo")} (⌘Z / Ctrl+Z)`}><Undo2 size={16} /></button><button className="icon-button" onClick={redo} disabled={!future.length} aria-label={`${t("editor.redo")} (⇧⌘Z / Ctrl+Y)`}><Redo2 size={16} /></button></div>
-      {selectedElementIds.length > 0 && <div className="editor-toolbar-group selection-tools">
-        <span className="selected-element-label" title={selectedElementLabel}>{selectedElementIds.length === 1 ? selectedElementLabel : t("editor.selectedCount", { count: selectedElementIds.length })}</span>
-        <button className="icon-button" onClick={() => alignSelected("x")} disabled={selectedElementIds.length < 2} aria-label={t("editor.alignHorizontal")}><AlignCenterHorizontal size={16} /></button>
-        <button className="icon-button" onClick={() => alignSelected("y")} disabled={selectedElementIds.length < 2} aria-label={t("editor.alignVertical")}><AlignCenterVertical size={16} /></button>
-        <button className="icon-button" onClick={() => distributeSelected("x")} disabled={selectedElementIds.length < 3} aria-label={t("editor.distributeHorizontal")}><AlignHorizontalDistributeCenter size={16} /></button>
-        <button className="icon-button" onClick={() => distributeSelected("y")} disabled={selectedElementIds.length < 3} aria-label={t("editor.distributeVertical")}><AlignVerticalDistributeCenter size={16} /></button>
-        <button className="icon-button" onClick={() => updateSelectedElements((element) => ({ ...element, zIndex: element.zIndex + 1 }))} aria-label={t("editor.bringForward")}><ArrowUp size={16} /></button>
-        <button className="icon-button" onClick={() => updateSelectedElements((element) => ({ ...element, zIndex: Math.max(0, element.zIndex - 1) }))} aria-label={t("editor.sendBackward")}><ArrowDown size={16} /></button>
-        <button className="icon-button" onClick={() => updateSelectedElements((element) => ({ ...element, locked: !element.locked }))} aria-label={selectedElement?.locked ? t("editor.unlock") : t("editor.lock")}>{selectedElement?.locked ? <Unlock size={16} /> : <Lock size={16} />}</button>
-        <button className="icon-button" onClick={duplicateSelectedElements} aria-label={t("common.duplicate")}><Copy size={16} /></button>
-        <button className="icon-button" onClick={removeSelectedElements} disabled={selectedElementIds.every((id) => plan.layout.elements.find((candidate) => candidate.id === id)?.kind === "title_block")} aria-label={t("editor.remove")}><Trash2 size={16} /></button>
-        {selectedElementIds.length === 1 && selectedElement && <div className="toolbar-popover-wrap" data-toolbar-popover>
-          <button ref={propertiesTriggerRef} className={`icon-button ${propertiesOpen ? "is-active" : ""}`} onClick={() => { setPropertiesOpen((open) => !open); setValidationOpen(false); }} aria-expanded={propertiesOpen} aria-label={t("editor.elementOptions")}><SlidersHorizontal size={16} /></button>
-          {propertiesOpen && <div className="toolbar-popover element-properties-popover" role="dialog" aria-label={t("editor.elementOptions")}><ElementInspector element={selectedElement} plan={plan} project={project} block={selectedBlock} categories={database.categories} selectedData={selectedData} onUpdateElement={(patch) => updateElement(selectedElement.id, patch)} onUpdateSection={updateSection} onUpdateItem={updateSelectedItem} onRemove={() => removeElement(selectedElement.id)} t={t} /></div>}
+      <div className="editor-toolbar-leading">
+        <button className="icon-button" onClick={() => setLibraryOpen((open) => !open)} aria-label={t("editor.toggleLibrary")} title={t("editor.toggleLibrary")}>{libraryOpen ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />}</button>
+        <div className="editor-toolbar-title"><strong>{t("editor.plan")}</strong><span>{t("editor.blocks", { count: presentBlockIds.size })} · A0 {t("editor.landscape")}</span></div>
+      </div>
+      <div className="toolbar-selection-slot">
+        {selectedElementIds.length > 0 && <div className="editor-toolbar-group selection-tools">
+          <span className="selected-element-label" title={selectedElementLabel}>{selectedElementIds.length === 1 ? selectedElementLabel : t("editor.selectedCount", { count: selectedElementIds.length })}</span>
+          <button className="icon-button" onClick={() => alignSelected("x")} disabled={selectedElementIds.length < 2} aria-label={t("editor.alignHorizontal")} title={t("editor.alignHorizontal")}><AlignCenterHorizontal size={16} /></button>
+          <button className="icon-button" onClick={() => alignSelected("y")} disabled={selectedElementIds.length < 2} aria-label={t("editor.alignVertical")} title={t("editor.alignVertical")}><AlignCenterVertical size={16} /></button>
+          <button className="icon-button" onClick={() => distributeSelected("x")} disabled={selectedElementIds.length < 3} aria-label={t("editor.distributeHorizontal")} title={t("editor.distributeHorizontal")}><AlignHorizontalDistributeCenter size={16} /></button>
+          <button className="icon-button" onClick={() => distributeSelected("y")} disabled={selectedElementIds.length < 3} aria-label={t("editor.distributeVertical")} title={t("editor.distributeVertical")}><AlignVerticalDistributeCenter size={16} /></button>
+          <button className="icon-button" onClick={() => updateSelectedElements((element) => ({ ...element, locked: !element.locked }))} aria-label={selectedElement?.locked ? t("editor.unlock") : t("editor.lock")} title={selectedElement?.locked ? t("editor.unlock") : t("editor.lock")}>{selectedElement?.locked ? <Unlock size={16} /> : <Lock size={16} />}</button>
+          <button className="icon-button" onClick={duplicateSelectedElements} aria-label={t("common.duplicate")} title={t("common.duplicate")}><Copy size={16} /></button>
+          <button className="icon-button" onClick={removeSelectedElements} disabled={selectedElementIds.every((id) => plan.layout.elements.find((candidate) => candidate.id === id)?.kind === "title_block")} aria-label={t("editor.remove")} title={t("editor.remove")}><Trash2 size={16} /></button>
         </div>}
-      </div>}
-      <div className="editor-toolbar-group block-layout-tools">
-        <Button variant="ghost" size="small" onClick={selectOrCreateBlockArea} aria-label={blockArea ? t("editor.editBlockArea") : t("editor.defineBlockArea")}><Scan size={15} /><span className="toolbar-action-label">{blockArea ? t("editor.blockArea") : t("editor.defineBlockArea")}</span></Button>
-        <select className="block-layout-mode-select" aria-label={t("editor.blockLayoutMode")} value={blockArea?.layoutMode ?? "best_fit"} onChange={(event) => updateBlockLayoutMode(event.target.value as BlockLayoutMode)} disabled={!blockArea}>
-          <option value="vertical">{t("editor.layoutVertical")}</option><option value="horizontal">{t("editor.layoutHorizontal")}</option><option value="best_fit">{t("editor.layoutBestFit")}</option>
-        </select>
-        <Button aria-label={t("editor.fitBlocks")} title={t("editor.fitBlocks")} variant="secondary" size="small" onClick={fitBlocks} disabled={!blockArea || presentBlockIds.size === 0}><LayoutGrid size={15} /><span className="toolbar-action-label">{t("editor.fitBlocks")}</span></Button>
       </div>
-      <div className="editor-toolbar-group"><Button className="fit-plan-action" variant="ghost" size="small" onClick={fitPlan} title={`${t("editor.fitPlan")} · ⇧1`} aria-label={t("editor.fitPlan")}><Maximize2 size={15} /><span className="toolbar-action-label">{t("editor.fitPlan")}</span></Button><button className="icon-button" onClick={() => setZoomAroundPoint(stepCanvasZoom(zoom, "out"))} disabled={zoom <= MIN_CANVAS_ZOOM} aria-label={t("editor.zoomOut")}><ZoomOut size={17} /></button><Badge>{Math.round(zoom * 100)}%</Badge><button className="icon-button" onClick={() => setZoomAroundPoint(stepCanvasZoom(zoom, "in"))} disabled={zoom >= MAX_CANVAS_ZOOM} aria-label={t("editor.zoomIn")}><ZoomIn size={17} /></button></div>
-      <div className="toolbar-popover-wrap" data-toolbar-popover>
-        <button ref={validationTriggerRef} className="button button-secondary button-small" onClick={() => { setValidationOpen((open) => !open); setPropertiesOpen(false); }} aria-expanded={validationOpen} aria-label={t("editor.validation")}><TriangleAlert size={14} /><span className="toolbar-action-label">{t("editor.validation")}</span><Badge tone={blockingValidationIssues.length ? "danger" : warningValidationIssues.length ? "warning" : "success"}>{validationIssues.filter((issue) => issue.severity !== "information").length}</Badge></button>
-        {validationOpen && <ValidationPopover issues={validationIssues} onNavigate={navigateToIssue} t={t} />}
+      <div className="editor-toolbar-primary">
+        <div className="editor-toolbar-group block-layout-tools">
+          <Button variant="ghost" size="small" onClick={selectOrCreateBlockArea} aria-label={blockArea ? t("editor.editBlockArea") : t("editor.defineBlockArea")} title={blockArea ? t("editor.editBlockArea") : t("editor.defineBlockArea")}><Scan size={15} /><span className="toolbar-action-label">{blockArea ? t("editor.blockArea") : t("editor.defineBlockArea")}</span></Button>
+          <select className="block-layout-mode-select" aria-label={t("editor.blockLayoutMode")} value={blockArea?.layoutMode ?? "best_fit"} onChange={(event) => updateBlockLayoutMode(event.target.value as BlockLayoutMode)} disabled={!blockArea}>
+            <option value="vertical">{t("editor.layoutVertical")}</option><option value="horizontal">{t("editor.layoutHorizontal")}</option><option value="best_fit">{t("editor.layoutBestFit")}</option>
+          </select>
+          <Button aria-label={t("editor.fitBlocks")} title={t("editor.fitBlocks")} variant="secondary" size="small" onClick={fitBlocks} disabled={!blockArea || presentBlockIds.size === 0}><LayoutGrid size={15} /><span className="toolbar-action-label">{t("editor.fitBlocks")}</span></Button>
+        </div>
+        <div className="editor-toolbar-group toolbar-viewport"><Button className="fit-plan-action" variant="ghost" size="small" onClick={fitPlan} title={`${t("editor.fitPlan")} · ⇧1`} aria-label={t("editor.fitPlan")}><Maximize2 size={15} /><span className="toolbar-action-label">{t("editor.fitPlan")}</span></Button><button className="icon-button" onClick={() => setZoomAroundPoint(stepCanvasZoom(zoom, "out"))} disabled={zoom <= MIN_CANVAS_ZOOM} aria-label={t("editor.zoomOut")} title={t("editor.zoomOut")}><ZoomOut size={17} /></button><Badge>{Math.round(zoom * 100)}%</Badge><button className="icon-button" onClick={() => setZoomAroundPoint(stepCanvasZoom(zoom, "in"))} disabled={zoom >= MAX_CANVAS_ZOOM} aria-label={t("editor.zoomIn")} title={t("editor.zoomIn")}><ZoomIn size={17} /></button></div>
       </div>
-      <span className={`save-indicator ${publishedIndex ? "is-published" : ""}`}><CheckCircle2 size={13} />{publishedIndex ? t("publish.success", { index: publishedIndex }) : t("editor.saveStatus")}</span>
-      <Button variant="secondary" size="small" onClick={() => void import("../export/exports").then(({ exportPlanPdf }) => exportPlanPdf(project, plan, database.blocks, database.categories, latestRevision))}>A0 PDF</Button>
-      <Link to={`/projects/${project.id}/documents`}><Button variant="secondary" size="small" aria-label={t("editor.wordDocuments")}><FileOutput size={14} /><span className="toolbar-action-label">{t("editor.wordDocuments")}</span></Button></Link>
-      <Button size="small" aria-label={t("editor.publish")} onClick={() => { setPublishInput((current) => ({ ...current, approvedBy: project.participants.find((participant) => participant.role === "coordinator")?.name ?? "" })); setPublishOpen(true); }} disabled={blockingValidationIssues.length > 0}><ShieldCheck size={14} /><span className="toolbar-action-label">{t("editor.publish")}</span></Button>
+      <div className="editor-toolbar-trailing">
+        <div className="editor-toolbar-group toolbar-history"><button className="icon-button" onClick={undo} disabled={!past.length} aria-label={`${t("editor.undo")} (⌘Z / Ctrl+Z)`} title={`${t("editor.undo")} (⌘Z / Ctrl+Z)`}><Undo2 size={16} /></button><button className="icon-button" onClick={redo} disabled={!future.length} aria-label={`${t("editor.redo")} (⇧⌘Z / Ctrl+Y)`} title={`${t("editor.redo")} (⇧⌘Z / Ctrl+Y)`}><Redo2 size={16} /></button></div>
+        <div className="toolbar-popover-wrap" data-toolbar-popover>
+          <button ref={validationTriggerRef} className="button button-secondary button-small" onClick={() => setValidationOpen((open) => !open)} aria-expanded={validationOpen} aria-label={t("editor.validation")} title={t("editor.validation")}><TriangleAlert size={14} /><span className="toolbar-action-label">{t("editor.validation")}</span><Badge tone={blockingValidationIssues.length ? "danger" : warningValidationIssues.length ? "warning" : "success"}>{validationIssues.filter((issue) => issue.severity !== "information").length}</Badge></button>
+          {validationOpen && <ValidationPopover issues={validationIssues} onNavigate={navigateToIssue} t={t} />}
+        </div>
+        <Button className="toolbar-export-action" variant="secondary" size="small" aria-label="A0 PDF" title="A0 PDF" onClick={() => void import("../export/exports").then(({ exportPlanPdf }) => exportPlanPdf(project, plan, database.blocks, database.categories, latestRevision))}>A0</Button>
+        <Button className="toolbar-export-action" variant="secondary" size="small" aria-label={t("editor.wordDocuments")} title={t("editor.wordDocuments")} disabled={wordPlanGenerating} onClick={() => void createWordPlan()}>A4</Button>
+        <Button size="small" aria-label={t("editor.publish")} title={t("editor.publish")} onClick={() => { setPublishInput((current) => ({ ...current, approvedBy: project.participants.find((participant) => participant.role === "coordinator")?.name ?? "" })); setPublishOpen(true); }} disabled={blockingValidationIssues.length > 0}><ShieldCheck size={14} /><span className="toolbar-action-label">{t("editor.publish")}</span></Button>
+      </div>
     </header>
+    {publishedIndex && <span className="save-indicator is-published"><CheckCircle2 size={13} />{t("publish.success", { index: publishedIndex })}</span>}
+    {wordPlanMessage && <div className={`asset-message editor-word-message is-${wordPlanMessage.tone}`} role={wordPlanMessage.tone === "danger" ? "alert" : "status"}>{wordPlanMessage.text}</div>}
     <div className="editor-workspace">
-      {libraryOpen && <aside className="editor-sidebar"><div className="editor-pane-header"><h2>{t("editor.catalog")}</h2><div className="search-shell"><Search size={15} /><input className="search-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("editor.searchBlocks")} aria-label={t("editor.searchBlocks")} /></div></div><div className="editor-library"><CategoryLibrary categories={database.categories.filter((category) => category.lifecycle === "active")} blocks={activeBlocks} expanded={expandedCategories} locale={plan.documentLocale} usageCounts={blockUsageCounts} onToggle={(id) => setExpandedCategories((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; })} onAdd={(id) => addBlock(id)} t={t} /><LibraryGroup title={t("editor.projectFiles")} defaultOpen>{project.assets.map((asset) => <DraggableLibraryItem key={asset.id} id={`asset:${asset.id}`} title={asset.filename} subtitle={asset.mimeType === "application/pdf" ? t("editor.pdfPageOne") : t("editor.imageFile")} icon={asset.mimeType === "application/pdf" ? <FileOutput size={16} /> : <Image size={16} />} onAdd={() => addAsset(asset.id)} addLabel={t("common.add")} />)}</LibraryGroup><LibraryGroup title={t("editor.documentElements")}>{documentTypes.map((type) => <DraggableLibraryItem key={type} id={`document:${type}`} title={t(`documents.${type}`)} subtitle={t("editor.placeDocument")} icon={<FileOutput size={16} />} onAdd={() => addDocument(type)} addLabel={t("common.add")} />)}</LibraryGroup><LibraryGroup title={t("editor.annotations")}><DraggableLibraryItem id="text:note" title={t("editor.textNote")} subtitle={t("editor.placeText")} icon={<Type size={16} />} onAdd={() => addText()} addLabel={t("common.add")} /></LibraryGroup></div></aside>}
+      {libraryOpen && <aside className="editor-sidebar"><div className="editor-pane-header"><div className="editor-pane-heading"><h2>{t("editor.catalog")}</h2><select className="editor-document-language" aria-label={t("project.documentLanguage")} title={t("project.documentLanguage")} value={plan.documentLocale} onChange={(event) => applyPlan({ ...plan, documentLocale: event.target.value as Locale })}><option value="de">DE</option><option value="en">EN</option></select></div><div className="search-shell"><Search size={15} /><input className="search-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("editor.searchBlocks")} aria-label={t("editor.searchBlocks")} /></div></div><div className="editor-library"><CategoryLibrary categories={database.categories.filter((category) => category.lifecycle === "active")} blocks={activeBlocks} expanded={expandedCategories} locale={plan.documentLocale} usageCounts={blockUsageCounts} onToggle={(id) => setExpandedCategories((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; })} onAdd={(id) => addBlock(id)} t={t} /><LibraryGroup title={t("editor.projectFiles")} defaultOpen>{project.assets.filter((asset) => asset.mimeType.startsWith("image/") || asset.mimeType === "application/pdf").map((asset) => <DraggableLibraryItem key={asset.id} id={`asset:${asset.id}`} title={asset.filename} subtitle={asset.mimeType === "application/pdf" ? t("editor.pdfPageOne") : t("editor.imageFile")} icon={asset.mimeType === "application/pdf" ? <FileOutput size={16} /> : <Image size={16} />} onAdd={() => addAsset(asset.id)} addLabel={t("common.add")} />)}</LibraryGroup><LibraryGroup title={t("editor.documentElements")}>{documentTypes.map((type) => <DraggableLibraryItem key={type} id={`document:${type}`} title={t(`documents.${type}`)} subtitle={t("editor.placeDocument")} icon={<FileOutput size={16} />} onAdd={() => addDocument(type)} addLabel={t("common.add")} />)}</LibraryGroup><LibraryGroup title={t("editor.annotations")}><DraggableLibraryItem id="text:note" title={t("editor.textNote")} subtitle={t("editor.placeText")} icon={<Type size={16} />} onAdd={() => addText()} addLabel={t("common.add")} /></LibraryGroup></div></aside>}
       <main ref={canvasShellRef} className="editor-canvas-shell">
         {blockFitMessage && <div className="block-fit-message" role="status"><TriangleAlert size={14} />{blockFitMessage}</div>}
         <div className="canvas-stage" style={{ width: A0_LANDSCAPE_WIDTH * CSS_PIXELS_PER_LAYOUT_UNIT * zoom, height: A0_LANDSCAPE_HEIGHT * CSS_PIXELS_PER_LAYOUT_UNIT * zoom }}>
@@ -629,9 +765,49 @@ export function PlanEditorPage() {
           onDragStart={() => { transformSnapshot.current = structuredClone(plan); }}
           onDrag={({ target, transform }) => { target.style.transform = transform; }}
           onDragEnd={({ target }) => { const bounds = readElementBounds(target); target.style.transform = ""; if (!bounds) return; flushSync(() => finishTransform(clampElementToPage({ ...selectedElement, x: bounds.x, y: bounds.y }, plan.layout))); setMoveableRevision((revision) => revision + 1); }}
-          onResizeStart={() => { transformSnapshot.current = structuredClone(plan); }}
-          onResize={({ target, width, height, drag }) => { target.style.width = `${width}px`; target.style.height = `${height}px`; target.style.transform = drag.transform; }}
-          onResizeEnd={({ target, lastEvent }) => { if (!lastEvent) return; const bounds = readElementBounds(target); target.style.transform = ""; target.style.width = ""; target.style.height = ""; if (!bounds) return; const minimumWidth = selectedElement.kind === "block_area" ? 2_400 : 600; const minimumHeight = selectedElement.kind === "block_area" ? 1_600 : 240; flushSync(() => finishTransform(clampElementToPage({ ...selectedElement, x: bounds.x, y: bounds.y, width: Math.max(minimumWidth, bounds.width), height: Math.max(minimumHeight, bounds.height) }, plan.layout))); setBlockFitMessage(""); setMoveableRevision((revision) => revision + 1); }}
+          onResizeStart={({ direction, set, setMin, setMax }) => {
+            transformSnapshot.current = structuredClone(plan);
+            const sessionElement = structuredClone(selectedElement);
+            const minimum = minimumElementSize(sessionElement);
+            const initialWidth = sessionElement.width * CSS_PIXELS_PER_LAYOUT_UNIT;
+            const initialHeight = sessionElement.height * CSS_PIXELS_PER_LAYOUT_UNIT;
+            const maximumWidth = (direction[0] < 0
+              ? sessionElement.x + sessionElement.width - plan.layout.safeMargin
+              : plan.layout.width - plan.layout.safeMargin - sessionElement.x) * CSS_PIXELS_PER_LAYOUT_UNIT;
+            const maximumHeight = (direction[1] < 0
+              ? sessionElement.y + sessionElement.height - plan.layout.safeMargin
+              : plan.layout.height - plan.layout.safeMargin - sessionElement.y) * CSS_PIXELS_PER_LAYOUT_UNIT;
+            set([initialWidth, initialHeight]);
+            setMin([
+              direction[0] === 0 ? initialWidth : minimum.width * CSS_PIXELS_PER_LAYOUT_UNIT,
+              direction[1] === 0 ? initialHeight : minimum.height * CSS_PIXELS_PER_LAYOUT_UNIT,
+            ]);
+            setMax([
+              direction[0] === 0 ? initialWidth : maximumWidth,
+              direction[1] === 0 ? initialHeight : maximumHeight,
+            ]);
+            resizeSession.current = { element: sessionElement };
+          }}
+          onResize={(event) => {
+            const session = resizeSession.current;
+            if (!session) return;
+            const measurement = resizeMeasurementFromMoveableEvent(session.element, event);
+            const resizedElement = resizeElementFromCssMeasurement(session.element, plan.layout, measurement);
+            session.latestElement = resizedElement;
+            applyResizePreview(event.target, session.element, resizedElement, measurement);
+          }}
+          onResizeEnd={({ target, lastEvent }) => {
+            const session = resizeSession.current;
+            const resizedElement = session && lastEvent
+              ? resizeElementFromCssMeasurement(session.element, plan.layout, resizeMeasurementFromMoveableEvent(session.element, lastEvent as OnResize))
+              : session?.latestElement;
+            target.style.transform = "";
+            resizeSession.current = null;
+            if (!session || !resizedElement) return;
+            flushSync(() => finishTransform(resizedElement));
+            setBlockFitMessage("");
+            setMoveableRevision((revision) => revision + 1);
+          }}
         />}
         {unlockedSelectedTargets.length > 1 && !editing && <Moveable
           key={`group-${selectedElementIds.join("-")}-${moveableRevision}`}
@@ -653,67 +829,30 @@ export function PlanEditorPage() {
               const bounds = boundsById.get(element.id); return bounds ? clampElementToPage({ ...element, x: bounds.x, y: bounds.y }, plan.layout) : element;
             }) } })); setMoveableRevision((revision) => revision + 1);
           }}
-          onResizeGroupStart={() => { groupTransform.current.clear(); }}
+          onResizeGroupStart={() => { groupResizeElements.current.clear(); }}
           onResizeGroup={({ events }) => events.forEach((item) => {
-            item.target.style.width = `${item.width}px`; item.target.style.height = `${item.height}px`; item.target.style.transform = item.drag.transform;
-            const id = (item.target as HTMLElement).dataset.elementId; if (id) groupTransform.current.set(id, { dx: item.drag.beforeTranslate[0], dy: item.drag.beforeTranslate[1], width: item.width, height: item.height });
+            const id = (item.target as HTMLElement).dataset.elementId;
+            const element = id ? plan.layout.elements.find((candidate) => candidate.id === id) : undefined;
+            if (!id || !element) return;
+            const measurement = resizeMeasurementFromMoveableEvent(element, item);
+            const resizedElement = resizeElementFromCssMeasurement(element, plan.layout, measurement);
+            applyResizePreview(item.target, element, resizedElement, measurement);
+            groupResizeElements.current.set(id, resizedElement);
           })}
           onResizeGroupEnd={({ targets }) => {
-            const boundsById = new Map(targets.flatMap((target) => { const htmlTarget = target as HTMLElement; const id = htmlTarget.dataset.elementId; const bounds = readElementBounds(htmlTarget); return id && bounds ? [[id, bounds] as const] : []; }));
-            targets.forEach((target) => { const htmlTarget = target as HTMLElement; htmlTarget.style.transform = ""; htmlTarget.style.width = ""; htmlTarget.style.height = ""; });
-            groupTransform.current.clear();
+            targets.forEach((target) => { (target as HTMLElement).style.transform = ""; });
+            const resizedElements = new Map(groupResizeElements.current);
+            groupResizeElements.current.clear();
             flushSync(() => applyPlan({ ...plan, layout: { ...plan.layout, elements: plan.layout.elements.map((element) => {
-              const bounds = boundsById.get(element.id); return bounds ? clampElementToPage({ ...element, x: bounds.x, y: bounds.y, width: Math.max(600, bounds.width), height: Math.max(240, bounds.height) }, plan.layout) : element;
+              return resizedElements.get(element.id) ?? element;
             }) } })); setMoveableRevision((revision) => revision + 1);
           }}
         />}
       </main>
     </div>
     <Modal open={publishOpen} title={t("publish.title")} onClose={() => setPublishOpen(false)}><form onSubmit={handlePublish}><div className="modal-body"><p className="page-description">{t("publish.subtitle")}</p>{warningValidationIssues.length > 0 && <div className="publish-warning-list">{warningValidationIssues.map((issue) => <p key={issue.id}><TriangleAlert size={14} /><span><strong>{issue.title}</strong>{issue.description}</span></p>)}</div>}<div className="form-grid"><label className="field"><span>{t("publish.index")}</span><input required value={publishInput.index} onChange={(event) => setPublishInput((current) => ({ ...current, index: event.target.value }))} /></label><label className="field"><span>{t("publish.approver")}</span><input required value={publishInput.approvedBy} onChange={(event) => setPublishInput((current) => ({ ...current, approvedBy: event.target.value }))} /></label><label className="field span-two"><span>{t("publish.summary")}</span><textarea required value={publishInput.changeSummary} onChange={(event) => setPublishInput((current) => ({ ...current, changeSummary: event.target.value }))} /></label></div></div><div className="modal-footer"><Button type="button" variant="secondary" onClick={() => setPublishOpen(false)}>{t("common.cancel")}</Button><Button type="submit">{t("publish.confirm")}</Button></div></form></Modal>
+    <Modal open={Boolean(pendingWordPlan)} title={t("documents.missingTitle")} onClose={() => setPendingWordPlan(null)}><div className="modal-body"><p>{t("documents.missingText")}</p><ul className="missing-placeholder-list">{pendingWordPlan?.missingPlaceholders.map((placeholder) => <li key={placeholder}><code>{`{{${placeholder}}}`}</code></li>)}</ul><p>{t("documents.missingChoice")}</p></div><div className="modal-footer"><Button variant="secondary" onClick={() => setPendingWordPlan(null)}>{t("documents.returnToProject")}</Button><Button disabled={wordPlanGenerating} onClick={() => void proceedWithMissingWordPlaceholders()}>{wordPlanGenerating ? t("documents.generating") : t("documents.proceedEmpty")}</Button></div></Modal>
   </div></DndContext>;
-}
-
-function ElementInspector({ element, plan, project, block, categories, selectedData, onUpdateElement, onUpdateSection, onUpdateItem, onRemove, t }: {
-  element: PlanElement;
-  plan: Plan;
-  project: Project;
-  block?: BuildingBlock;
-  categories: BuildingBlockCategory[];
-  selectedData: ReturnType<typeof findItem>;
-  onUpdateElement: (patch: Partial<PlanElement>) => void;
-  onUpdateSection: (sectionId: string, patch: Partial<PlanSection>) => void;
-  onUpdateItem: (patch: Partial<PlanItem>) => void;
-  onRemove: () => void;
-  t: (key: string, params?: Record<string, string | number>) => string;
-}) {
-  const asset = (element.kind === "image" || element.kind === "pdf_page") ? project.assets.find((candidate) => candidate.id === element.assetId) : undefined;
-  const section = element.kind === "section" ? plan.sections.find((candidate) => candidate.id === element.sectionId) : undefined;
-  const elementTitle = element.kind === "block" && block && selectedData
-    ? selectedData.item.customTitle?.[plan.documentLocale] ?? block.translations[plan.documentLocale].title
-    : t(`editor.element.${element.kind}`);
-  return <>
-    <div className="inspector-block-head"><span className="stat-icon">{element.kind === "image" ? <Image size={18} /> : element.kind === "block" && block ? <BlockVisual visualKey={block.visualKey} color={blockHierarchyColor(block, categories)} size="small" /> : <FileOutput size={18} />}</span><div><h3>{elementTitle}</h3><span>{element.kind === "block" && block ? categoryPath(categories, block.primaryCategoryId, plan.documentLocale) : t("editor.dragResize")}</span></div></div>
-    {element.kind === "block" && block && selectedData && <>
-      <p className="field-help">{t("editor.planOverrideHelp")}</p>
-      <div className="inspector-section"><label>{t("editor.visibleTitle")}</label><input aria-label={t("editor.visibleTitle")} value={selectedData.item.customTitle?.[plan.documentLocale] ?? block.translations[plan.documentLocale].title} onChange={(event) => onUpdateItem({ customTitle: { ...selectedData.item.customTitle, [plan.documentLocale]: event.target.value } })} /></div>
-      <div className="inspector-section"><label>{t("editor.visibleDescription")}</label><textarea aria-label={t("editor.visibleDescription")} value={selectedData.item.customShortDescription?.[plan.documentLocale] ?? block.translations[plan.documentLocale].shortDescription} onChange={(event) => onUpdateItem({ customShortDescription: { ...selectedData.item.customShortDescription, [plan.documentLocale]: event.target.value } })} /></div>
-      <div className="inspector-section"><label>{t("editor.blockImageOverride")}</label><input aria-label={t("editor.blockImageOverride")} type="file" accept="image/png,image/jpeg" onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; void readValidatedImageDataUrl(file).then((imageDataUrl) => onUpdateItem({ imageDataUrl })).catch(() => window.alert(t("editor.invalidBlockImage"))); }} />{selectedData.item.imageDataUrl && <Button variant="secondary" size="small" onClick={() => onUpdateItem({ imageDataUrl: undefined })}>{t("editor.useCatalogImage")}</Button>}</div>
-      <div className="inspector-section"><label>{t("editor.expertNote")}</label><textarea aria-label={t("editor.expertNote")} value={selectedData.item.expertNote ?? ""} onChange={(event) => onUpdateItem({ expertNote: event.target.value })} /></div>
-      <Link className="text-link" to="/catalog">{t("editor.editCatalogDefault")}</Link>
-    </>}
-    {element.kind === "block_area" && <><p className="field-help">{t("editor.blockAreaHelp")}</p><div className="inspector-section"><label>{t("editor.blockLayoutMode")}</label><select aria-label={t("editor.blockLayoutMode")} value={element.layoutMode} onChange={(event) => onUpdateElement({ layoutMode: event.target.value as BlockLayoutMode } as Partial<PlanElement>)}><option value="vertical">{t("editor.layoutVertical")}</option><option value="horizontal">{t("editor.layoutHorizontal")}</option><option value="best_fit">{t("editor.layoutBestFit")}</option></select></div></>}
-    {element.kind === "section" && section && <div className="inspector-section"><label>{t("editor.sectionTitle")}</label><input aria-label={t("editor.sectionTitle")} value={section.titleOverrides?.[plan.documentLocale] ?? ""} placeholder={t("editor.defaultCategoryTitle")} onChange={(event) => onUpdateSection(section.id, { titleOverrides: { ...section.titleOverrides, [plan.documentLocale]: event.target.value } })} /></div>}
-    {element.kind === "text" && <div className="inspector-section"><label>{t("editor.textContent")}</label><textarea aria-label={t("editor.textContent")} value={element.text[plan.documentLocale] ?? ""} onChange={(event) => onUpdateElement({ text: { ...element.text, [plan.documentLocale]: event.target.value } })} /></div>}
-    {element.kind === "header" && <><p className="field-help">{t("editor.inlineEditHint")}</p><div className="inspector-section"><label>{t("editor.headerTitle")}</label><input aria-label={t("editor.headerTitle")} value={element.titleText?.[plan.documentLocale] ?? plan.title} onChange={(event) => onUpdateElement({ titleText: { ...element.titleText, [plan.documentLocale]: event.target.value } })} /></div><Button variant="secondary" size="small" onClick={() => onUpdateElement({ brandText: undefined, titleText: undefined, projectNameText: undefined, projectDetailsText: undefined, statusText: undefined })}>{t("editor.restoreAutomaticContent")}</Button></>}
-    {element.kind === "title_block" && <><p className="field-help">{t("editor.inlineEditHint")}</p><Button variant="secondary" size="small" onClick={() => onUpdateElement({ projectNameText: undefined, coordinatorText: undefined, referenceText: undefined })}>{t("editor.restoreAutomaticContent")}</Button></>}
-    {(element.kind === "image" || element.kind === "pdf_page") && <>
-      <div className="inspector-section"><label>{t("editor.imageFit")}</label><select aria-label={t("editor.imageFit")} value={element.fitMode ?? "contain"} onChange={(event) => onUpdateElement({ fitMode: event.target.value as "contain" | "cover" })}><option value="contain">{t("editor.contain")}</option><option value="cover">{t("editor.cover")}</option></select></div>
-      {element.fitMode === "cover" && <><div className="inspector-section"><label>{t("editor.cropHorizontal")}</label><input aria-label={t("editor.cropHorizontal")} type="range" min="0" max="100" value={element.crop?.x ?? 50} onChange={(event) => onUpdateElement({ crop: { x: Number(event.target.value), y: element.crop?.y ?? 50, width: 100, height: 100 } })} /></div><div className="inspector-section"><label>{t("editor.cropVertical")}</label><input aria-label={t("editor.cropVertical")} type="range" min="0" max="100" value={element.crop?.y ?? 50} onChange={(event) => onUpdateElement({ crop: { x: element.crop?.x ?? 50, y: Number(event.target.value), width: 100, height: 100 } })} /></div></>}
-      {element.kind === "pdf_page" && <div className="inspector-section"><label>{t("editor.pageNumber")}</label><input aria-label={t("editor.pageNumber")} type="number" min="1" max={asset?.pageCount ?? 1} value={element.pageNumber ?? 1} onChange={(event) => onUpdateElement({ pageNumber: Math.max(1, Math.min(asset?.pageCount ?? 1, Number(event.target.value))) })} /><small>{t("editor.pageCount", { count: asset?.pageCount ?? 1 })}</small></div>}
-    </>}
-    {element.kind === "document" && <div className="inspector-section"><label>{t("editor.displayVariant")}</label><select aria-label={t("editor.displayVariant")} value={element.displayVariant ?? "compact"} onChange={(event) => onUpdateElement({ displayVariant: event.target.value as typeof element.displayVariant })}><option value="compact">{t("editor.variantCompact")}</option><option value="emergency_card">{t("editor.variantEmergency")}</option><option value="participant_list">{t("editor.variantParticipants")}</option><option value="qr_link">{t("editor.variantQr")}</option></select></div>}
-    <div className="inspector-actions"><Button variant="secondary" size="small" onClick={() => onUpdateElement({ locked: !element.locked })}>{element.locked ? <Unlock size={14} /> : <Lock size={14} />}{element.locked ? t("editor.unlock") : t("editor.lock")}</Button>{element.kind !== "title_block" && <Button variant="danger" size="small" onClick={onRemove}><Trash2 size={14} />{t("editor.remove")}</Button>}</div>
-  </>;
 }
 
 function categoryPath(categories: BuildingBlockCategory[], categoryId: string, locale: "de" | "en"): string {
@@ -723,19 +862,19 @@ function categoryPath(categories: BuildingBlockCategory[], categoryId: string, l
 }
 
 function CategoryLibrary({ categories, blocks, expanded, locale, usageCounts, onToggle, onAdd, t, parentId, depth = 0 }: { categories: BuildingBlockCategory[]; blocks: ReturnType<typeof useApp>["database"]["blocks"]; expanded: Set<string>; locale: "de" | "en"; usageCounts: Map<string, number>; onToggle: (id: string) => void; onAdd: (id: string) => void; t: (key: string) => string; parentId?: string; depth?: number }) {
-  return <>{categories.filter((category) => category.parentId === parentId).sort((a, b) => a.sortOrder - b.sortOrder).map((category) => { const children = categories.some((candidate) => candidate.parentId === category.id); const categoryBlocks = blocks.filter((block) => block.primaryCategoryId === category.id); const descendantIds = categoryDescendantIds(category.id, categories); const totalBlocks = blocks.filter((block) => descendantIds.has(block.primaryCategoryId)).length; const open = expanded.has(category.id); if (!totalBlocks && !children) return null; return <div className="library-category" key={category.id}><button className="library-category-header" style={{ paddingLeft: 12 + depth * 12 }} onClick={() => onToggle(category.id)}><span style={{ backgroundColor: categoryHierarchyColor(category.id, categories) }} />{open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<strong>{category.translations[locale].name}</strong><small>{totalBlocks}</small></button>{open && <><div className="library-category-blocks">{categoryBlocks.map((block) => <DraggableLibraryItem key={`${category.id}-${block.id}`} id={`block:${block.id}`} title={block.translations[locale].title} subtitle={`${categoryPath(categories, block.primaryCategoryId, locale)} · ${usageCounts.get(block.id) ?? 0}×`} icon={<BlockVisual visualKey={block.visualKey} color={blockHierarchyColor(block, categories)} size="small" />} added={Boolean(usageCounts.get(block.id))} onAdd={() => onAdd(block.id)} addLabel={t("common.add")} />)}</div><CategoryLibrary categories={categories} blocks={blocks} expanded={expanded} locale={locale} usageCounts={usageCounts} onToggle={onToggle} onAdd={onAdd} t={t} parentId={category.id} depth={depth + 1} /></>}</div>; })}</>;
+  return <>{categories.filter((category) => category.parentId === parentId).sort((a, b) => a.sortOrder - b.sortOrder).map((category) => { const children = categories.some((candidate) => candidate.parentId === category.id); const categoryBlocks = blocks.filter((block) => block.primaryCategoryId === category.id); const descendantIds = categoryDescendantIds(category.id, categories); const totalBlocks = blocks.filter((block) => descendantIds.has(block.primaryCategoryId)).length; const open = expanded.has(category.id); if (!totalBlocks && !children) return null; return <div className="library-category" key={category.id}><button className="library-category-header" style={{ paddingLeft: 12 + depth * 12 }} onClick={() => onToggle(category.id)}><span style={{ backgroundColor: categoryHierarchyColor(category.id, categories) }} />{open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<strong>{category.translations[locale].name}</strong><small>{totalBlocks}</small></button>{open && <><div className="library-category-blocks">{categoryBlocks.map((block) => <DraggableLibraryItem key={`${category.id}-${block.id}`} id={`block:${block.id}`} title={block.translations[locale].title} subtitle={`${categoryPath(categories, block.primaryCategoryId, locale)} · ${usageCounts.get(block.id) ?? 0}×`} icon={<BlockVisual visualKey={block.visualKey} color={blockHierarchyColor(block, categories)} size="small" />} added={Boolean(usageCounts.get(block.id))} onAdd={() => onAdd(block.id)} addLabel={t("common.add")} addedLabel={t("project.included")} />)}</div><CategoryLibrary categories={categories} blocks={blocks} expanded={expanded} locale={locale} usageCounts={usageCounts} onToggle={onToggle} onAdd={onAdd} t={t} parentId={category.id} depth={depth + 1} /></>}</div>; })}</>;
 }
 
 function LibraryGroup({ title, children, defaultOpen = false }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) { const [open, setOpen] = useState(defaultOpen); return <div className="library-group"><button className="library-category-header" onClick={() => setOpen((value) => !value)}>{open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<strong>{title}</strong></button>{open && <div className="library-category-blocks">{children}</div>}</div>; }
 
-function DraggableLibraryItem({ id, title, subtitle, icon, onAdd, addLabel }: { id: string; title: string; subtitle: string; icon: React.ReactNode; added?: boolean; onAdd: () => void; addLabel: string }) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id });
-  return <article ref={setNodeRef} className={`editor-catalog-card ${isDragging ? "is-dragging" : ""}`} style={{ transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined }}>
-    <button type="button" className="library-drag-handle" {...attributes} {...listeners}>
+function DraggableLibraryItem({ id, title, subtitle, icon, added = false, onAdd, addLabel, addedLabel = addLabel }: { id: string; title: string; subtitle: string; icon: React.ReactNode; added?: boolean; onAdd: () => void; addLabel: string; addedLabel?: string }) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id, disabled: added });
+  return <article ref={setNodeRef} className={`editor-catalog-card ${added ? "is-added" : ""} ${isDragging ? "is-dragging" : ""}`} style={{ transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined }}>
+    <button type="button" className="library-drag-handle" disabled={added} {...attributes} {...listeners}>
       <span className="library-drag-icon">{icon}</span>
       <span className="library-drag-copy"><strong>{title}</strong><span>{subtitle}</span></span>
     </button>
-    <button type="button" className="icon-button" aria-label={`${addLabel}: ${title}`} onClick={onAdd}><Plus size={15} /></button>
+    <button type="button" className={`icon-button ${added ? "library-item-added" : ""}`} aria-label={`${added ? addedLabel : addLabel}: ${title}`} title={added ? addedLabel : addLabel} disabled={added} onClick={onAdd}>{added ? <Check size={15} /> : <Plus size={15} />}</button>
   </article>;
 }
 

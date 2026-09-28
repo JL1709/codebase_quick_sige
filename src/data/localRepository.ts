@@ -2,6 +2,7 @@ import { createSeedDatabase } from "./seed";
 import { ensurePlanLayout } from "../domain/planLayout";
 import { defaultBlockImageSource } from "../domain/blockImages";
 import { blockHierarchyColor, categoryPlacementIds } from "../domain/categoryTree";
+import { legacyProjectOverviewSections } from "../domain/projectOverview";
 import type {
   AppDatabase,
   BuildingBlock,
@@ -19,7 +20,7 @@ export const STORAGE_KEY = "quicksige.database.v3";
 const LEGACY_STORAGE_KEYS = ["quicksige.prototype.database.v2"];
 export const BACKUP_KEY = "quicksige.database.migration-backup.v2";
 export const MIGRATION_ERROR_KEY = "quicksige.database.migration-error";
-export const CURRENT_SCHEMA_VERSION = 13;
+export const CURRENT_SCHEMA_VERSION = 18;
 
 const persistedDatabaseSchema = z.object({
   schemaVersion: z.number().int().nonnegative(),
@@ -88,14 +89,26 @@ function isDatabase(value: unknown): value is Partial<AppDatabase> & Pick<AppDat
 }
 
 function migrateProject(project: Project): Project {
-  return {
+  const documentFolders = project.documentFolders ?? [];
+  const documentFolderIds = new Set(documentFolders.map((folder) => folder.id));
+  const migratedProject = {
     ...project,
     participants: project.participants ?? [],
     emergencyContacts: project.emergencyContacts ?? [],
     customFields: project.customFields ?? [],
     customSections: project.customSections ?? [],
     overviewSections: project.overviewSections ?? [],
-    assets: project.assets ?? [],
+    assets: (project.assets ?? []).map((asset) => ({
+      ...asset,
+      folderId: asset.folderId && documentFolderIds.has(asset.folderId) ? asset.folderId : undefined,
+    })),
+    documentFolders,
+  };
+  if (migratedProject.overviewSections.length > 0) return migratedProject;
+  let identifierIndex = 0;
+  return {
+    ...migratedProject,
+    overviewSections: legacyProjectOverviewSections(migratedProject, (prefix) => `${project.id}-${prefix}-${identifierIndex++}`),
   };
 }
 
@@ -106,6 +119,7 @@ function migrateTemplateEntry(entry: OverviewTemplateEntry): OverviewTemplateEnt
     type: entry.type ?? "text",
     defaultValue: entry.defaultValue ?? "",
     children: (entry.children ?? []).map(migrateTemplateEntry),
+    translations: entry.translations,
   };
 }
 
@@ -114,6 +128,8 @@ function migrateOverviewTemplate(template: PersistedOverviewTemplate): OverviewT
     id: template.id,
     organizationId: template.organizationId,
     name: template.name,
+    sourceLocale: template.sourceLocale ?? "de",
+    translations: template.translations,
     entries: template.entries.map(migrateTemplateEntry),
     createdAt: template.createdAt,
     updatedAt: template.updatedAt,
@@ -150,16 +166,48 @@ function migrateOverviewTemplate(template: PersistedOverviewTemplate): OverviewT
     id: template.id,
     organizationId: template.organizationId,
     name: template.title || template.name,
+    sourceLocale: template.sourceLocale ?? "de",
+    translations: template.translations,
     entries: [...fieldEntries, ...contactEntries, ...participantEntries],
     createdAt: template.createdAt,
     updatedAt: template.updatedAt,
   };
 }
 
+function backfillStarterEntryTranslations(
+  entry: OverviewTemplateEntry,
+  starterEntry: OverviewTemplateEntry | undefined,
+): OverviewTemplateEntry {
+  if (!starterEntry) return entry;
+  return {
+    ...entry,
+    translations: { ...starterEntry.translations, ...entry.translations },
+    children: entry.children.map((child) => backfillStarterEntryTranslations(
+      child,
+      starterEntry.children.find((candidate) => candidate.id === child.id),
+    )),
+  };
+}
+
+function backfillStarterTemplateTranslations(
+  template: OverviewTemplate,
+  starterTemplate: OverviewTemplate | undefined,
+): OverviewTemplate {
+  if (!starterTemplate) return template;
+  return {
+    ...template,
+    translations: { ...starterTemplate.translations, ...template.translations },
+    entries: template.entries.map((entry) => backfillStarterEntryTranslations(
+      entry,
+      starterTemplate.entries.find((candidate) => candidate.id === entry.id),
+    )),
+  };
+}
+
 function migrateBlock(block: PersistedBuildingBlock): BuildingBlock {
   const originalCategoryId = block.primaryCategoryId ?? block.categoryId ?? "uncategorized";
-  const detailedCategoryId = DETAILED_CATEGORY_BY_BLOCK_ID[block.id];
-  const primaryCategoryId = detailedCategoryId ?? originalCategoryId;
+  const legacyDetailedCategoryId = block.primaryCategoryId ? undefined : DETAILED_CATEGORY_BY_BLOCK_ID[block.id];
+  const primaryCategoryId = legacyDetailedCategoryId ?? originalCategoryId;
   const bundledImageSource = defaultBlockImageSource(block.id);
   const imageDataUrl = !block.imageDataUrl || block.imageDataUrl.startsWith("/block-images/")
     ? bundledImageSource
@@ -180,7 +228,7 @@ function migrateBlock(block: PersistedBuildingBlock): BuildingBlock {
     imageDataUrl,
     translations,
     primaryCategoryId,
-    categoryIds: [...new Set([...(block.categoryIds?.length ? block.categoryIds : [originalCategoryId]), ...(detailedCategoryId ? [detailedCategoryId] : [])])],
+    categoryIds: [...new Set([...(block.categoryIds?.length ? block.categoryIds : [originalCategoryId]), ...(legacyDetailedCategoryId ? [legacyDetailedCategoryId] : [])])],
     lifecycle: block.lifecycle ?? "active",
   };
 }
@@ -212,6 +260,15 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
   const sourceCategories = (source.categories ?? []).map(migrateCategory);
   const sourceCategoryIds = new Set(sourceCategories.map((category) => category.id));
   const categories = [...sourceCategories, ...defaults.categories.filter((category) => !sourceCategoryIds.has(category.id))];
+  const documentTemplates = (source.documentTemplates ?? defaults.documentTemplates)
+    .filter((template) => template.origin === "custom" || template.documentType === "a4_plan")
+    .map((template) => ({
+      ...template,
+      name: template.origin === "standard" ? "QuickSiGe Standard" : template.name,
+      lifecycle: template.lifecycle ?? "active" as const,
+      revision: template.revision ?? 1,
+    }));
+  const documentTemplateIds = new Set(documentTemplates.map((template) => template.id));
   const migrated: AppDatabase = {
     ...defaults,
     ...source,
@@ -231,9 +288,14 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
         generatedDocuments: revision.snapshot.generatedDocuments ?? (source.generatedDocuments ?? []).filter((document) => document.projectId === revision.projectId),
       },
     })),
-    overviewTemplates: ((source.overviewTemplates ?? defaults.overviewTemplates) as PersistedOverviewTemplate[]).map(migrateOverviewTemplate),
-    documentTemplates: (source.documentTemplates ?? defaults.documentTemplates).map((template) => ({ ...template, lifecycle: template.lifecycle ?? "active", revision: template.revision ?? 1 })),
-    documentConfigurations: source.documentConfigurations ?? [],
+    overviewTemplates: ((source.overviewTemplates ?? defaults.overviewTemplates) as PersistedOverviewTemplate[])
+      .map(migrateOverviewTemplate)
+      .map((template) => backfillStarterTemplateTranslations(
+        template,
+        defaults.overviewTemplates.find((candidate) => candidate.id === template.id),
+      )),
+    documentTemplates,
+    documentConfigurations: (source.documentConfigurations ?? []).filter((configuration) => documentTemplateIds.has(configuration.templateId)),
     generatedDocuments: (source.generatedDocuments ?? []).map((document) => {
       const project = projects.find((candidate) => candidate.id === document.projectId) ?? projects[0];
       const plan = plans.find((candidate) => candidate.projectId === document.projectId);
