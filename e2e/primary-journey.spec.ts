@@ -1250,11 +1250,23 @@ test("primary navigation collapses to a persistent icon rail", async ({ page }) 
   await page.goto("/projects/project-logistics-center/plan");
   const appFrame = page.locator(".app-frame");
   const sidebar = page.locator(".sidebar");
+  const anchoredSidebarItems = sidebar.locator(".brand-mark, .sidebar-nav a > svg, .avatar");
+  const readHorizontalCenters = () => anchoredSidebarItems.evaluateAll((elements) => elements.map((element) => {
+    const bounds = element.getBoundingClientRect();
+    return bounds.x + bounds.width / 2;
+  }));
   const expandedWidth = (await sidebar.boundingBox())?.width ?? 0;
+  const expandedHorizontalCenters = await readHorizontalCenters();
 
   await page.getByRole("button", { name: "Collapse navigation" }).click();
   await expect(appFrame).toHaveClass(/navigation-collapsed/);
   await expect.poll(async () => (await sidebar.boundingBox())?.width ?? expandedWidth).toBeLessThan(100);
+  await expect.poll(async () => {
+    const collapsedHorizontalCenters = await readHorizontalCenters();
+    return Math.max(...collapsedHorizontalCenters.map((center, index) => Math.abs(center - expandedHorizontalCenters[index])));
+  }).toBeLessThan(0.5);
+  await expect(sidebar.locator(".navigation-label").first()).toHaveCSS("opacity", "0");
+  await expect(sidebar.locator(".user-chip-details")).toHaveCSS("opacity", "0");
   await expect(page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Projects" })).toBeVisible();
 
   await page.reload();
@@ -1262,6 +1274,12 @@ test("primary navigation collapses to a persistent icon rail", async ({ page }) 
   await page.getByRole("button", { name: "Expand navigation" }).click();
   await expect(appFrame).not.toHaveClass(/navigation-collapsed/);
   await expect.poll(async () => (await sidebar.boundingBox())?.width ?? 0).toBeGreaterThan(200);
+  await expect.poll(async () => {
+    const restoredHorizontalCenters = await readHorizontalCenters();
+    return Math.max(...restoredHorizontalCenters.map((center, index) => Math.abs(center - expandedHorizontalCenters[index])));
+  }).toBeLessThan(0.5);
+  await expect(sidebar.locator(".navigation-label").first()).toHaveCSS("opacity", "1");
+  await expect(sidebar.locator(".user-chip-details")).toHaveCSS("opacity", "1");
 });
 
 test("responsive plan toolbar stays contained and selection keeps the canvas stationary", async ({ page }) => {

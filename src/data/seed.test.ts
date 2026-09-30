@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { categoryPlacementIds } from "../domain/categoryTree";
 import { flattenOverviewEntries, localizeOverviewTemplate } from "../domain/overviewTemplates";
+import { resolveProjectParticipants } from "../domain/contacts";
 import type { PlanAssetElement } from "../domain/types";
 import { createSeedDatabase } from "./seed";
 
@@ -34,7 +35,8 @@ describe("seed data", () => {
   it("contains a complete local test project and generated plan", () => {
     const database = createSeedDatabase();
     const project = database.projects[0];
-    expect(project.participants.some((participant) => participant.role === "coordinator")).toBe(true);
+    expect(project.participants).toEqual([]);
+    expect(resolveProjectParticipants(database, project.id).some((participant) => participant.role === "coordinator")).toBe(true);
     expect(project.emergencyContacts.length).toBeGreaterThanOrEqual(2);
     expect(database.plans.find((plan) => plan.projectId === project.id)).toBeDefined();
     expect(database.projects).toHaveLength(1);

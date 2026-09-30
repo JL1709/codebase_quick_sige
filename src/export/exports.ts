@@ -569,6 +569,7 @@ const participantRoleCopy: Record<Locale, Record<Project["participants"][number]
     planner: "Fachplanung",
     site_manager: "Bauleitung",
     contractor: "Auftragnehmer",
+    custom: "Weitere Rolle",
   },
   en: {
     client: "Client",
@@ -578,6 +579,7 @@ const participantRoleCopy: Record<Locale, Record<Project["participants"][number]
     planner: "Specialist planning",
     site_manager: "Site management",
     contractor: "Contractor",
+    custom: "Other role",
   },
 };
 
@@ -641,7 +643,7 @@ export function buildSupportingDocumentPdf(project: Project, type: Plan["support
     pdf.setFontSize(9);
     pdf.text(locale === "de" ? "Unfallstelle sichern · Eigenschutz beachten · Einweisen · Verletzte nicht allein lassen" : "Secure the scene · Protect yourself · Guide responders · Do not leave injured people alone", 22, y + 35);
   } else if (type === "participants") {
-    drawRows(pdf, project.participants.map((participant) => [participantRoleCopy[locale][participant.role], `${participant.name}\n${participant.company}\n${participant.phone} · ${participant.email}`]), y);
+    drawRows(pdf, project.participants.map((participant) => [participant.customRole || participantRoleCopy[locale][participant.role], `${participant.name}\n${participant.company}\n${participant.phone} · ${participant.email}`]), y);
   } else if (type === "advance_notice") {
     const coordinator = project.participants.find((participant) => participant.role === "coordinator");
     const owner = project.participants.find((participant) => participant.role === "owner");

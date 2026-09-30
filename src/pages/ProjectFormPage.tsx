@@ -1,12 +1,15 @@
-import { ArrowLeft, Check, ChevronDown, ChevronUp, Eye, LayoutTemplate, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, ChevronUp, Eye, LayoutTemplate, Plus, Trash2, Upload, Users } from "lucide-react";
 import { type CSSProperties, type FormEvent, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { OverviewEntryBuilder } from "../components/OverviewEntryBuilder";
 import { ProjectOverviewFields } from "../components/ProjectOverviewFields";
 import { Button, PageHeader } from "../components/Ui";
+import { ContactFormModal } from "../components/ContactFormModal";
+import { ContactImportModal } from "../components/ContactImportModal";
 import { countOverviewEntries, instantiateOverviewSection, localizeOverviewTemplate, validateOverviewTemplate } from "../domain/overviewTemplates";
 import { validateProjectForm } from "../domain/projectValidation";
-import type { OverviewTemplate, OverviewTemplateEntry, ProjectOverviewSection } from "../domain/types";
+import { contactDisplayName, STANDARD_PROJECT_ROLES } from "../domain/contacts";
+import type { OverviewTemplate, OverviewTemplateEntry, ProjectOverviewSection, ProjectParticipantRole } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
 import { newId, useApp } from "../state/AppProvider";
 import { NotFoundPage } from "./NotFoundPage";
@@ -22,6 +25,9 @@ export function ProjectFormPage() {
   const [additionalEntries, setAdditionalEntries] = useState<OverviewTemplateEntry[]>([]);
   const [previewedTemplateIds, setPreviewedTemplateIds] = useState<Set<string>>(new Set());
   const [submitted, setSubmitted] = useState(false);
+  const [projectContacts, setProjectContacts] = useState<Array<{ contactId: string; roles: ProjectParticipantRole[]; customLabel: string }>>([]);
+  const [contactFormOpen, setContactFormOpen] = useState(false);
+  const [contactImportOpen, setContactImportOpen] = useState(false);
   const additionalTemplate = useMemo<OverviewTemplate>(() => ({
     id: "project-additional-information",
     organizationId: database.organization.id,
@@ -64,7 +70,10 @@ export function ProjectFormPage() {
       navigate(`/projects/${existingProject.id}`);
       return;
     }
-    const project = createProject(validation.data);
+    const project = createProject(validation.data, projectContacts.map((selection) => ({
+      contactId: selection.contactId,
+      roles: selection.roles.map((role) => ({ role, customLabel: role === "custom" ? selection.customLabel.trim() || undefined : undefined })),
+    })));
     navigate(`/projects/${project.id}/plan`);
   };
 
@@ -84,10 +93,23 @@ export function ProjectFormPage() {
         </div>
       </section>
 
+      {!existingProject && <section className="panel project-create-contacts">
+        <div className="panel-header"><div><h2>{t("project.participants")}</h2><p>{t("contacts.createProjectHelp")}</p></div><div className="row-actions"><Button type="button" size="small" variant="ghost" onClick={() => setContactImportOpen(true)}><Upload size={14} />{t("contacts.import.action")}</Button><Button type="button" size="small" variant="secondary" onClick={() => setContactFormOpen(true)}><Plus size={14} />{t("contacts.newContact")}</Button><Users size={19} /></div></div>
+        <div className="panel-body">
+          {database.contacts.filter((contact) => contact.lifecycle === "active").length === 0 ? <p className="field-help">{t("contacts.createProjectEmpty")}</p> : <>
+            <label className="field"><span>{t("contacts.addPerson")}</span><select value="" onChange={(event) => { const selectedContactId = event.target.value; if (selectedContactId && !projectContacts.some((selection) => selection.contactId === selectedContactId)) setProjectContacts((current) => [...current, { contactId: selectedContactId, roles: ["contractor"], customLabel: "" }]); }}><option value="">{t("contacts.chooseContact")}</option>{database.contacts.filter((contact) => contact.lifecycle === "active" && !projectContacts.some((selection) => selection.contactId === contact.id)).map((contact) => <option value={contact.id} key={contact.id}>{contactDisplayName(contact)}</option>)}</select></label>
+            <div className="project-create-contact-list">{projectContacts.map((selection) => {
+              const contact = database.contacts.find((candidate) => candidate.id === selection.contactId);
+              return <div key={selection.contactId}><strong>{contact ? contactDisplayName(contact) : "—"}</strong><fieldset className="role-checkboxes project-create-contact-roles"><legend>{t("contacts.roles")}</legend>{[...STANDARD_PROJECT_ROLES, "custom" as const].map((role) => <label key={role}><input type="checkbox" checked={selection.roles.includes(role)} onChange={(event) => setProjectContacts((current) => current.map((candidate) => candidate.contactId === selection.contactId ? { ...candidate, roles: event.target.checked ? [...candidate.roles, role] : candidate.roles.filter((currentRole) => currentRole !== role) } : candidate))} />{t(`contacts.role.${role}`)}</label>)}</fieldset>{selection.roles.includes("custom") && <input aria-label={t("contacts.customRole")} required value={selection.customLabel} onChange={(event) => setProjectContacts((current) => current.map((candidate) => candidate.contactId === selection.contactId ? { ...candidate, customLabel: event.target.value } : candidate))} />}<button type="button" className="icon-button danger-icon" aria-label={t("common.remove")} onClick={() => setProjectContacts((current) => current.filter((candidate) => candidate.contactId !== selection.contactId))}><Trash2 size={14} /></button></div>;
+            })}</div>
+          </>}
+        </div>
+      </section>}
+
       <section className="panel project-template-browser">
         <div className="panel-header"><div><h2>{t("project.useTemplates")}</h2><p>{t("project.useTemplatesText")}</p></div><LayoutTemplate size={19} /></div>
         <div className="panel-body project-template-cards">
-          {database.overviewTemplates.map((template) => {
+          {database.overviewTemplates.filter((template) => template.id !== "overview-template-participants").map((template) => {
             const localizedTemplate = localizeOverviewTemplate(template, locale);
             const included = sections.some((section) => section.templateId === template.id);
             const previewed = previewedTemplateIds.has(template.id);
@@ -104,8 +126,13 @@ export function ProjectFormPage() {
         <div className="panel-body"><ProjectOverviewFields entries={section.entries} editing onChange={(entries) => updateSection(section.id, entries)} t={t} formatDate={formatDate} /></div>
       </section>)}
 
-      <div className="project-composer-footer"><Link to={existingProject ? `/projects/${existingProject.id}` : "/"}><Button type="button" variant="secondary">{t("common.cancel")}</Button></Link><Button type="submit" disabled={!name.trim() || !additionalValidation.valid}>{existingProject ? t("common.save") : t("project.createAction")}</Button></div>
+      <div className="project-composer-footer"><Link to={existingProject ? `/projects/${existingProject.id}` : "/"}><Button type="button" variant="secondary">{t("common.cancel")}</Button></Link><Button type="submit" disabled={!name.trim() || !additionalValidation.valid || projectContacts.some((selection) => selection.roles.length === 0 || (selection.roles.includes("custom") && !selection.customLabel.trim()))}>{existingProject ? t("common.save") : t("project.createAction")}</Button></div>
     </form>
+    {contactFormOpen && <ContactFormModal open onSaved={(contact) => setProjectContacts((current) => current.some((selection) => selection.contactId === contact.id) ? current : [...current, { contactId: contact.id, roles: ["contractor"], customLabel: "" }])} onClose={() => setContactFormOpen(false)} />}
+    {contactImportOpen && <ContactImportModal open onImported={(contactIds) => setProjectContacts((current) => [
+      ...current,
+      ...contactIds.filter((contactId) => !current.some((selection) => selection.contactId === contactId)).map((contactId) => ({ contactId, roles: ["contractor" as const], customLabel: "" })),
+    ])} onClose={() => setContactImportOpen(false)} />}
   </div>;
 }
 

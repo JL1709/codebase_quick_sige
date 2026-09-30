@@ -5,17 +5,160 @@ export type ConstructionType = "new_build" | "renovation" | "demolition";
 export type Season = "spring" | "summer" | "autumn" | "winter" | "year_round";
 export type RecommendationStrength = "required_review" | "strong" | "optional";
 export type RecordLifecycle = "active" | "archived";
+export type ContactMethodType = "work" | "mobile" | "home" | "other";
+export type ProjectParticipantRole = "client" | "owner" | "coordinator" | "architect" | "planner" | "site_manager" | "contractor" | "custom";
+export type ContactSource = "manual" | "migration" | "vcard" | "csv" | "xlsx" | "microsoft" | "google";
 
 export interface Organization { id: string; name: string; accentColor: string }
 export interface AppUser { id: string; organizationId: string; name: string; email: string; role: "owner" | "admin" | "editor" | "viewer"; preferredLocale: Locale }
 
 export interface Participant {
   id: string;
-  role: "client" | "owner" | "coordinator" | "architect" | "planner" | "site_manager" | "contractor";
+  role: ProjectParticipantRole;
+  customRole?: string;
   company: string;
   name: string;
   email: string;
   phone: string;
+}
+
+export interface ContactEmail {
+  id: string;
+  type: ContactMethodType;
+  value: string;
+  normalizedValue: string;
+  primary: boolean;
+}
+
+export interface ContactPhone {
+  id: string;
+  type: ContactMethodType;
+  value: string;
+  normalizedValue: string;
+  primary: boolean;
+}
+
+export interface ContactAddress {
+  id: string;
+  type: ContactMethodType;
+  street: string;
+  postalCode: string;
+  city: string;
+  region: string;
+  country: string;
+  primary: boolean;
+}
+
+export interface Contact {
+  id: string;
+  organizationId: string;
+  prefix: string;
+  givenName: string;
+  familyName: string;
+  suffix: string;
+  displayName: string;
+  emails: ContactEmail[];
+  phones: ContactPhone[];
+  addresses: ContactAddress[];
+  notes: string;
+  tags: string[];
+  lifecycle: RecordLifecycle;
+  source: ContactSource;
+  mergedIntoId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Company {
+  id: string;
+  organizationId: string;
+  name: string;
+  website: string;
+  domain: string;
+  email: string;
+  phone: string;
+  address?: ContactAddress;
+  notes: string;
+  tags: string[];
+  lifecycle: RecordLifecycle;
+  source: ContactSource;
+  mergedIntoId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ContactCompanyAffiliation {
+  id: string;
+  organizationId: string;
+  contactId: string;
+  companyId: string;
+  jobTitle: string;
+  department: string;
+  primary: boolean;
+  lifecycle: RecordLifecycle;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectContactRole {
+  id: string;
+  role: ProjectParticipantRole;
+  customLabel?: string;
+}
+
+export interface ProjectContactAssignment {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  contactId: string;
+  companyId?: string;
+  roles: ProjectContactRole[];
+  lifecycle: RecordLifecycle;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ExternalContactProvider = "microsoft" | "google";
+export interface ExternalContactIdentity {
+  id: string;
+  organizationId: string;
+  contactId: string;
+  provider: ExternalContactProvider;
+  providerAccountId: string;
+  externalContactId: string;
+  sourceRevision?: string;
+  lastImportedAt: string;
+}
+
+export type ContactImportAction = "created" | "updated" | "merged" | "skipped" | "failed";
+export interface ContactImportItem {
+  id: string;
+  sourceKey: string;
+  action: ContactImportAction;
+  contactId?: string;
+  companyId?: string;
+  messages: string[];
+  previousContact?: Contact;
+  previousCompany?: Company;
+  previousAffiliation?: ContactCompanyAffiliation;
+  previousAssignment?: ProjectContactAssignment;
+  previousExternalIdentity?: ExternalContactIdentity;
+  companyCreated?: boolean;
+  affiliationIds?: string[];
+  assignmentIds?: string[];
+  externalIdentityIds?: string[];
+}
+
+export interface ContactImportBatch {
+  id: string;
+  organizationId: string;
+  source: ContactSource;
+  sourceLabel: string;
+  initiatedByName: string;
+  status: "completed" | "undone" | "partially_undone";
+  items: ContactImportItem[];
+  createdAt: string;
+  undoneAt?: string;
 }
 
 export interface EmergencyContact { id: string; label: string; name: string; phone: string }
@@ -344,6 +487,9 @@ export interface AuditEvent { id: string; projectId?: string; action: string; ac
 
 export interface AppDatabase {
   schemaVersion: number; organization: Organization; user: AppUser; projects: Project[];
+  contacts: Contact[]; companies: Company[]; contactAffiliations: ContactCompanyAffiliation[];
+  projectContactAssignments: ProjectContactAssignment[]; externalContactIdentities: ExternalContactIdentity[];
+  contactImportBatches: ContactImportBatch[];
   assessmentRuns: ProjectAssessmentRun[]; blocks: BuildingBlock[]; categories: BuildingBlockCategory[];
   plans: Plan[]; revisions: PlanRevision[]; overviewTemplates: OverviewTemplate[]; documentTemplates: DocumentTemplate[];
   documentConfigurations: ProjectDocumentConfiguration[]; generatedDocuments: GeneratedDocument[]; auditEvents: AuditEvent[];

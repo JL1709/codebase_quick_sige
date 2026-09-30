@@ -3,10 +3,11 @@ import path from "node:path";
 import { createSeedDatabase } from "../src/data/seed";
 import { blobToArrayBuffer, buildTemplateData, createStandardTemplate, renderTemplate } from "../src/documents/templateEngine";
 import { buildPlanPdf } from "../src/export/exports";
+import { projectWithResolvedParticipants } from "../src/domain/contacts";
 
 const outputDirectory = path.resolve(process.argv[2] ?? "/private/tmp/quicksige-export-qa");
 const database = createSeedDatabase();
-const project = database.projects[0];
+const project = projectWithResolvedParticipants(database, database.projects[0]);
 const plan = structuredClone(database.plans[0]);
 const blocksWithImages = await Promise.all(database.blocks.map(async (block) => {
   if (!block.imageDataUrl?.startsWith("/block-images/")) return block;

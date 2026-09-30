@@ -428,6 +428,29 @@ describe("local database migration", () => {
     expect(migrated?.documentConfigurations.some((configuration) => configuration.templateId === retiredStandardTemplate.id)).toBe(false);
   });
 
+  it("moves legacy project participants into the canonical contacts directory", () => {
+    const source = structuredClone(createSeedDatabase()) as unknown as Record<string, unknown>;
+    source.schemaVersion = 31;
+    const project = (source.projects as Array<Record<string, unknown>>)[0];
+    project.participants = [{
+      id: "legacy-coordinator", role: "coordinator", company: "Safety GmbH", name: "Ada Lovelace",
+      email: "ada@example.com", phone: "+49 170 123456",
+    }];
+    delete source.contacts;
+    delete source.companies;
+    delete source.contactAffiliations;
+    delete source.projectContactAssignments;
+    delete source.externalContactIdentities;
+    delete source.contactImportBatches;
+
+    const migrated = migrateDatabase(source);
+
+    expect(migrated?.projects[0].participants).toEqual([]);
+    expect(migrated?.contacts).toEqual([expect.objectContaining({ displayName: "Ada Lovelace", source: "migration" })]);
+    expect(migrated?.companies).toEqual([expect.objectContaining({ name: "Safety GmbH" })]);
+    expect(migrated?.projectContactAssignments).toEqual([expect.objectContaining({ projectId: project.id, roles: [expect.objectContaining({ role: "coordinator" })] })]);
+  });
+
   it("rejects malformed payloads instead of erasing them into partial state", () => {
     expect(migrateDatabase({ projects: "invalid", blocks: [] })).toBeNull();
   });
@@ -466,5 +489,24 @@ describe("local database migration", () => {
 
     expect(window.localStorage.getItem(BACKUP_KEY)).toBe(malformed);
     expect(window.localStorage.getItem(MIGRATION_ERROR_KEY)).toContain("recoverable backup");
+  });
+
+  it("reads and atomically saves the focused Contacts repository snapshot", () => {
+    const repository = new LocalStorageRepository();
+    repository.reset();
+    const database = repository.load();
+    const snapshot = repository.loadContacts();
+    snapshot.contacts[0] = { ...snapshot.contacts[0], displayName: "Repository replacement" };
+    snapshot.auditEvents.push({
+      id: "audit-contacts-repository", action: "contact.updated", actorName: database.user.name,
+      createdAt: "2026-09-29T00:00:00.000Z", details: snapshot.contacts[0].id,
+    });
+
+    repository.saveContacts(snapshot);
+    const reloaded = repository.load();
+
+    expect(reloaded.contacts[0].displayName).toBe("Repository replacement");
+    expect(reloaded.auditEvents.at(-1)?.id).toBe("audit-contacts-repository");
+    expect(reloaded.blocks).toEqual(database.blocks);
   });
 });

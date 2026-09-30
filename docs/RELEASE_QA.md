@@ -4,11 +4,11 @@
 
 `npm run check` runs ESLint, all Vitest suites, the production build, Chromium and WebKit Playwright journeys, and the high-severity dependency audit. CI executes the same command after installing both browser engines.
 
-The browser journeys cover language changes, the fixed five-tab workspace, inline Overview changes, template-based project creation, guided plan generation, exact canvas placement, keyboard undo/redo, catalog create/edit/archive/restore, safe DOCX upload, missing-placeholder decisions, Word generation, publication, revision downloads, and serious/critical accessibility violations.
+The browser journeys cover language changes, navigation, Contacts create/import/export/project assignment, inline Overview changes, template-based project creation, guided plan generation, exact canvas placement, keyboard undo/redo, catalog create/edit/archive/restore, safe DOCX upload, missing-placeholder decisions, Word generation, publication, revision downloads, and serious/critical accessibility violations.
 
 ## Export inspection
 
-`npm run qa:exports -- output/export-qa` generates one physical A0 PDF and seven representative Word files. Release QA renders the A0 PDF with Poppler and every DOCX page with LibreOffice, then inspects the resulting PNG pages.
+`npm run qa:exports -- output/export-qa` generates one physical A0 PDF and one representative A4 Word plan. Release QA renders the A0 PDF with Poppler and every DOCX page with LibreOffice, then inspects the resulting PNG pages.
 
 The representative A0 fixture includes sections, block cards, visible text, a title block, a supporting-document widget, an image, and a PDF-page element. Verification includes:
 

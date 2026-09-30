@@ -12,6 +12,7 @@ import { RecommendationsPage } from "./pages/RecommendationsPage";
 import { SettingsPage, TemplatesPage } from "./pages/SettingsPage";
 import { RevisionsPage } from "./pages/RevisionsPage";
 import { ProjectWorkspaceLayout } from "./components/ProjectWorkspaceLayout";
+import { ContactsPage } from "./pages/ContactsPage";
 
 export function App() {
   return (
@@ -21,6 +22,10 @@ export function App() {
         <Route path="projects" element={<Navigate to="/" replace />} />
         <Route path="projects/new" element={<ProjectFormPage />} />
         <Route path="projects/:projectId/edit" element={<ProjectFormPage />} />
+        <Route path="contacts" element={<ContactsPage />} />
+        <Route path="contacts/people/:contactId" element={<ContactsPage />} />
+        <Route path="contacts/companies" element={<ContactsPage />} />
+        <Route path="contacts/companies/:companyId" element={<ContactsPage />} />
         <Route path="projects/:projectId" element={<ProjectWorkspaceLayout />}>
           <Route index element={<ProjectPage />} />
           <Route path="assessment" element={<AssessmentPage />} />

@@ -54,4 +54,22 @@ describe("revision snapshots", () => {
 
     expect(snapshot.documentTemplates.map((candidate) => candidate.id)).toContain(template.id);
   });
+
+  it("captures resolved contact values so later directory edits cannot rewrite history", () => {
+    const database = createSeedDatabase();
+    const project = database.projects[0];
+    const plan = database.plans.find((candidate) => candidate.projectId === project.id)!;
+    const assignment = database.projectContactAssignments.find((candidate) => candidate.projectId === project.id)!;
+    const contact = database.contacts.find((candidate) => candidate.id === assignment.contactId)!;
+    const snapshot = buildRevisionSnapshot(database, project, plan);
+    const capturedParticipant = snapshot.project.participants.find((participant) => participant.role === assignment.roles[0].role)!;
+
+    contact.displayName = "Changed live contact";
+    contact.emails[0].value = "changed@example.com";
+    const currentSnapshot = buildRevisionSnapshot(database, project, plan);
+
+    expect(snapshot.project.participants).toContainEqual(capturedParticipant);
+    expect(snapshot.project.participants.some((participant) => participant.name === "Changed live contact")).toBe(false);
+    expect(currentSnapshot.project.participants.some((participant) => participant.name === "Changed live contact" && participant.email === "changed@example.com")).toBe(true);
+  });
 });

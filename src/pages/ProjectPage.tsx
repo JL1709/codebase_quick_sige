@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { countProjectOverviewValues, invalidProjectOverviewEntryIds, ProjectOverviewFields } from "../components/ProjectOverviewFields";
 import { Button, EmptyState } from "../components/Ui";
+import { ProjectContactsPanel } from "../components/ProjectContactsPanel";
 import type { ProjectOverviewSection } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
 import { useApp } from "../state/AppProvider";
@@ -20,7 +21,8 @@ export function ProjectPage() {
       <div><h1>{t("project.overview")}</h1><p>{t("project.overviewSubtitle")}</p></div>
       <Link to={`/projects/${project.id}/edit`}><Button variant="secondary"><Plus size={15} />{t("project.manageInformation")}</Button></Link>
     </section>
-    {project.overviewSections.length === 0 ? <section className="panel"><EmptyState icon={<Plus />} title={t("project.noInformation")} text={t("project.noInformationText")} action={<Link to={`/projects/${project.id}/edit`}><Button>{t("project.manageInformation")}</Button></Link>} /></section> : <div className="overview-grid">
+    <div className="overview-grid"><ProjectContactsPanel projectId={project.id} />
+    {project.overviewSections.length === 0 ? <section className="panel overview-span-two"><EmptyState icon={<Plus />} title={t("project.noInformation")} text={t("project.noInformationText")} action={<Link to={`/projects/${project.id}/edit`}><Button>{t("project.manageInformation")}</Button></Link>} /></section> : <>
       {project.overviewSections.map((section) => <OverviewSectionCard
         key={section.id}
         section={section}
@@ -28,8 +30,8 @@ export function ProjectPage() {
         onDelete={() => { if (window.confirm(t("common.confirmDelete"))) updateProject({ ...project, overviewSections: project.overviewSections.filter((candidate) => candidate.id !== section.id) }); }}
         t={t}
         formatDate={formatDate}
-      />)}
-    </div>}
+      />)}</>}
+    </div>
   </div>;
 }
 

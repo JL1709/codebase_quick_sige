@@ -1,4 +1,5 @@
 import { createPlanFromAssessment } from "../domain/recommendationEngine";
+import { migrateLegacyProjectContacts } from "../domain/contacts";
 import { defaultBlockImageSource } from "../domain/blockImages";
 import { categoryPlacementIds } from "../domain/categoryTree";
 import { legacyProjectOverviewSections } from "../domain/projectOverview";
@@ -592,7 +593,12 @@ demoProject.overviewSections = seedOverviewSections(demoProject, "de");
 
 export function createSeedDatabase(): AppDatabase {
   const demoAssessmentRunId = `assessment-${demoProject.id}-initial`;
-  const generatedPlan = createPlanFromAssessment(demoProject, demoAssessment, seedBlocks, seedCategories, undefined, {
+  const contactMigration = migrateLegacyProjectContacts(
+    demoProject.organizationId,
+    [structuredClone(demoProject)],
+  );
+  const migratedDemoProject = contactMigration.projects[0];
+  const generatedPlan = createPlanFromAssessment(migratedDemoProject, demoAssessment, seedBlocks, seedCategories, undefined, {
     method: "guided_assessment",
     createdByName: "Max",
     sourceAssessmentRunId: demoAssessmentRunId,
@@ -618,7 +624,7 @@ export function createSeedDatabase(): AppDatabase {
     updatedAt: createdAt,
   }));
   return {
-    schemaVersion: 31,
+    schemaVersion: 32,
     organization: {
       id: "organization-demo",
       name: "Sicher Planen Ingenieure",
@@ -632,7 +638,13 @@ export function createSeedDatabase(): AppDatabase {
       role: "owner",
       preferredLocale: "de",
     },
-    projects: [demoProject],
+    projects: [migratedDemoProject],
+    contacts: contactMigration.contacts,
+    companies: contactMigration.companies,
+    contactAffiliations: contactMigration.affiliations,
+    projectContactAssignments: contactMigration.assignments,
+    externalContactIdentities: [],
+    contactImportBatches: [],
     assessmentRuns: [
       {
         id: demoAssessmentRunId,

@@ -3,6 +3,7 @@ import { ensurePlanLayout, fitBlocksInArea, reconcilePlanSectionsWithCatalog } f
 import { defaultBlockImageSource } from "../domain/blockImages";
 import { categoryPlacementIds, normalizeCategoryColorOwnership } from "../domain/categoryTree";
 import { legacyProjectOverviewSections } from "../domain/projectOverview";
+import { migrateLegacyProjectContacts } from "../domain/contacts";
 import type {
   AppDatabase,
   AssessmentAnswers,
@@ -25,7 +26,7 @@ export const STORAGE_KEY = "quicksige.database.v3";
 const LEGACY_STORAGE_KEYS = ["quicksige.prototype.database.v2"];
 export const BACKUP_KEY = "quicksige.database.migration-backup.v2";
 export const MIGRATION_ERROR_KEY = "quicksige.database.migration-error";
-export const CURRENT_SCHEMA_VERSION = 31;
+export const CURRENT_SCHEMA_VERSION = 32;
 const CATEGORY_HIERARCHY_SCHEMA_VERSION = 24;
 const CATEGORY_ASSIGNMENT_CORRECTION_SCHEMA_VERSION = 20;
 const AUTOMATIC_TITLE_BLOCK_REMOVAL_SCHEMA_VERSION = 30;
@@ -54,6 +55,12 @@ const persistedDatabaseSchema = z.object({
   organization: z.object({ id: z.string(), name: z.string(), accentColor: z.string() }),
   user: z.object({ id: z.string(), organizationId: z.string(), name: z.string(), email: z.string(), role: z.enum(["owner", "admin", "editor", "viewer"]), preferredLocale: z.enum(["de", "en"]) }),
   projects: z.array(z.object({ id: z.string() }).passthrough()),
+  contacts: z.array(z.object({ id: z.string(), organizationId: z.string() }).passthrough()),
+  companies: z.array(z.object({ id: z.string(), organizationId: z.string() }).passthrough()),
+  contactAffiliations: z.array(z.object({ id: z.string(), contactId: z.string(), companyId: z.string() }).passthrough()),
+  projectContactAssignments: z.array(z.object({ id: z.string(), projectId: z.string(), contactId: z.string() }).passthrough()),
+  externalContactIdentities: z.array(z.object({ id: z.string(), contactId: z.string(), provider: z.enum(["microsoft", "google"]) }).passthrough()),
+  contactImportBatches: z.array(z.object({ id: z.string(), status: z.enum(["completed", "undone", "partially_undone"]) }).passthrough()),
   assessmentRuns: z.array(z.object({ id: z.string(), projectId: z.string() }).passthrough()),
   blocks: z.array(z.object({ id: z.string() }).passthrough()),
   categories: z.array(z.object({ id: z.string() }).passthrough()),
@@ -90,9 +97,15 @@ type PersistedPlan = Omit<Plan, "provenance"> & {
   provenance?: Plan["provenance"];
 };
 
-type PersistedDatabase = Omit<AppDatabase, "assessmentRuns"> & {
+type PersistedDatabase = Omit<AppDatabase, "assessmentRuns" | "contacts" | "companies" | "contactAffiliations" | "projectContactAssignments" | "externalContactIdentities" | "contactImportBatches"> & {
   assessmentRuns?: ProjectAssessmentRun[];
   assessments?: Record<string, AssessmentAnswers>;
+  contacts?: AppDatabase["contacts"];
+  companies?: AppDatabase["companies"];
+  contactAffiliations?: AppDatabase["contactAffiliations"];
+  projectContactAssignments?: AppDatabase["projectContactAssignments"];
+  externalContactIdentities?: AppDatabase["externalContactIdentities"];
+  contactImportBatches?: AppDatabase["contactImportBatches"];
 };
 
 type PersistedOverviewTemplate = Partial<OverviewTemplate> & Pick<OverviewTemplate, "id" | "organizationId" | "name" | "createdAt" | "updatedAt"> & {
@@ -106,7 +119,40 @@ type PersistedOverviewTemplate = Partial<OverviewTemplate> & Pick<OverviewTempla
 
 const LEGACY_BLOCK_METADATA_FIELDS = ["color", "code", "tags", "provenance", "contentRevision", "reviewedAt", "source"] as const;
 
-export interface AppRepository {
+export type ContactsRepositorySnapshot = Pick<AppDatabase,
+  | "contacts"
+  | "companies"
+  | "contactAffiliations"
+  | "projectContactAssignments"
+  | "externalContactIdentities"
+  | "contactImportBatches"
+  | "projects"
+  | "plans"
+  | "generatedDocuments"
+  | "auditEvents"
+>;
+
+export function contactsRepositorySnapshot(database: AppDatabase): ContactsRepositorySnapshot {
+  return {
+    contacts: database.contacts,
+    companies: database.companies,
+    contactAffiliations: database.contactAffiliations,
+    projectContactAssignments: database.projectContactAssignments,
+    externalContactIdentities: database.externalContactIdentities,
+    contactImportBatches: database.contactImportBatches,
+    projects: database.projects,
+    plans: database.plans,
+    generatedDocuments: database.generatedDocuments,
+    auditEvents: database.auditEvents,
+  };
+}
+
+export interface ContactsRepository {
+  loadContacts(): ContactsRepositorySnapshot;
+  saveContacts(snapshot: ContactsRepositorySnapshot): void;
+}
+
+export interface AppRepository extends ContactsRepository {
   load(): AppDatabase;
   save(database: AppDatabase): void;
   reset(): AppDatabase;
@@ -430,11 +476,20 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
   Reflect.deleteProperty(organization, "defaultLocale");
   const defaultLogisticsProject = defaults.projects.find((project) => project.id === LOGISTICS_DEMO_PROJECT_ID)!;
   const defaultLogisticsPlan = defaults.plans.find((plan) => plan.projectId === LOGISTICS_DEMO_PROJECT_ID)!;
-  const projects = source.projects
+  const projectsBeforeContactMigration = source.projects
     .filter((project) => (source.schemaVersion ?? 0) >= DEMO_CONTENT_REFRESH_SCHEMA_VERSION || project.id !== REMOVED_DEMO_PROJECT_ID)
     .map((project) => migrateProject(project as PersistedProject, locale))
     .map((project) => removeSyntheticProjectInformation(project, source.schemaVersion ?? 0))
     .map((project) => refreshLogisticsDemoDocuments(project, defaultLogisticsProject, source.schemaVersion ?? 0));
+  const contactMigration = migrateLegacyProjectContacts(
+    organization.id,
+    projectsBeforeContactMigration,
+    source.contacts ?? [],
+    source.companies ?? [],
+    source.contactAffiliations ?? [],
+    source.projectContactAssignments ?? [],
+  );
+  const projects = contactMigration.projects;
   const projectById = new Map(projects.map((project) => [project.id, project]));
   const legacyAssessments = source.assessments ?? {};
   const assessmentRuns = (source.assessmentRuns?.length
@@ -504,6 +559,12 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
     schemaVersion: CURRENT_SCHEMA_VERSION,
     organization,
     projects,
+    contacts: contactMigration.contacts,
+    companies: contactMigration.companies,
+    contactAffiliations: contactMigration.affiliations,
+    projectContactAssignments: contactMigration.assignments,
+    externalContactIdentities: source.externalContactIdentities ?? [],
+    contactImportBatches: source.contactImportBatches ?? [],
     assessmentRuns,
     blocks,
     categories,
@@ -607,6 +668,14 @@ export class LocalStorageRepository implements AppRepository {
 
   save(database: AppDatabase): void {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(database));
+  }
+
+  loadContacts(): ContactsRepositorySnapshot {
+    return structuredClone(contactsRepositorySnapshot(this.load()));
+  }
+
+  saveContacts(snapshot: ContactsRepositorySnapshot): void {
+    this.save({ ...this.load(), ...structuredClone(snapshot) });
   }
 
   reset(clearRecovery = true): AppDatabase {

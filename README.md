@@ -20,7 +20,7 @@ The browser starts with the supplied project **Logistikzentrum West**. Structure
 
 ## Suggested acceptance walkthrough
 
-1. Open **Logistikzentrum West** and review the project facts, participants, and contact data.
+1. Open **Contacts**, review the reusable people and companies directory, and assign a contact to **Logistikzentrum West**.
 2. Open **Safety plan** and choose **Create new draft → Guided project assessment**.
 3. Change a few hazards and review the automatic recommendations. Each suggestion includes its reason and can be included or excluded.
 4. Generate the plan and continue in the editor. The same dialog can also start empty, copy the current plan, or create a draft from a published revision.
@@ -35,6 +35,9 @@ You can also create a completely new project from the dashboard. The seeded data
 ## Implemented product scope
 
 - Premium responsive project dashboard and guided workflow
+- Organization-wide Contacts workspace with people, companies, deduplication, archive/restore, search, filtering, CSV/vCard export, and safe import undo
+- vCard, CSV/TSV, and Excel imports with field mapping and duplicate review; optional one-time read-only Microsoft 365 and Google Contacts connectors
+- Canonical project-contact assignments with multiple standard or custom roles, reused by plan previews and generated documents
 - German and English UI catalogs with locale-aware formatting
 - Independent UI and document languages
 - Recursive German/English building-block categories, multi-category assignment, and full catalog management
@@ -44,7 +47,7 @@ You can also create a completely new project from the dashboard. The seeded data
 - Deterministic, explainable recommendation engine
 - Automatic plan composition followed by a physical A0 WYSIWYG editor with drag, resize, snapping, and undo/redo
 - Validated PNG/JPG/PDF project assets and real document elements that can be positioned on the A0 page
-- Inline project data, participant, contact, and custom-section editing with reusable overview templates
+- Inline project data and custom-section editing with reusable overview templates
 - Plan validation, named approval, audit trail, and immutable revision snapshots
 - Physical one-page A0 landscape PDF export
 - Selectable and user-managed DOCX templates with safe placeholders, loops, missing-field checks, and editable Word output
@@ -58,8 +61,9 @@ The bundled safety content is starter material. Its regulation references are in
 ```bash
 npm run dev          # local app on port 4173
 ./run_local.sh       # install dependencies when needed and start the local app
-npm run check        # lint, unit/component tests, type-check, production build
+npm run check        # lint, tests, build, Chromium/WebKit journeys, dependency audit
 npm run test         # Vitest suite
+npm run test:contacts-db # disposable PostgreSQL migration and Contacts RLS checks
 npm run qa:exports   # write representative exports to /private/tmp/quicksige-export-qa
 npm run build        # production bundle in dist/
 npm run preview      # serve the production bundle locally
@@ -74,7 +78,8 @@ npm run preview      # serve the production bundle locally
 - `src/pages` and `src/components`: React application and design system
 - `src/documents`: restricted Word-template platform and placeholder registry
 - `src/export`: physical A0 vector PDF rendering
-- `MVP.md` and `MVP_iteration_1.md`: product scope, delivery state, and future work
+- `docs/CONTACTS.md`: Contacts entities, migration, imports, connector setup, privacy, and troubleshooting
+- `MVP.md` and `MVP_iteration_*.md`: product scope, delivery state, and checkable implementation plans
 
 The UI is React 19, TypeScript, React Router, and Vite. The local adapter stores a versioned `AppDatabase` document and migrates existing browser data. All state changes go through `AppProvider` and `AppRepository`, keeping the UI independent of the future Supabase adapter. Published revisions snapshot the project, physical plan layout, category, and localized block content so old exports cannot silently change when catalog content evolves.
 
@@ -84,6 +89,10 @@ The current repository interfaces carry organization ownership and keep relation
 
 Before a hosted pilot, connect the repository interface to Supabase Auth/Database/Storage, add server-side mutation authorization, finalize legal content review, and run tenant-isolation tests against a real local Supabase instance. These deployment hardening tasks do not block local product evaluation.
 
+### Contact connector setup
+
+File imports need no external configuration. Microsoft contact import uses Microsoft Graph scopes `User.Read` and `Contacts.Read`; Google import uses `contacts.readonly` plus basic account identity. Set `VITE_MICROSOFT_CLIENT_ID` and/or `VITE_GOOGLE_CLIENT_ID` from `.env.example`, and register the exact QuickSiGe origin in the corresponding SPA/OAuth client. Provider tokens use in-memory browser storage, are never written to the QuickSiGe database, and Google tokens are revoked after the one-time import. Imported records are previewed before commit and retain only the provider account/contact identifiers needed to recognize a later re-import.
+
 ## Quality status
 
-`npm run check` currently passes with 51 tests across twelve suites and ten Playwright journeys split across Chromium and WebKit. The export QA fixture has been rendered and inspected as an exact one-page A0 landscape PDF, a two-page template-generated A4 DOCX, and six template-generated supporting DOCX files. The dependency audit reports no known vulnerabilities.
+The automated gate includes 194 Vitest assertions across 28 files and 62 Playwright checks split across Chromium and WebKit. Contacts coverage includes create/import/export/project assignment, multi-role import, JSON portability export, persisted workspace preferences, bulk tagging, reviewed merge choices, company lifecycle impact review, a 10,000-contact bounded-rendering fixture, and five responsive viewport classes. A disposable PostgreSQL 17 gate verifies the Contacts migration against empty and Iteration 2-compatible databases plus owner/admin/editor/viewer/non-member and cross-tenant RLS behavior. The export QA fixture covers an exact one-page A0 landscape PDF and a template-generated four-page A4 DOCX; both are rendered and inspected during release QA.

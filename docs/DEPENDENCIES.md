@@ -14,6 +14,8 @@ The dependency lockfile is authoritative for exact versions. The release gate ru
 | docx-templates | Restricted OOXML template rendering behind the QuickSiGe adapter | MIT |
 | docx | Standard editable DOCX template creation | MIT |
 | idb | IndexedDB blob repository | ISC |
+| read-excel-file | Browser-side, read-only `.xlsx` contact import; loaded only when needed | MIT |
+| Microsoft Authentication Library (MSAL) | In-memory OAuth for read-only Microsoft Graph contact import; loaded only when invoked | MIT |
 | Zod | Persisted-data and form validation | MIT |
 | Lucide React | Product icons | ISC |
 

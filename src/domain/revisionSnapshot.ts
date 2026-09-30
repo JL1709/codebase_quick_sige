@@ -1,4 +1,5 @@
 import type { AppDatabase, Plan, Project, RevisionSnapshot } from "./types";
+import { projectWithResolvedParticipants } from "./contacts";
 
 /**
  * A publication owns a deep copy of every mutable record needed for later exports.
@@ -14,8 +15,9 @@ export function buildRevisionSnapshot(
     (configuration) => configuration.projectId === project.id,
   );
   const configuredTemplateIds = new Set(documentConfigurations.map((configuration) => configuration.templateId));
+  const resolvedProject = projectWithResolvedParticipants(database, project);
   return structuredClone({
-    project,
+    project: resolvedProject,
     plan,
     blocks: database.blocks.filter((block) => usedBlockIds.has(block.id)),
     categories: database.categories,

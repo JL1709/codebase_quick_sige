@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AppRepository } from "../data/localRepository";
+import { contactsRepositorySnapshot, type AppRepository } from "../data/localRepository";
 import { createSeedDatabase } from "../data/seed";
 import type { AppDatabase, DocumentTemplate, Locale } from "../domain/types";
 import { I18nProvider } from "../i18n/I18nProvider";
@@ -14,6 +14,8 @@ function createMemoryRepository(initialDatabase: AppDatabase) {
   const repository: AppRepository = {
     load: () => database,
     save: (nextDatabase) => { database = structuredClone(nextDatabase); },
+    loadContacts: () => structuredClone(contactsRepositorySnapshot(database)),
+    saveContacts: (snapshot) => { database = { ...database, ...structuredClone(snapshot) }; },
     reset: () => database,
     hasBackup: () => false,
     restoreBackup: () => database,

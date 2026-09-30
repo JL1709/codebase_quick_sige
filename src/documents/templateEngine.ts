@@ -502,8 +502,8 @@ export function buildTemplateData(
     en: { new_build: "New build", renovation: "Renovation", demolition: "Demolition" },
   };
   const participantRoleLabels: Record<Locale, Record<Project["participants"][number]["role"], string>> = {
-    de: { client: "Auftraggeber", owner: "Bauherr", coordinator: "SiGe-Koordination", architect: "Architektur", planner: "Fachplanung", site_manager: "Bauleitung", contractor: "Auftragnehmer" },
-    en: { client: "Client", owner: "Owner", coordinator: "Safety coordination", architect: "Architecture", planner: "Specialist planning", site_manager: "Site management", contractor: "Contractor" },
+    de: { client: "Auftraggeber", owner: "Bauherr", coordinator: "SiGe-Koordination", architect: "Architektur", planner: "Fachplanung", site_manager: "Bauleitung", contractor: "Auftragnehmer", custom: "Weitere Rolle" },
+    en: { client: "Client", owner: "Owner", coordinator: "Safety coordination", architect: "Architecture", planner: "Specialist planning", site_manager: "Site management", contractor: "Contractor", custom: "Other role" },
   };
   const projectFields: Record<string, unknown> = {
     number: project.projectNumber ?? "", name: project.name, description: project.description ?? "", address: project.address ?? "",
@@ -527,7 +527,7 @@ export function buildTemplateData(
       project: projectFields,
       overview: { ...projectFields, ...customSections },
       emergency_contacts: project.emergencyContacts.map((contact) => ({ label: contact.label, name: contact.name, phone: contact.phone })),
-      participants: project.participants.map((participant) => ({ role: participant.role, role_label: participantRoleLabels[locale][participant.role], company: participant.company, name: participant.name, email: participant.email, phone: participant.phone })),
+      participants: project.participants.map((participant) => ({ role: participant.role, role_label: participant.customRole || participantRoleLabels[locale][participant.role], company: participant.company, name: participant.name, email: participant.email, phone: participant.phone })),
       plan: {
         title: plan ? (locale === "de" ? "Sicherheits- und Gesundheitsschutzplan" : "Safety and Health Plan") : "",
         category_tree: categoryTree,
