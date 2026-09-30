@@ -2,7 +2,7 @@ import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import type { PDFPageProxy } from "pdfjs-dist";
 import type { PdfPageMetadata } from "../domain/types";
 
-const DEFAULT_PREVIEW_WIDTH = 1_200;
+export const DEFAULT_PREVIEW_WIDTH = 1_200;
 
 export interface PdfInspection {
   previewDataUrl: string;
@@ -19,11 +19,21 @@ export interface PdfPageRenderRequest {
   targetWidth?: number;
 }
 
+export interface PdfPageRenderer {
+  renderPage(pageNumber: number, targetWidth: number): Promise<RenderedPdfPage>;
+  destroy(): Promise<void>;
+}
+
 async function loadPdf(file: Blob) {
   const { getDocument, GlobalWorkerOptions } = await import("pdfjs-dist");
   GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
   const loadingTask = getDocument({ data: new Uint8Array(await file.arrayBuffer()) });
-  return { loadingTask, document: await loadingTask.promise };
+  try {
+    return { loadingTask, document: await loadingTask.promise };
+  } catch (error) {
+    await loadingTask.destroy();
+    throw error;
+  }
 }
 
 async function renderLoadedPage(page: PDFPageProxy, targetWidth: number): Promise<RenderedPdfPage> {
@@ -38,6 +48,25 @@ async function renderLoadedPage(page: PDFPageProxy, targetWidth: number): Promis
     width: baseViewport.width,
     height: baseViewport.height,
     dataUrl: canvas.toDataURL("image/png"),
+  };
+}
+
+export async function createPdfPageRenderer(file: Blob): Promise<PdfPageRenderer> {
+  const { loadingTask, document } = await loadPdf(file);
+  return {
+    async renderPage(pageNumber, targetWidth) {
+      // A missing page must never silently display another page's safety information.
+      if (!Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > document.numPages) {
+        throw new RangeError(`PDF page ${pageNumber} does not exist`);
+      }
+      const page = await document.getPage(pageNumber);
+      try {
+        return await renderLoadedPage(page, targetWidth);
+      } finally {
+        page.cleanup();
+      }
+    },
+    destroy: () => loadingTask.destroy(),
   };
 }
 
@@ -73,18 +102,15 @@ export async function renderPdfPagesWithMetadata(
   file: Blob,
   requests: PdfPageRenderRequest[],
 ): Promise<RenderedPdfPage[]> {
-  const { loadingTask, document } = await loadPdf(file);
+  const renderer = await createPdfPageRenderer(file);
   try {
     const renderedPages: RenderedPdfPage[] = [];
     for (const request of requests) {
-      const safePageNumber = Math.min(Math.max(1, request.pageNumber), document.numPages);
-      const page = await document.getPage(safePageNumber);
-      renderedPages.push(await renderLoadedPage(page, request.targetWidth ?? DEFAULT_PREVIEW_WIDTH));
-      page.cleanup();
+      renderedPages.push(await renderer.renderPage(request.pageNumber, request.targetWidth ?? DEFAULT_PREVIEW_WIDTH));
     }
     return renderedPages;
   } finally {
-    await loadingTask.destroy();
+    await renderer.destroy();
   }
 }
 

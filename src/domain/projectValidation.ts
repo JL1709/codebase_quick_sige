@@ -13,13 +13,14 @@ const projectOverviewEntrySchema: z.ZodType<ProjectFormValues["overviewSections"
 
 export const projectFormSchema = z.object({
   name: z.string().trim().min(1).max(160),
+  participantsSectionName: z.string().trim().min(1).max(160),
   overviewSections: z.array(z.object({
     id: z.string().trim().min(1),
-    templateId: z.string().trim().min(1).optional(),
     name: z.string().trim().min(1).max(160),
     placeholderKey: z.string().trim().min(1),
     entries: z.array(projectOverviewEntrySchema),
   })),
+  overviewSectionOrder: z.array(z.string().trim().min(1)),
 });
 
 export function validateProjectForm(values: ProjectFormValues) {

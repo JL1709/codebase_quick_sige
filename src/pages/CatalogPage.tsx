@@ -297,7 +297,7 @@ function CategoryPlacementNodes({ categories, locale, selectedId, selectedIds, e
   })}</>;
 }
 
-function CategoryEditorModal({ open, category, categories, locale: uiLocale, onClose, onSave, onArchive, onRestore, t }: { open: boolean; category: BuildingBlockCategory | null; categories: BuildingBlockCategory[]; locale: Locale; onClose: () => void; onSave: (category: BuildingBlockCategory) => void; onArchive?: () => void; onRestore?: () => void; t: (key: string) => string }) {
+function CategoryEditorModal({ open, category, categories, locale: uiLocale, onClose, onSave, onArchive, onRestore, t }: { open: boolean; category: BuildingBlockCategory | null; categories: BuildingBlockCategory[]; locale: Locale; onClose: () => void; onSave: (category: BuildingBlockCategory) => void; onArchive?: () => void; onRestore?: () => void; t: ReturnType<typeof useI18n>["t"] }) {
   const [draft, setDraft] = useState<BuildingBlockCategory>(() => category ? structuredClone(category) : ({
     id: newId("category"),
     color: DEFAULT_ROOT_CATEGORY_COLOR,
@@ -307,6 +307,7 @@ function CategoryEditorModal({ open, category, categories, locale: uiLocale, onC
   }));
   const draftCategories = [...categories.filter((candidate) => candidate.id !== draft.id), draft];
   const displayedColor = categoryHierarchyColor(draft.id, draftCategories);
+  const rootCategory = categoryTrail(draft.id, draftCategories)[0];
   const unavailableParentIds = category ? categoryDescendantIds(category.id, categories) : new Set<string>();
   const updateParent = (parentId: string | undefined) => setDraft((current) => {
     const currentCategories = [...categories.filter((candidate) => candidate.id !== current.id), current];
@@ -326,9 +327,13 @@ function CategoryEditorModal({ open, category, categories, locale: uiLocale, onC
   }));
   return <Modal open={open} title={category ? t("catalog.editCategory") : t("catalog.addCategory")} onClose={onClose}>
     <form onSubmit={(event) => { event.preventDefault(); onSave(normalizeCategoryColorOwnership(draft)); }}>
-      <div className="modal-body form-grid">
+      <div className="modal-body form-grid category-editor-fields">
         <label className="field"><span>{t("catalog.parentCategory")}</span><select value={draft.parentId ?? ""} onChange={(event) => updateParent(event.target.value || undefined)}><option value="">—</option>{categories.filter((candidate) => candidate.lifecycle === "active" && !unavailableParentIds.has(candidate.id)).map((candidate) => <option key={candidate.id} value={candidate.id}>{categoryPath(candidate.id, categories, uiLocale)}</option>)}</select></label>
-        <label className="field"><span>{t("catalog.color")}</span><input type="color" value={displayedColor} disabled={Boolean(draft.parentId)} onChange={(event) => setDraft({ ...draft, color: event.target.value })} /></label>
+        {draft.parentId ? <div className="field category-color-preview">
+          <span>{t("catalog.color")}</span>
+          <div className="category-color-preview-value"><span className="category-color-swatch" style={{ backgroundColor: displayedColor }} aria-hidden="true" /><span>{t("catalog.automaticColor")}</span></div>
+          <p className="field-help">{t("catalog.colorDerivedFromRoot", { name: rootCategory?.translations[uiLocale].name ?? "" })}</p>
+        </div> : <label className="field"><span>{t("catalog.color")}</span><input type="color" value={displayedColor} onChange={(event) => setDraft({ ...draft, color: event.target.value })} /></label>}
         <label className="field span-two"><span>{t("catalog.categoryName")}</span><input required value={draft.translations[uiLocale].name} onChange={(event) => updateName(event.target.value)} /></label>
       </div>
       <div className="modal-footer">{onArchive && <Button type="button" variant="danger" onClick={onArchive}>{t("common.archive")}</Button>}{onRestore && <Button type="button" variant="secondary" onClick={onRestore}>{t("common.restore")}</Button>}<Button type="button" variant="secondary" onClick={onClose}>{t("common.cancel")}</Button><Button type="submit">{t("common.save")}</Button></div>

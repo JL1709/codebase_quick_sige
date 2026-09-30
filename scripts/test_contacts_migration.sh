@@ -34,6 +34,9 @@ apply_sql postgres supabase/tests/bootstrap.sql
 apply_sql postgres supabase/migrations/202609260001_initial_schema.sql
 apply_sql postgres supabase/migrations/202609280001_plan_creation_lifecycle.sql
 apply_sql postgres supabase/migrations/202609290001_contacts_workspace.sql
+apply_sql postgres supabase/migrations/202609300001_project_roles_overview_order.sql
+apply_sql postgres supabase/migrations/202609300002_project_scoped_roles.sql
+apply_sql postgres supabase/migrations/202609300003_canonical_contact_company.sql
 
 # The second database proves backfill and RLS behavior from an Iteration 2-compatible state.
 docker exec "${container_name}" createdb --username postgres quicksige_fixture
@@ -42,6 +45,9 @@ apply_sql quicksige_fixture supabase/migrations/202609260001_initial_schema.sql
 apply_sql quicksige_fixture supabase/migrations/202609280001_plan_creation_lifecycle.sql
 apply_sql quicksige_fixture supabase/tests/contacts_pre_migration_fixture.sql
 apply_sql quicksige_fixture supabase/migrations/202609290001_contacts_workspace.sql
+apply_sql quicksige_fixture supabase/migrations/202609300001_project_roles_overview_order.sql
+apply_sql quicksige_fixture supabase/migrations/202609300002_project_scoped_roles.sql
+apply_sql quicksige_fixture supabase/migrations/202609300003_canonical_contact_company.sql
 apply_sql quicksige_fixture supabase/tests/contacts_rls.sql
 
 echo "Contacts migrations and RLS checks passed."

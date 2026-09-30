@@ -1,22 +1,22 @@
 import {
-  Archive, Building2, Copy, Download, History, Mail, Merge, Phone, Plus, RotateCcw, Search, Tag, Trash2, Upload, UserRound, Users,
+  Archive, Building2, Columns3, Copy, Download, History, Mail, Merge, Phone, Plus, RotateCcw, Search, Trash2, Upload, UserRound, Users,
 } from "lucide-react";
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { CompanyFormModal, ContactFormModal } from "../components/ContactFormModal";
 import { ContactImportModal } from "../components/ContactImportModal";
+import { CREATE_PROJECT_ROLE_VALUE, ProjectRoleSelect } from "../components/ProjectRoleSelect";
 import { Badge, Button, EmptyState, Modal, PageHeader } from "../components/Ui";
 import { exportCandidatesCsv, exportCandidatesVCard, type ContactImportCandidate } from "../domain/contactImport";
 import { buildContactsDataExport } from "../domain/contactPrivacyExport";
-import { companyForContact, contactDisplayName, normalizedContactSearchText, primaryEmail, primaryPhone } from "../domain/contacts";
-import type { Company, Contact, ProjectParticipantRole, RecordLifecycle } from "../domain/types";
+import { companyForContact, contactDisplayName, normalizedContactSearchText, primaryEmail, primaryPhone, projectContactRoleFromKey, projectContactRoleLabel, STANDARD_PROJECT_ROLES } from "../domain/contacts";
+import type { AppDatabase, Company, Contact, ProjectParticipantRole, RecordLifecycle } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
-import { useApp, type CompanyMergeResolution, type ContactMergeResolution } from "../state/AppProvider";
+import { newId, useApp, type CompanyMergeResolution, type ContactMergeResolution } from "../state/AppProvider";
 import { NotFoundPage } from "./NotFoundPage";
 import { copyTextToClipboard } from "../utils/clipboard";
 
 type ContactTab = "people" | "companies";
-type ContactSort = "name" | "company" | "updated" | "created" | "project_count";
 type ContactColumn = "company" | "details" | "projects" | "source" | "updated";
 type ContactMergeField = "prefix" | "givenName" | "familyName" | "suffix" | "displayName" | "notes";
 type CompanyMergeField = "website" | "domain" | "email" | "phone" | "address" | "notes";
@@ -26,10 +26,8 @@ interface ContactWorkspacePreferences {
   lifecycle: RecordLifecycle | "all";
   companyId: string;
   tag: string;
-  completeness: "all" | "complete" | "incomplete";
   projectId: string;
   role: ProjectParticipantRole | "all";
-  sort: ContactSort;
   visibleColumns: ContactColumn[];
 }
 const CONTACT_PAGE_SIZE = 100;
@@ -37,6 +35,13 @@ const DEFAULT_CONTACT_COLUMNS: ContactColumn[] = ["company", "details", "project
 const CONTACT_COLUMNS: ContactColumn[] = ["company", "details", "projects", "source", "updated"];
 const CONTACT_MERGE_FIELDS: ContactMergeField[] = ["prefix", "givenName", "familyName", "suffix", "displayName", "notes"];
 const COMPANY_MERGE_FIELDS: CompanyMergeField[] = ["website", "domain", "email", "phone", "address", "notes"];
+
+function projectAssignmentCountForCompany(database: AppDatabase, companyId: string): number {
+  const contactIds = new Set(database.contactAffiliations
+    .filter((affiliation) => affiliation.companyId === companyId)
+    .map((affiliation) => affiliation.contactId));
+  return database.projectContactAssignments.filter((assignment) => contactIds.has(assignment.contactId)).length;
+}
 
 function readWorkspacePreferences(userId: string): Partial<ContactWorkspacePreferences> {
   try {
@@ -79,7 +84,7 @@ export function ContactsPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const {
-    database, archiveContact, restoreContact, deleteContact, mergeContacts, tagContacts, assignContactsToProject,
+    database, archiveContact, restoreContact, deleteContact, mergeContacts, assignContactsToProject, createProjectRoleDefinition,
     archiveCompany, restoreCompany, deleteCompany, mergeCompanies, undoContactImportBatch, recordContactExport,
   } = useApp();
   const { t, formatDate } = useI18n();
@@ -89,10 +94,8 @@ export function ContactsPage() {
   const [lifecycle, setLifecycle] = useState<RecordLifecycle | "all">(savedPreferences.lifecycle ?? "active");
   const [companyId, setCompanyId] = useState(savedPreferences.companyId ?? "");
   const [tag, setTag] = useState(savedPreferences.tag ?? "");
-  const [completeness, setCompleteness] = useState<"all" | "complete" | "incomplete">(savedPreferences.completeness ?? "all");
   const [projectId, setProjectId] = useState(savedPreferences.projectId ?? "");
   const [role, setRole] = useState<ProjectParticipantRole | "all">(savedPreferences.role ?? "all");
-  const [sort, setSort] = useState<ContactSort>(savedPreferences.sort ?? "name");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [previewContactId, setPreviewContactId] = useState(routeContactId);
   const [editingContact, setEditingContact] = useState<Contact | undefined>();
@@ -105,12 +108,10 @@ export function ContactsPage() {
   const [companyMergeOpen, setCompanyMergeOpen] = useState(false);
   const [companyMergeTargetId, setCompanyMergeTargetId] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [bulkTagOpen, setBulkTagOpen] = useState(false);
-  const [bulkTag, setBulkTag] = useState("");
   const [bulkProjectOpen, setBulkProjectOpen] = useState(false);
   const [bulkProjectId, setBulkProjectId] = useState("");
-  const [bulkRole, setBulkRole] = useState<ProjectParticipantRole>("contractor");
-  const [bulkCustomRole, setBulkCustomRole] = useState("");
+  const [bulkRoleKey, setBulkRoleKey] = useState("");
+  const [bulkNewRoleName, setBulkNewRoleName] = useState("");
   const [contactMergeSources, setContactMergeSources] = useState<Partial<Record<ContactMergeField, string>>>({});
   const [companyMergeSources, setCompanyMergeSources] = useState<Partial<Record<CompanyMergeField, string>>>({});
   const [deleteContactId, setDeleteContactId] = useState("");
@@ -119,6 +120,7 @@ export function ContactsPage() {
   const [deleteError, setDeleteError] = useState("");
   const [visibleCount, setVisibleCount] = useState(CONTACT_PAGE_SIZE);
   const [undoMessage, setUndoMessage] = useState("");
+  const columnPicker = useRef<HTMLDetailsElement>(null);
   const [visibleColumns, setVisibleColumns] = useState<Set<ContactColumn>>(() => {
     try {
       const saved = savedPreferences.visibleColumns
@@ -137,15 +139,20 @@ export function ContactsPage() {
     if (routeContactId) setPreviewContactId(routeContactId);
   }, [location.pathname, routeContactId]);
   useEffect(() => {
-    if (tab === "companies" && (sort === "company" || sort === "project_count")) setSort("name");
-  }, [sort, tab]);
+    const closeColumnPickerOutside = (event: PointerEvent) => {
+      const picker = columnPicker.current;
+      if (picker?.open && event.target instanceof Node && !picker.contains(event.target)) picker.open = false;
+    };
+    document.addEventListener("pointerdown", closeColumnPickerOutside);
+    return () => document.removeEventListener("pointerdown", closeColumnPickerOutside);
+  }, []);
   useEffect(() => {
     const preferences: ContactWorkspacePreferences = {
-      tab, lifecycle, companyId, tag, completeness, projectId, role, sort, visibleColumns: [...visibleColumns],
+      tab, lifecycle, companyId, tag, projectId, role, visibleColumns: [...visibleColumns],
     };
     window.localStorage.setItem(`quicksige.contacts.preferences.${database.user.id}`, JSON.stringify(preferences));
-  }, [companyId, completeness, database.user.id, lifecycle, projectId, role, sort, tab, tag, visibleColumns]);
-  useEffect(() => setVisibleCount(CONTACT_PAGE_SIZE), [companyId, completeness, lifecycle, projectId, query, role, sort, tab, tag]);
+  }, [companyId, database.user.id, lifecycle, projectId, role, tab, tag, visibleColumns]);
+  useEffect(() => setVisibleCount(CONTACT_PAGE_SIZE), [companyId, lifecycle, projectId, query, role, tab, tag]);
 
   const availableTags = useMemo(() => [...new Set([
     ...database.contacts.flatMap((contact) => contact.tags),
@@ -157,28 +164,16 @@ export function ContactsPage() {
     const assignments = database.projectContactAssignments.filter((assignment) => assignment.contactId === contact.id && assignment.lifecycle === "active");
     if (companyId && companyForContact(database, contact.id)?.id !== companyId) return false;
     if (tag && !contact.tags.includes(tag)) return false;
-    const hasContactMethod = contact.emails.length > 0 || contact.phones.length > 0;
-    if (completeness === "complete" && !hasContactMethod) return false;
-    if (completeness === "incomplete" && hasContactMethod) return false;
     if (projectId && !assignments.some((assignment) => assignment.projectId === projectId)) return false;
     if (role !== "all" && !assignments.some((assignment) => assignment.roles.some((candidateRole) => candidateRole.role === role))) return false;
     return !deferredQuery || normalizedContactSearchText(database, contact).includes(deferredQuery);
-  }).sort((left, right) => {
-    if (sort === "updated") return right.updatedAt.localeCompare(left.updatedAt);
-    if (sort === "created") return right.createdAt.localeCompare(left.createdAt);
-    if (sort === "project_count") {
-      const assignmentCount = (contact: Contact) => database.projectContactAssignments.filter((assignment) => assignment.contactId === contact.id && assignment.lifecycle === "active").length;
-      return assignmentCount(right) - assignmentCount(left) || contactDisplayName(left).localeCompare(contactDisplayName(right));
-    }
-    if (sort === "company") return (companyForContact(database, left.id)?.name ?? "").localeCompare(companyForContact(database, right.id)?.name ?? "");
-    return contactDisplayName(left).localeCompare(contactDisplayName(right));
-  }), [companyId, completeness, database, deferredQuery, lifecycle, projectId, role, sort, tag]);
+  }).sort((left, right) => contactDisplayName(left).localeCompare(contactDisplayName(right))), [companyId, database, deferredQuery, lifecycle, projectId, role, tag]);
 
   const filteredCompanies = useMemo(() => database.companies.filter((company) => (
     (lifecycle === "all" || company.lifecycle === lifecycle)
     && (!tag || company.tags.includes(tag))
     && (!deferredQuery || [company.name, company.domain, company.email, company.phone, ...company.tags].join(" ").toLocaleLowerCase().includes(deferredQuery))
-  )).sort((left, right) => sort === "updated" ? right.updatedAt.localeCompare(left.updatedAt) : sort === "created" ? right.createdAt.localeCompare(left.createdAt) : left.name.localeCompare(right.name)), [database.companies, deferredQuery, lifecycle, sort, tag]);
+  )).sort((left, right) => left.name.localeCompare(right.name)), [database.companies, deferredQuery, lifecycle, tag]);
 
   const previewContact = database.contacts.find((contact) => contact.id === previewContactId) ?? filteredContacts[0];
   const previewCompany = database.companies.find((company) => company.id === routeCompanyId) ?? filteredCompanies[0];
@@ -207,6 +202,30 @@ export function ContactsPage() {
   const openNew = () => {
     if (tab === "people") { setEditingContact(undefined); setContactFormOpen(true); }
     else { setEditingCompany(undefined); setCompanyFormOpen(true); }
+  };
+  const openBulkProjectAssignment = () => {
+    setBulkProjectId("");
+    setBulkRoleKey("");
+    setBulkNewRoleName("");
+    setBulkProjectOpen(true);
+  };
+  const confirmBulkProjectAssignment = () => {
+    const createdDefinition = bulkRoleKey === CREATE_PROJECT_ROLE_VALUE
+      ? createProjectRoleDefinition(bulkNewRoleName)
+      : undefined;
+    if (bulkRoleKey === CREATE_PROJECT_ROLE_VALUE && !createdDefinition) return;
+    const selectedRole = createdDefinition
+      ? { role: "custom" as const, roleDefinitionId: createdDefinition.id, customLabel: createdDefinition.name }
+      : bulkRoleKey ? projectContactRoleFromKey(database, bulkRoleKey, newId("role")) : undefined;
+    if (bulkRoleKey && !selectedRole) return;
+    assignContactsToProject(
+      selectedContacts.map((contact) => contact.id),
+      bulkProjectId,
+      selectedRole?.role,
+      selectedRole?.customLabel,
+      selectedRole?.roleDefinitionId,
+    );
+    setBulkProjectOpen(false);
   };
   const exportContactRecords = (contacts: Contact[], format: "csv" | "vcf") => {
     if (!canManageContacts) return;
@@ -291,35 +310,36 @@ export function ContactsPage() {
     <section className="panel contacts-toolbar">
       <div className="search-shell"><Search size={16} /><input className="search-input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("contacts.searchPlaceholder")} /></div>
       <select aria-label={t("contacts.lifecycle")} value={lifecycle} onChange={(event) => setLifecycle(event.target.value as RecordLifecycle | "all")}><option value="active">{t("contacts.active")}</option><option value="archived">{t("common.archived")}</option><option value="all">{t("contacts.all")}</option></select>
-      {tab === "people" && <><select aria-label={t("contacts.company")} value={companyId} onChange={(event) => setCompanyId(event.target.value)}><option value="">{t("contacts.allCompanies")}</option>{database.companies.filter((company) => company.lifecycle === "active").map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select><select aria-label={t("contacts.project")} value={projectId} onChange={(event) => setProjectId(event.target.value)}><option value="">{t("contacts.allProjects")}</option>{database.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select><select aria-label={t("contacts.role")} value={role} onChange={(event) => setRole(event.target.value as ProjectParticipantRole | "all")}><option value="all">{t("contacts.allRoles")}</option>{(["client", "owner", "coordinator", "architect", "planner", "site_manager", "contractor", "custom"] as ProjectParticipantRole[]).map((value) => <option key={value} value={value}>{t(`contacts.role.${value}`)}</option>)}</select><select aria-label={t("contacts.completeness")} value={completeness} onChange={(event) => setCompleteness(event.target.value as typeof completeness)}><option value="all">{t("contacts.allRecords")}</option><option value="complete">{t("contacts.complete")}</option><option value="incomplete">{t("contacts.incomplete")}</option></select></>}
+      {tab === "people" && <><select aria-label={t("contacts.company")} value={companyId} onChange={(event) => setCompanyId(event.target.value)}><option value="">{t("contacts.allCompanies")}</option>{database.companies.filter((company) => company.lifecycle === "active").map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select><select aria-label={t("contacts.project")} value={projectId} onChange={(event) => setProjectId(event.target.value)}><option value="">{t("contacts.allProjects")}</option>{database.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select><select aria-label={t("contacts.role")} value={role} onChange={(event) => setRole(event.target.value as ProjectParticipantRole | "all")}><option value="all">{t("contacts.allRoles")}</option>{[...STANDARD_PROJECT_ROLES, "custom" as const].map((value) => <option key={value} value={value}>{t(`contacts.role.${value}`)}</option>)}</select></>}
       <select aria-label={t("contacts.tags")} value={tag} onChange={(event) => setTag(event.target.value)}><option value="">{t("contacts.allTags")}</option>{availableTags.map((value) => <option key={value} value={value}>{value}</option>)}</select>
-      <select aria-label={t("contacts.sort")} value={sort} onChange={(event) => setSort(event.target.value as ContactSort)}><option value="name">{t("contacts.sort.name")}</option>{tab === "people" && <option value="company">{t("contacts.sort.company")}</option>}<option value="updated">{t("contacts.sort.updated")}</option><option value="created">{t("contacts.sort.created")}</option>{tab === "people" && <option value="project_count">{t("contacts.sort.projectCount")}</option>}</select>
-      {tab === "people" && <details className="contacts-column-picker"><summary>{t("contacts.columns")}</summary><div>{(["company", "details", "projects", "source", "updated"] as ContactColumn[]).map((column) => <label key={column}><input type="checkbox" checked={visibleColumns.has(column)} onChange={(event) => setVisibleColumns((current) => { const next = new Set(current); if (event.target.checked) next.add(column); else next.delete(column); return next; })} />{t(`contacts.column.${column}`)}</label>)}</div></details>}
     </section>
 
-    {tab === "people" && selectedIds.size > 0 && <div className="contacts-bulk-bar"><strong>{t("contacts.selected", { count: selectedIds.size })}</strong><Button size="small" variant="secondary" disabled={!canManageContacts} onClick={() => setBulkProjectOpen(true)}><Users size={14} />{t("contacts.bulkAddProject")}</Button><Button size="small" variant="secondary" disabled={!canManageContacts} onClick={() => setBulkTagOpen(true)}><Tag size={14} />{t("contacts.bulkTag")}</Button><Button size="small" variant="secondary" disabled={!canManageContacts} onClick={() => exportContacts("csv")}><Download size={14} />CSV</Button><Button size="small" variant="secondary" disabled={!canManageContacts} onClick={() => exportContacts("vcf")}><Download size={14} />vCard</Button><Button size="small" variant="secondary" disabled={!canManageContacts} onClick={exportPortableData}><Download size={14} />JSON</Button>{selectedIds.size === 2 && <Button size="small" variant="secondary" disabled={!canManageContacts} onClick={openContactMerge}><Merge size={14} />{t("contacts.reviewDuplicates")}</Button>}<Button size="small" variant="ghost" disabled={!canManageContacts} onClick={() => setArchiveRequest({ kind: "contact", ids: selectedContacts.map((contact) => contact.id) })}><Archive size={14} />{lifecycle === "archived" ? t("common.restore") : t("common.archive")}</Button></div>}
+    {tab === "people" && selectedIds.size > 0 && <div className="contacts-bulk-bar"><strong>{t("contacts.selected", { count: selectedIds.size })}</strong><Button size="small" variant="secondary" disabled={!canManageContacts} onClick={openBulkProjectAssignment}><Users size={14} />{t("contacts.bulkAddProject")}</Button><Button size="small" variant="secondary" disabled={!canManageContacts} onClick={() => exportContacts("csv")}><Download size={14} />CSV</Button><Button size="small" variant="secondary" disabled={!canManageContacts} onClick={() => exportContacts("vcf")}><Download size={14} />vCard</Button><Button size="small" variant="secondary" disabled={!canManageContacts} onClick={exportPortableData}><Download size={14} />JSON</Button>{selectedIds.size === 2 && <Button size="small" variant="secondary" disabled={!canManageContacts} onClick={openContactMerge}><Merge size={14} />{t("contacts.reviewDuplicates")}</Button>}<Button size="small" variant="ghost" disabled={!canManageContacts} onClick={() => setArchiveRequest({ kind: "contact", ids: selectedContacts.map((contact) => contact.id) })}><Archive size={14} />{lifecycle === "archived" ? t("common.restore") : t("common.archive")}</Button></div>}
     {tab === "companies" && selectedIds.size > 0 && <div className="contacts-bulk-bar"><strong>{t("contacts.selected", { count: selectedIds.size })}</strong><Button size="small" variant="secondary" disabled={!canManageContacts} onClick={exportPortableData}><Download size={14} />JSON</Button>{selectedIds.size === 2 && <Button size="small" variant="secondary" disabled={!canManageContacts} onClick={openCompanyMerge}><Merge size={14} />{t("contacts.reviewDuplicates")}</Button>}<Button size="small" variant="ghost" disabled={!canManageContacts} onClick={() => setArchiveRequest({ kind: "company", ids: selectedCompanies.map((company) => company.id) })}><Archive size={14} />{lifecycle === "archived" ? t("common.restore") : t("common.archive")}</Button></div>}
 
     {tab === "people" ? <div className="contacts-layout">
       <section className="panel contacts-table-panel">
-        {filteredContacts.length === 0 ? <EmptyState icon={<UserRound />} title={t("contacts.none")} text={t("contacts.noneText")} action={<Button onClick={openNew}><Plus size={15} />{t("contacts.newContact")}</Button>} /> : <div className="contacts-table">
-          <div className="contacts-table-head" style={{ gridTemplateColumns: peopleGridColumns }}><label><input type="checkbox" aria-label={t("contacts.selectAll")} checked={filteredContacts.length > 0 && filteredContacts.every((contact) => selectedIds.has(contact.id))} onChange={(event) => setSelectedIds(event.target.checked ? new Set(filteredContacts.map((contact) => contact.id)) : new Set())} /></label><span>{t("contacts.person")}</span>{visibleColumns.has("company") && <span>{t("contacts.company")}</span>}{visibleColumns.has("details") && <span>{t("contacts.contactDetails")}</span>}{visibleColumns.has("projects") && <span>{t("contacts.projects")}</span>}{visibleColumns.has("source") && <span>{t("contacts.source")}</span>}{visibleColumns.has("updated") && <span>{t("contacts.updatedColumn")}</span>}</div>
-          {visibleContacts.map((contact) => {
-            const company = companyForContact(database, contact.id);
-            const assignments = database.projectContactAssignments.filter((assignment) => assignment.contactId === contact.id && assignment.lifecycle === "active");
-            return <article className={`contacts-table-row ${previewContact?.id === contact.id ? "is-active" : ""}`} style={{ gridTemplateColumns: peopleGridColumns }} key={contact.id}>
-              <label><input type="checkbox" aria-label={t("contacts.selectContact", { name: contactDisplayName(contact) })} checked={selectedIds.has(contact.id)} onChange={() => toggleSelection(contact.id)} /></label>
-              <button type="button" className="contact-identity contact-row-open" onClick={() => { setPreviewContactId(contact.id); navigate(`/contacts/people/${contact.id}`); }}><i>{contactDisplayName(contact).slice(0, 1).toUpperCase()}</i><span><strong>{contactDisplayName(contact)}</strong><small>{contact.tags.join(" · ") || t(`contacts.source.${contact.source}`)}</small></span></button>
-              {visibleColumns.has("company") && <span>{company?.name || "—"}</span>}
-              {visibleColumns.has("details") && <span><small>{primaryEmail(contact)?.value || "—"}</small><small>{primaryPhone(contact)?.value || ""}</small></span>}
-              {visibleColumns.has("projects") && <span>{assignments.length ? <Badge tone="info">{assignments.length}</Badge> : "—"}</span>}
-              {visibleColumns.has("source") && <span>{t(`contacts.source.${contact.source}`)}</span>}
-              {visibleColumns.has("updated") && <span>{formatDate(contact.updatedAt)}</span>}
-            </article>;
-          })}{visibleCount < filteredContacts.length && <div className="contacts-load-more"><Button variant="secondary" size="small" onClick={() => setVisibleCount((current) => current + CONTACT_PAGE_SIZE)}>{t("contacts.showMore", { remaining: filteredContacts.length - visibleCount })}</Button></div>}
-        </div>}
+        {filteredContacts.length === 0 ? <EmptyState icon={<UserRound />} title={t("contacts.none")} text={t("contacts.noneText")} action={<Button onClick={openNew}><Plus size={15} />{t("contacts.newContact")}</Button>} /> : <>
+          <div className="contacts-table-scroll"><div className="contacts-table">
+            <div className="contacts-table-head" style={{ gridTemplateColumns: peopleGridColumns }}><label><input type="checkbox" aria-label={t("contacts.selectAll")} checked={filteredContacts.length > 0 && filteredContacts.every((contact) => selectedIds.has(contact.id))} onChange={(event) => setSelectedIds(event.target.checked ? new Set(filteredContacts.map((contact) => contact.id)) : new Set())} /></label><span>{t("contacts.person")}</span>{visibleColumns.has("company") && <span>{t("contacts.company")}</span>}{visibleColumns.has("details") && <span>{t("contacts.contactDetails")}</span>}{visibleColumns.has("projects") && <span>{t("contacts.projects")}</span>}{visibleColumns.has("source") && <span>{t("contacts.source")}</span>}{visibleColumns.has("updated") && <span>{t("contacts.updatedColumn")}</span>}</div>
+            {visibleContacts.map((contact) => {
+              const company = companyForContact(database, contact.id);
+              const assignments = database.projectContactAssignments.filter((assignment) => assignment.contactId === contact.id && assignment.lifecycle === "active");
+              return <article className={`contacts-table-row ${previewContact?.id === contact.id ? "is-active" : ""}`} style={{ gridTemplateColumns: peopleGridColumns }} key={contact.id}>
+                <label><input type="checkbox" aria-label={t("contacts.selectContact", { name: contactDisplayName(contact) })} checked={selectedIds.has(contact.id)} onChange={() => toggleSelection(contact.id)} /></label>
+                <button type="button" className="contact-identity contact-row-open" onClick={() => { setPreviewContactId(contact.id); navigate(`/contacts/people/${contact.id}`); }}><i>{contactDisplayName(contact).slice(0, 1).toUpperCase()}</i><span><strong>{contactDisplayName(contact)}</strong><small>{contact.tags.join(" · ") || t(`contacts.source.${contact.source}`)}</small></span></button>
+                {visibleColumns.has("company") && <span>{company?.name || "—"}</span>}
+                {visibleColumns.has("details") && <span><small>{primaryEmail(contact)?.value || "—"}</small><small>{primaryPhone(contact)?.value || ""}</small></span>}
+                {visibleColumns.has("projects") && <span>{assignments.length ? <Badge tone="info">{assignments.length}</Badge> : "—"}</span>}
+                {visibleColumns.has("source") && <span>{t(`contacts.source.${contact.source}`)}</span>}
+                {visibleColumns.has("updated") && <span>{formatDate(contact.updatedAt)}</span>}
+              </article>;
+            })}{visibleCount < filteredContacts.length && <div className="contacts-load-more"><Button variant="secondary" size="small" onClick={() => setVisibleCount((current) => current + CONTACT_PAGE_SIZE)}>{t("contacts.showMore", { remaining: filteredContacts.length - visibleCount })}</Button></div>}
+          </div></div>
+          <details ref={columnPicker} className="contacts-column-picker"><summary aria-label={t("contacts.columns")} title={t("contacts.columns")}><Columns3 size={16} /><span className="visually-hidden">{t("contacts.columns")}</span></summary><div>{(["company", "details", "projects", "source", "updated"] as ContactColumn[]).map((column) => <label key={column}><input type="checkbox" checked={visibleColumns.has(column)} onChange={(event) => setVisibleColumns((current) => { const next = new Set(current); if (event.target.checked) next.add(column); else next.delete(column); return next; })} />{t(`contacts.column.${column}`)}</label>)}</div></details>
+        </>}
       </section>
-      {previewContact && <ContactPreview contact={previewContact} canManage={canManageContacts} onEdit={() => { setEditingContact(previewContact); setContactFormOpen(true); }} onAddToProject={() => { setSelectedIds(new Set([previewContact.id])); setBulkProjectOpen(true); }} onExport={() => exportContactRecords([previewContact], "vcf")} onToggleLifecycle={() => setArchiveRequest({ kind: "contact", ids: [previewContact.id] })} onDelete={() => { setDeleteError(""); setDeleteContactId(previewContact.id); }} />}
+      {previewContact && <ContactPreview contact={previewContact} canManage={canManageContacts} onEdit={() => { setEditingContact(previewContact); setContactFormOpen(true); }} onAddToProject={() => { setSelectedIds(new Set([previewContact.id])); openBulkProjectAssignment(); }} onExport={() => exportContactRecords([previewContact], "vcf")} onToggleLifecycle={() => setArchiveRequest({ kind: "contact", ids: [previewContact.id] })} onDelete={() => { setDeleteError(""); setDeleteContactId(previewContact.id); }} />}
     </div> : <div className="contacts-layout"><section className="panel contacts-table-panel">
       {filteredCompanies.length === 0 ? <EmptyState icon={<Building2 />} title={t("contacts.noCompanies")} text={t("contacts.noCompaniesText")} action={<Button onClick={openNew}><Plus size={15} />{t("contacts.newCompany")}</Button>} /> : <><div className="company-grid">{visibleCompanies.map((company) => {
         const contactCount = database.contactAffiliations.filter((affiliation) => affiliation.companyId === company.id && affiliation.lifecycle === "active").length;
@@ -333,14 +353,9 @@ export function ContactsPage() {
     {companyFormOpen && <CompanyFormModal key={editingCompany?.id ?? "new"} open company={editingCompany} onClose={() => setCompanyFormOpen(false)} />}
     {importOpen && <ContactImportModal open onClose={() => setImportOpen(false)} />}
 
-    <Modal open={bulkTagOpen} title={t("contacts.bulkTagTitle")} onClose={() => setBulkTagOpen(false)}>
-      <div className="modal-body"><p>{t("contacts.bulkTagHelp", { count: selectedContacts.length })}</p><label className="field"><span>{t("contacts.tag")}</span><input value={bulkTag} maxLength={80} onChange={(event) => setBulkTag(event.target.value)} /></label></div>
-      <div className="modal-footer"><Button variant="secondary" onClick={() => setBulkTagOpen(false)}>{t("common.cancel")}</Button><Button disabled={!bulkTag.trim()} onClick={() => { tagContacts(selectedContacts.map((contact) => contact.id), bulkTag); setBulkTag(""); setBulkTagOpen(false); }}>{t("common.apply")}</Button></div>
-    </Modal>
-
     <Modal open={bulkProjectOpen} title={t("contacts.bulkAddProjectTitle")} onClose={() => setBulkProjectOpen(false)}>
-      <div className="modal-body"><p>{t("contacts.bulkAddProjectHelp", { count: selectedContacts.length })}</p><div className="form-grid"><label className="field span-two"><span>{t("contacts.project")}</span><select value={bulkProjectId} onChange={(event) => setBulkProjectId(event.target.value)}><option value="">{t("contacts.chooseProject")}</option>{database.projects.filter((project) => project.status !== "archived").map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><label className="field"><span>{t("contacts.role")}</span><select value={bulkRole} onChange={(event) => setBulkRole(event.target.value as ProjectParticipantRole)}>{(["client", "owner", "coordinator", "architect", "planner", "site_manager", "contractor", "custom"] as ProjectParticipantRole[]).map((value) => <option value={value} key={value}>{t(`contacts.role.${value}`)}</option>)}</select></label>{bulkRole === "custom" && <label className="field"><span>{t("contacts.customRole")}</span><input value={bulkCustomRole} onChange={(event) => setBulkCustomRole(event.target.value)} /></label>}</div></div>
-      <div className="modal-footer"><Button variant="secondary" onClick={() => setBulkProjectOpen(false)}>{t("common.cancel")}</Button><Button disabled={!bulkProjectId || (bulkRole === "custom" && !bulkCustomRole.trim())} onClick={() => { assignContactsToProject(selectedContacts.map((contact) => contact.id), bulkProjectId, bulkRole, bulkCustomRole); setBulkProjectOpen(false); }}>{t("contacts.bulkAssign")}</Button></div>
+      <div className="modal-body"><p>{t("contacts.bulkAddProjectHelp", { count: selectedContacts.length })}</p><div className="form-grid"><label className="field span-two"><span>{t("contacts.project")}</span><select value={bulkProjectId} onChange={(event) => setBulkProjectId(event.target.value)}><option value="">{t("contacts.chooseProject")}</option>{database.projects.filter((project) => project.status !== "archived").map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><label className="field"><span>{t("contacts.role")}</span><ProjectRoleSelect value={bulkRoleKey} onChange={(value) => { setBulkRoleKey(value); setBulkNewRoleName(""); }} /></label>{bulkRoleKey === CREATE_PROJECT_ROLE_VALUE && <label className="field"><span>{t("projectRoles.name")}</span><input value={bulkNewRoleName} onChange={(event) => setBulkNewRoleName(event.target.value)} /></label>}</div></div>
+      <div className="modal-footer"><Button variant="secondary" onClick={() => setBulkProjectOpen(false)}>{t("common.cancel")}</Button><Button disabled={!bulkProjectId || (bulkRoleKey === CREATE_PROJECT_ROLE_VALUE && !bulkNewRoleName.trim())} onClick={confirmBulkProjectAssignment}>{t("contacts.bulkAssign")}</Button></div>
     </Modal>
 
     <Modal open={mergeOpen} title={t("contacts.mergeTitle")} onClose={() => setMergeOpen(false)}>
@@ -349,7 +364,7 @@ export function ContactsPage() {
     </Modal>
 
     <Modal open={companyMergeOpen} title={t("contacts.mergeCompaniesTitle")} onClose={() => setCompanyMergeOpen(false)}>
-      <div className="modal-body merge-review"><p>{t("contacts.mergeCompaniesHelp")}</p><label className="field"><span>{t("contacts.keepCompany")}</span><select value={companyMergeTargetId} onChange={(event) => setCompanyMergeTargetId(event.target.value)}>{selectedCompanies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select></label><div className="merge-reference-summary">{selectedCompanies.map((company) => <article key={company.id}><strong>{company.name}</strong><span>{t("contacts.mergeCompanyReferenceSummary", { people: database.contactAffiliations.filter((item) => item.companyId === company.id).length, assignments: database.projectContactAssignments.filter((item) => item.companyId === company.id).length, imports: database.contactImportBatches.filter((batch) => batch.items.some((item) => item.companyId === company.id)).length })}</span></article>)}</div><div className="merge-field-list">{COMPANY_MERGE_FIELDS.map((field) => <fieldset key={field}><legend>{t(`contacts.mergeField.${field}`)}</legend>{selectedCompanies.map((company) => <label key={company.id}><input type="radio" name={`company-merge-${field}`} checked={companyMergeSources[field] === company.id} onChange={() => setCompanyMergeSources((current) => ({ ...current, [field]: company.id }))} /><span><strong>{company.name}</strong>{mergeValueLabel(company[field])}</span></label>)}</fieldset>)}</div></div>
+      <div className="modal-body merge-review"><p>{t("contacts.mergeCompaniesHelp")}</p><label className="field"><span>{t("contacts.keepCompany")}</span><select value={companyMergeTargetId} onChange={(event) => setCompanyMergeTargetId(event.target.value)}>{selectedCompanies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select></label><div className="merge-reference-summary">{selectedCompanies.map((company) => <article key={company.id}><strong>{company.name}</strong><span>{t("contacts.mergeCompanyReferenceSummary", { people: database.contactAffiliations.filter((item) => item.companyId === company.id).length, assignments: projectAssignmentCountForCompany(database, company.id), imports: database.contactImportBatches.filter((batch) => batch.items.some((item) => item.companyId === company.id)).length })}</span></article>)}</div><div className="merge-field-list">{COMPANY_MERGE_FIELDS.map((field) => <fieldset key={field}><legend>{t(`contacts.mergeField.${field}`)}</legend>{selectedCompanies.map((company) => <label key={company.id}><input type="radio" name={`company-merge-${field}`} checked={companyMergeSources[field] === company.id} onChange={() => setCompanyMergeSources((current) => ({ ...current, [field]: company.id }))} /><span><strong>{company.name}</strong>{mergeValueLabel(company[field])}</span></label>)}</fieldset>)}</div></div>
       <div className="modal-footer"><Button variant="secondary" onClick={() => setCompanyMergeOpen(false)}>{t("common.cancel")}</Button><Button onClick={confirmCompanyMerge}>{t("contacts.merge")}</Button></div>
     </Modal>
 
@@ -370,7 +385,7 @@ export function ContactsPage() {
           if (!company) return null;
           return <article key={id}><strong>{company.name}</strong><span>{t("contacts.mergeCompanyReferenceSummary", {
             people: database.contactAffiliations.filter((item) => item.companyId === id).length,
-            assignments: database.projectContactAssignments.filter((item) => item.companyId === id).length,
+            assignments: projectAssignmentCountForCompany(database, id),
             imports: database.contactImportBatches.filter((batch) => batch.items.some((item) => item.companyId === id)).length,
           })}</span></article>;
         })}
@@ -384,7 +399,7 @@ export function ContactsPage() {
     </Modal>
 
     <Modal open={Boolean(deleteCompanyId)} title={t("contacts.deleteCompanyTitle")} onClose={() => setDeleteCompanyId("")}>
-      <div className="modal-body merge-review"><p>{t("contacts.deleteCompanyHelp")}</p>{deleteCompanyId && <div className="merge-reference-summary"><article><strong>{database.companies.find((company) => company.id === deleteCompanyId)?.name}</strong><span>{t("contacts.mergeCompanyReferenceSummary", { people: database.contactAffiliations.filter((item) => item.companyId === deleteCompanyId).length, assignments: database.projectContactAssignments.filter((item) => item.companyId === deleteCompanyId).length, imports: database.contactImportBatches.filter((batch) => batch.items.some((item) => item.companyId === deleteCompanyId)).length })}</span></article></div>}{deleteError && <p className="form-error" role="alert">{deleteError}</p>}</div>
+      <div className="modal-body merge-review"><p>{t("contacts.deleteCompanyHelp")}</p>{deleteCompanyId && <div className="merge-reference-summary"><article><strong>{database.companies.find((company) => company.id === deleteCompanyId)?.name}</strong><span>{t("contacts.mergeCompanyReferenceSummary", { people: database.contactAffiliations.filter((item) => item.companyId === deleteCompanyId).length, assignments: projectAssignmentCountForCompany(database, deleteCompanyId), imports: database.contactImportBatches.filter((batch) => batch.items.some((item) => item.companyId === deleteCompanyId)).length })}</span></article></div>}{deleteError && <p className="form-error" role="alert">{deleteError}</p>}</div>
       <div className="modal-footer"><Button variant="secondary" onClick={() => setDeleteCompanyId("")}>{t("common.cancel")}</Button><Button variant="danger" onClick={() => { if (deleteCompany(deleteCompanyId)) { setSelectedIds(new Set()); setDeleteCompanyId(""); navigate("/contacts/companies"); } else setDeleteError(t("contacts.deleteBlocked")); }}>{t("contacts.deletePermanently")}</Button></div>
     </Modal>
 
@@ -403,7 +418,7 @@ function CompanyPreview({ company, canManage, onEdit, onToggleLifecycle, onDelet
     const contact = database.contacts.find((candidate) => candidate.id === affiliation.contactId);
     return contact ? [{ contact, affiliation }] : [];
   });
-  const projectIds = new Set(database.projectContactAssignments.filter((assignment) => assignment.companyId === company.id || people.some(({ contact }) => contact.id === assignment.contactId)).map((assignment) => assignment.projectId));
+  const projectIds = new Set(database.projectContactAssignments.filter((assignment) => people.some(({ contact }) => contact.id === assignment.contactId)).map((assignment) => assignment.projectId));
   return <aside className="panel contact-preview company-preview">
     <div className="contact-preview-hero"><span><Building2 /></span><h2>{company.name}</h2><p>{company.domain || t(`contacts.source.${company.source}`)}</p></div>
     <div className="contact-preview-actions"><Button size="small" disabled={!canManage} onClick={onEdit}>{t("common.edit")}</Button><Button size="small" variant="ghost" disabled={!canManage} onClick={onToggleLifecycle}>{company.lifecycle === "active" ? t("common.archive") : t("common.restore")}</Button>{company.lifecycle === "archived" && <Button size="small" variant="danger" disabled={!canManage} onClick={onDelete}><Trash2 size={13} />{t("contacts.deletePermanently")}</Button>}</div>
@@ -441,7 +456,7 @@ function ContactPreview({ contact, canManage, onEdit, onAddToProject, onExport, 
     </dl>
     <div className="contact-projects"><h3>{t("contacts.projects")}</h3>{assignments.length === 0 ? <p>{t("contacts.noProjects")}</p> : assignments.map((assignment) => {
       const project = database.projects.find((candidate) => candidate.id === assignment.projectId);
-      return project && <Link key={assignment.id} to={`/projects/${project.id}`}><strong>{project.name}</strong><span>{assignment.roles.map((role) => role.role === "custom" ? role.customLabel : t(`contacts.role.${role.role}`)).join(", ")}</span></Link>;
+      return project && <Link key={assignment.id} to={`/projects/${project.id}`}><strong>{project.name}</strong><span>{assignment.roles.map((role) => role.role === "custom" ? projectContactRoleLabel(database, role) : t(`contacts.role.${role.role}`)).join(", ")}</span></Link>;
     })}</div>
     <small className="contact-updated">{t("contacts.createdAndUpdated", { created: formatDate(contact.createdAt), updated: formatDate(contact.updatedAt) })}</small>
   </aside>;

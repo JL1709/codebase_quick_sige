@@ -9,6 +9,7 @@ import {
   overviewEntryClipboardValue,
   overviewEntryPath,
   overviewSectionTemplateData,
+  uniqueProjectOverviewSectionKey,
   validateOverviewTemplate,
 } from "./overviewTemplates";
 
@@ -73,6 +74,32 @@ describe("overview template hierarchy", () => {
     const section = instantiateOverviewSection(dateTemplate, (prefix) => `${prefix}-${++id}`);
     expect(section.placeholderKey).toBe("allgemein");
     expect(overviewSectionTemplateData(section, "de")).toEqual({ uebergabe: "27.09.2026" });
+  });
+
+  it("copies templates into independent project sections without retaining a template reference", () => {
+    let id = 0;
+    const sourceTemplate = structuredClone(template);
+    const section = instantiateOverviewSection(sourceTemplate, (prefix) => `${prefix}-${++id}`);
+
+    sourceTemplate.name = "Changed template";
+    sourceTemplate.entries[0].label = "Changed template field";
+    section.name = "Project-specific title";
+    section.entries[0].label = "Project-specific field";
+
+    expect(section).not.toHaveProperty("templateId");
+    expect(section.name).toBe("Project-specific title");
+    expect(section.entries[0].label).toBe("Project-specific field");
+    expect(sourceTemplate.name).toBe("Changed template");
+    expect(sourceTemplate.entries[0].label).toBe("Changed template field");
+    expect(template.name).toBe("Allgemein");
+    expect(template.entries[0].label).toBe("Bauherr");
+  });
+
+  it("creates stable unique keys for repeated custom and template sections", () => {
+    const first = instantiateOverviewSection(template, (prefix) => `${prefix}-first`);
+    expect(uniqueProjectOverviewSectionKey("Allgemein", [])).toBe("allgemein");
+    expect(uniqueProjectOverviewSectionKey("Allgemein", [first])).toBe("allgemein_2");
+    expect(uniqueProjectOverviewSectionKey("Allgemein", [first, { ...first, id: "second", placeholderKey: "allgemein_2" }])).toBe("allgemein_3");
   });
 
   it("keeps structure shared while names, labels, and default values are language-specific", () => {

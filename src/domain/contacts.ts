@@ -10,11 +10,13 @@ import type {
   ProjectContactAssignment,
   ProjectContactRole,
   ProjectParticipantRole,
+  ProjectRoleDefinition,
 } from "./types";
 
 export const STANDARD_PROJECT_ROLES: Exclude<ProjectParticipantRole, "custom">[] = [
   "client",
   "owner",
+  "responsible_third_party",
   "coordinator",
   "architect",
   "planner",
@@ -27,6 +29,9 @@ const ROLE_ALIASES: Record<string, ProjectParticipantRole> = {
   auftraggeber: "client",
   owner: "owner",
   bauherr: "owner",
+  "responsible third party": "responsible_third_party",
+  responsible_third_party: "responsible_third_party",
+  "beauftragter dritter": "responsible_third_party",
   coordinator: "coordinator",
   "sige-koordinator": "coordinator",
   "sige-koordination": "coordinator",
@@ -40,6 +45,7 @@ const ROLE_ALIASES: Record<string, ProjectParticipantRole> = {
   "specialist designer": "planner",
   "site manager": "site_manager",
   "site management": "site_manager",
+  site_manager: "site_manager",
   bauleitung: "site_manager",
   contractor: "contractor",
   auftragnehmer: "contractor",
@@ -92,28 +98,116 @@ export function companyForContact(database: AppDatabase, contactId: string): Com
   return affiliation && database.companies.find((company) => company.id === affiliation.companyId);
 }
 
+export function projectContactRoleKey(role: Pick<ProjectContactRole, "role" | "roleDefinitionId" | "customLabel">): string {
+  if (role.role !== "custom") return `system:${role.role}`;
+  return role.roleDefinitionId ? `custom:${role.roleDefinitionId}` : `legacy:${role.customLabel ?? ""}`;
+}
+
+export function projectRoleDefinitionForKey(database: AppDatabase, key: string, projectId?: string): ProjectRoleDefinition | undefined {
+  if (!key.startsWith("custom:")) return undefined;
+  return database.projectRoleDefinitions.find((definition) => (
+    definition.id === key.slice("custom:".length)
+    && (!definition.projectId || definition.projectId === projectId)
+  ));
+}
+
+export function projectRoleDefinitionsForProject(database: AppDatabase, projectId?: string): ProjectRoleDefinition[] {
+  return database.projectRoleDefinitions.filter((definition) => (
+    definition.lifecycle === "active"
+    && (!definition.projectId || definition.projectId === projectId)
+  ));
+}
+
+export function projectContactRoleFromKey(database: AppDatabase, key: string, id: string, projectId?: string): ProjectContactRole | undefined {
+  if (key.startsWith("system:")) {
+    const role = key.slice("system:".length) as ProjectParticipantRole;
+    if (role === "custom" || !STANDARD_PROJECT_ROLES.includes(role as Exclude<ProjectParticipantRole, "custom">)) return undefined;
+    return { id, role };
+  }
+  const definition = projectRoleDefinitionForKey(database, key, projectId);
+  return definition ? { id, role: "custom", roleDefinitionId: definition.id, customLabel: definition.name } : undefined;
+}
+
+export function projectContactRoleLabel(database: AppDatabase, role: ProjectContactRole): string | undefined {
+  if (role.role !== "custom") return undefined;
+  return database.projectRoleDefinitions.find((definition) => definition.id === role.roleDefinitionId)?.name
+    ?? role.customLabel;
+}
+
 export function resolveProjectParticipants(database: AppDatabase, projectId: string): Participant[] {
   return database.projectContactAssignments
     .filter((assignment) => assignment.projectId === projectId && assignment.lifecycle === "active")
     .flatMap((assignment) => {
       const contact = database.contacts.find((candidate) => candidate.id === assignment.contactId);
       if (!contact) return [];
-      const company = assignment.companyId
-        ? database.companies.find((candidate) => candidate.id === assignment.companyId)
-        : companyForContact(database, contact.id);
+      const company = companyForContact(database, contact.id);
       const roles = assignment.roles.length > 0
         ? assignment.roles
         : [{ id: `${assignment.id}-role-custom`, role: "custom" as const, customLabel: "" }];
       return roles.map((role) => ({
         id: `${assignment.id}:${role.id}`,
         role: role.role,
-        customRole: role.customLabel,
+        customRole: projectContactRoleLabel(database, role),
         company: company?.name ?? "",
         name: contactDisplayName(contact),
         email: primaryEmail(contact)?.value ?? "",
         phone: primaryPhone(contact)?.value ?? "",
       }));
     });
+}
+
+export interface ProjectRoleCatalogMigrationResult {
+  definitions: ProjectRoleDefinition[];
+  assignments: ProjectContactAssignment[];
+}
+
+export function migrateProjectRoleCatalog(
+  organizationId: string,
+  existingDefinitions: ProjectRoleDefinition[],
+  assignments: ProjectContactAssignment[],
+): ProjectRoleCatalogMigrationResult {
+  const definitions = existingDefinitions.map((definition, index) => ({
+    ...definition,
+    organizationId,
+    lifecycle: definition.lifecycle ?? "active" as const,
+    sortOrder: definition.sortOrder ?? index,
+  }));
+  const definitionByName = new Map(definitions
+    .filter((definition) => !definition.projectId)
+    .map((definition) => [definition.name.trim().toLocaleLowerCase(), definition]));
+  const definitionIds = new Set(definitions.map((definition) => definition.id));
+  const migratedAssignments = assignments.map((assignment) => {
+    const roles = assignment.roles.map((role) => {
+      if (role.role !== "custom") return role;
+      const label = role.customLabel?.trim() ?? "";
+      if (role.roleDefinitionId && definitionIds.has(role.roleDefinitionId)) return role;
+      if (!label) return role;
+      let definition = definitionByName.get(label.toLocaleLowerCase());
+      if (!definition) {
+        const baseId = `project-role-${safeIdentifier(label)}`;
+        let definitionId = baseId;
+        let suffix = 2;
+        while (definitionIds.has(definitionId)) definitionId = `${baseId}-${suffix++}`;
+        definition = {
+          id: definitionId,
+          organizationId,
+          name: label,
+          lifecycle: "active",
+          sortOrder: definitions.length,
+          createdAt: assignment.createdAt,
+          updatedAt: assignment.updatedAt,
+        };
+        definitions.push(definition);
+        definitionIds.add(definition.id);
+        definitionByName.set(label.toLocaleLowerCase(), definition);
+      }
+      return { ...role, roleDefinitionId: definition.id, customLabel: definition.name };
+    }).filter((role, index, candidates) => (
+      !candidates.some((candidate, candidateIndex) => candidateIndex < index && projectContactRoleKey(candidate) === projectContactRoleKey(role))
+    ));
+    return { ...assignment, roles };
+  });
+  return { definitions, assignments: migratedAssignments };
 }
 
 export function projectWithResolvedParticipants(database: AppDatabase, project: Project): Project {
@@ -171,7 +265,7 @@ function overviewParticipantRows(project: Project): Participant[] {
     item.find((entry) => aliases.includes(entry.placeholderKey.toLocaleLowerCase()))?.value.trim() ?? ""
   );
   return project.overviewSections
-    .filter((section) => section.templateId === "overview-template-participants")
+    .filter((section) => legacyOverviewTemplateId(section) === "overview-template-participants")
     .flatMap((section) => section.entries)
     .filter((entry) => entry.type === "repeating_group")
     .flatMap((entry) => entry.items)
@@ -194,9 +288,13 @@ function overviewParticipantRows(project: Project): Participant[] {
 
 const PARTICIPANT_FIELD_KEYS = new Set(["name", "unternehmen", "company", "rolle", "role", "e_mail", "email", "telefon", "phone"]);
 
+function legacyOverviewTemplateId(section: Project["overviewSections"][number]): string | undefined {
+  return (section as Project["overviewSections"][number] & { templateId?: string }).templateId;
+}
+
 function participantSectionHasUnmigratedContent(project: Project, sectionId: string): boolean {
   const section = project.overviewSections.find((candidate) => candidate.id === sectionId);
-  if (!section || section.templateId !== "overview-template-participants") return false;
+  if (!section || legacyOverviewTemplateId(section) !== "overview-template-participants") return false;
   return section.entries.some((entry) => {
     if (entry.type !== "repeating_group") return Boolean(entry.value.trim() || entry.children.length || entry.items.length);
     return entry.items.some((item) => item.some((field) => !PARTICIPANT_FIELD_KEYS.has(field.placeholderKey.toLocaleLowerCase()) && Boolean(field.value.trim())));
@@ -334,9 +432,7 @@ export function migrateLegacyProjectContacts(
         }
       }
 
-      let assignment = assignments.find((candidate) => (
-        candidate.projectId === project.id && candidate.contactId === contact!.id && candidate.companyId === company?.id
-      ));
+      let assignment = assignments.find((candidate) => candidate.projectId === project.id && candidate.contactId === contact!.id);
       const role: ProjectContactRole = {
         id: `role-${safeIdentifier(participant.role)}-${safeIdentifier(participant.customRole ?? participant.role)}`,
         role: participant.role,
@@ -344,11 +440,10 @@ export function migrateLegacyProjectContacts(
       };
       if (!assignment) {
         assignment = {
-          id: `assignment-${safeIdentifier(project.id)}-${safeIdentifier(contact.id)}-${safeIdentifier(company?.id ?? "none")}`,
+          id: `assignment-${safeIdentifier(project.id)}-${safeIdentifier(contact.id)}`,
           organizationId,
           projectId: project.id,
           contactId: contact.id,
-          companyId: company?.id,
           roles: [role],
           lifecycle: "active",
           createdAt: project.createdAt,
@@ -366,8 +461,13 @@ export function migrateLegacyProjectContacts(
       ...project,
       participants: [],
       overviewSections: project.overviewSections.filter((section) => (
-        section.templateId !== "overview-template-participants" || participantSectionHasUnmigratedContent(project, section.id)
-      )).map((section) => section.templateId === "overview-template-participants" ? { ...section, templateId: undefined } : section),
+        legacyOverviewTemplateId(section) !== "overview-template-participants" || participantSectionHasUnmigratedContent(project, section.id)
+      )).map((section) => {
+        if (legacyOverviewTemplateId(section) !== "overview-template-participants") return section;
+        const detachedSection = { ...section } as Project["overviewSections"][number] & { templateId?: string };
+        Reflect.deleteProperty(detachedSection, "templateId");
+        return detachedSection;
+      }),
     })),
     contacts,
     companies,

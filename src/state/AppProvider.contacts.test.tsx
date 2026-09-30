@@ -29,7 +29,7 @@ function createMemoryRepository(initialDatabase: AppDatabase) {
 function ContactImportHarness() {
   const {
     assignContactsToProject, commitContactImport, createProject, database, deleteCompany, deleteContact,
-    mergeCompanies, mergeContacts, saveContact, tagContacts, undoContactImportBatch,
+    mergeCompanies, mergeContacts, saveContact, saveProjectContactAssignment, undoContactImportBatch,
   } = useApp();
   const importedContact = database.contacts.find((contact) => contact.tags.includes("provider-fixture"));
   const assignedContact = database.contacts.find((contact) => database.projectContactAssignments.some((assignment) => assignment.contactId === contact.id));
@@ -57,9 +57,21 @@ function ContactImportHarness() {
     <button type="button" disabled={!importedContact} onClick={() => importedContact && saveContact({ ...importedContact, notes: "Edited after import" } as Contact)}>Edit imported</button>
     <button type="button" disabled={!latestBatch} onClick={() => latestBatch && undoContactImportBatch(latestBatch.id)}>Undo import</button>
     <button type="button" disabled={!survivingCompany || !mergedCompany} onClick={() => survivingCompany && mergedCompany && mergeCompanies(survivingCompany.id, mergedCompany.id)}>Merge companies</button>
-    <button type="button" disabled={!database.contacts[0]} onClick={() => database.contacts[0] && createProject({ name: "Contact project", overviewSections: [] }, [{ contactId: database.contacts[0].id, roles: [{ role: "architect" }, { role: "custom", customLabel: "Fire lead" }] }])}>Create contact project</button>
+    <button type="button" disabled={!database.contacts[0]} onClick={() => { const definition = database.projectRoleDefinitions.find((candidate) => candidate.name === "Fire lead"); if (database.contacts[0] && definition) createProject({ name: "Contact project", participantsSectionName: "Project participants", overviewSections: [], overviewSectionOrder: [] }, [{ contactId: database.contacts[0].id, roles: [{ role: "architect" }, { role: "custom", roleDefinitionId: definition.id, customLabel: definition.name }] }]); }}>Create contact project</button>
+    <button type="button" disabled={!database.contacts[0]} onClick={() => database.contacts[0] && createProject(
+      { name: "Scoped role project", participantsSectionName: "Project participants", overviewSections: [], overviewSectionOrder: [] },
+      [{ contactId: database.contacts[0].id, roles: [{ role: "custom", roleDefinitionId: "draft-project-role", customLabel: "Lifting lead" }] }],
+      [{ id: "draft-project-role", name: "Lifting lead" }],
+    )}>Create scoped role project</button>
+    <button type="button" disabled={!database.contacts[0]} onClick={() => database.contacts[0] && createProject(
+      { name: "Roleless project", participantsSectionName: "Project participants", overviewSections: [], overviewSectionOrder: [] },
+      [{ contactId: database.contacts[0].id, roles: [] }],
+    )}>Create roleless project</button>
+    <button type="button" disabled={!database.projectContactAssignments.some((assignment) => assignment.roles.length > 0)} onClick={() => {
+      const assignment = database.projectContactAssignments.find((candidate) => candidate.roles.length > 0);
+      if (assignment) saveProjectContactAssignment({ ...assignment, roles: [] });
+    }}>Clear project roles</button>
     <button type="button" disabled={!assignedContact} onClick={() => assignedContact && saveContact({ ...assignedContact, displayName: "Updated project contact" })}>Edit project contact</button>
-    <button type="button" onClick={() => tagContacts(database.contacts.slice(0, 2).map((contact) => contact.id), "Bulk tag")}>Bulk tag</button>
     <button type="button" onClick={() => assignContactsToProject(database.contacts.slice(0, 2).map((contact) => contact.id), database.projects[0].id, "planner")}>Bulk assign</button>
     <button type="button" disabled={!deletableContact} onClick={() => deletableContact && deleteContact(deletableContact.id)}>Delete contact</button>
     <button type="button" disabled={!deletableCompany} onClick={() => deletableCompany && deleteCompany(deletableCompany.id)}>Delete company</button>
@@ -120,7 +132,7 @@ describe("Contacts application use cases", () => {
     expect(memory.current().contacts.some((contact) => contact.tags.includes("provider-fixture"))).toBe(false);
   });
 
-  it("merges companies atomically and rewires affiliations and project context", () => {
+  it("merges companies atomically and updates canonical affiliations used by projects", () => {
     const database = createSeedDatabase();
     const contact = database.contacts[0];
     const project = database.projects[0];
@@ -134,7 +146,7 @@ describe("Contacts application use cases", () => {
       { id: "affiliation-source", organizationId: database.organization.id, contactId: contact.id, companyId: "company-source", jobTitle: "Architect", department: "", primary: false, lifecycle: "active", createdAt: now, updatedAt: now },
     );
     database.projectContactAssignments.push({
-      id: "assignment-company-source", organizationId: database.organization.id, projectId: project.id, contactId: contact.id, companyId: "company-source",
+      id: "assignment-company-source", organizationId: database.organization.id, projectId: project.id, contactId: contact.id,
       roles: [{ id: "role-company-source", role: "architect" }], lifecycle: "active", createdAt: now, updatedAt: now,
     });
     const memory = renderHarness(database);
@@ -147,12 +159,17 @@ describe("Contacts application use cases", () => {
     expect(saved.contactAffiliations.filter((affiliation) => affiliation.contactId === contact.id && affiliation.companyId === "company-survivor")).toEqual([
       expect.objectContaining({ jobTitle: "Architect", department: "Planning", primary: true }),
     ]);
-    expect(saved.projectContactAssignments.find((assignment) => assignment.id === "assignment-company-source")?.companyId).toBe("company-survivor");
+    expect(saved.projectContactAssignments.find((assignment) => assignment.id === "assignment-company-source")).toBeDefined();
     expect(saved.auditEvents.at(-1)?.action).toBe("company.merged");
   });
 
   it("creates a project and its multi-role contact assignment in one commit", () => {
-    const memory = renderHarness(createSeedDatabase());
+    const database = createSeedDatabase();
+    database.projectRoleDefinitions.push({
+      id: "project-role-fire-lead", organizationId: database.organization.id, name: "Fire lead", lifecycle: "active",
+      sortOrder: 0, createdAt: "2026-09-29T12:00:00.000Z", updatedAt: "2026-09-29T12:00:00.000Z",
+    });
+    const memory = renderHarness(database);
 
     fireEvent.click(screen.getByRole("button", { name: "Create contact project" }));
 
@@ -161,9 +178,33 @@ describe("Contacts application use cases", () => {
     expect(project).toBeDefined();
     expect(assignment?.roles).toEqual([
       expect.objectContaining({ role: "architect" }),
-      expect.objectContaining({ role: "custom", customLabel: "Fire lead" }),
+      expect.objectContaining({ role: "custom", roleDefinitionId: memory.current().projectRoleDefinitions[0].id, customLabel: "Fire lead" }),
     ]);
     expect(memory.current().auditEvents.some((event) => event.projectId === project?.id && event.action === "project_contact.created")).toBe(true);
+  });
+
+  it("creates project-scoped roles and assignments atomically", () => {
+    const memory = renderHarness(createSeedDatabase());
+
+    fireEvent.click(screen.getByRole("button", { name: "Create scoped role project" }));
+
+    const project = memory.current().projects.find((candidate) => candidate.name === "Scoped role project");
+    const definition = memory.current().projectRoleDefinitions.find((candidate) => candidate.id === "draft-project-role");
+    const assignment = memory.current().projectContactAssignments.find((candidate) => candidate.projectId === project?.id);
+    expect(definition).toMatchObject({ name: "Lifting lead", projectId: project?.id });
+    expect(assignment?.roles).toEqual([expect.objectContaining({ role: "custom", roleDefinitionId: definition?.id, customLabel: "Lifting lead" })]);
+  });
+
+  it("creates roleless assignments and allows the final role to be removed", () => {
+    const memory = renderHarness(createSeedDatabase());
+
+    fireEvent.click(screen.getByRole("button", { name: "Create roleless project" }));
+    const rolelessProject = memory.current().projects.find((candidate) => candidate.name === "Roleless project");
+    expect(memory.current().projectContactAssignments.find((assignment) => assignment.projectId === rolelessProject?.id)?.roles).toEqual([]);
+
+    const assignmentWithRole = memory.current().projectContactAssignments.find((assignment) => assignment.roles.length > 0)!;
+    fireEvent.click(screen.getByRole("button", { name: "Clear project roles" }));
+    expect(memory.current().projectContactAssignments.find((assignment) => assignment.id === assignmentWithRole.id)?.roles).toEqual([]);
   });
 
   it("marks current project outputs stale when a canonical contact changes", () => {
@@ -185,16 +226,14 @@ describe("Contacts application use cases", () => {
     expect(memory.current().generatedDocuments.find((document) => document.id === "generated-contact-fixture")?.stale).toBe(true);
   });
 
-  it("applies bulk tags and project assignments in permissioned use cases", () => {
+  it("applies bulk project assignments in permissioned use cases", () => {
     const database = createSeedDatabase();
     const contactIds = database.contacts.slice(0, 2).map((contact) => contact.id);
     const projectId = database.projects[0].id;
     const memory = renderHarness(database);
 
-    fireEvent.click(screen.getByRole("button", { name: "Bulk tag" }));
     fireEvent.click(screen.getByRole("button", { name: "Bulk assign" }));
 
-    expect(memory.current().contacts.filter((contact) => contactIds.includes(contact.id)).every((contact) => contact.tags.includes("Bulk tag"))).toBe(true);
     expect(contactIds.every((contactId) => memory.current().projectContactAssignments.some((assignment) => assignment.projectId === projectId && assignment.contactId === contactId && assignment.roles.some((role) => role.role === "planner")))).toBe(true);
     expect(memory.current().auditEvents.some((event) => event.action === "project_contacts.bulk_assigned")).toBe(true);
   });

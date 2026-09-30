@@ -272,7 +272,7 @@ export function buildPlanPdf(
       try { pdf.addImage(preview, preview.startsWith("data:image/png") ? "PNG" : "JPEG", imageX, imageY, imageWidth, imageHeight, undefined, "FAST"); } catch { /* Filename remains visible through project documents if decoding fails. */ }
     } else if (element.kind === "pdf_page") {
       const asset = assets.get(element.assetId); if (!asset) continue;
-      const preview = assetPreviewByElement.get(element.id) ?? asset.previewDataUrl;
+      const preview = assetPreviewByElement.get(element.id) ?? ((element.pageNumber ?? 1) === 1 ? asset.previewDataUrl : undefined);
       if (preview) {
         const pageMetadata = asset.pdfPages?.find((page) => page.pageNumber === (element.pageNumber ?? 1));
         const sourceAspectRatio = pdfPageAspectRatioByElement.get(element.id)
@@ -564,6 +564,7 @@ const participantRoleCopy: Record<Locale, Record<Project["participants"][number]
   de: {
     client: "Auftraggeber",
     owner: "Bauherr",
+    responsible_third_party: "Beauftragter Dritter",
     coordinator: "SiGe-Koordination",
     architect: "Architektur",
     planner: "Fachplanung",
@@ -574,6 +575,7 @@ const participantRoleCopy: Record<Locale, Record<Project["participants"][number]
   en: {
     client: "Client",
     owner: "Owner",
+    responsible_third_party: "Responsible third party",
     coordinator: "Safety coordination",
     architect: "Architecture",
     planner: "Specialist planning",

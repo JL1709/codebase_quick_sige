@@ -3,12 +3,14 @@ import { ensurePlanLayout, fitBlocksInArea, reconcilePlanSectionsWithCatalog } f
 import { defaultBlockImageSource } from "../domain/blockImages";
 import { categoryPlacementIds, normalizeCategoryColorOwnership } from "../domain/categoryTree";
 import { legacyProjectOverviewSections } from "../domain/projectOverview";
-import { migrateLegacyProjectContacts } from "../domain/contacts";
+import { normalizeProjectOverviewSectionOrder, orderProjectOverviewSections, PROJECT_PARTICIPANTS_SECTION_ID } from "../domain/projectOverviewOrder";
+import { migrateLegacyProjectContacts, migrateProjectRoleCatalog } from "../domain/contacts";
 import type {
   AppDatabase,
   AssessmentAnswers,
   BuildingBlock,
   BuildingBlockCategory,
+  ContactCompanyAffiliation,
   CustomField,
   EmergencyContact,
   Locale,
@@ -19,6 +21,8 @@ import type {
   PlanAssetElement,
   Project,
   ProjectAssessmentRun,
+  ProjectContactAssignment,
+  ProjectOverviewSection,
 } from "../domain/types";
 import { z } from "zod";
 
@@ -26,7 +30,7 @@ export const STORAGE_KEY = "quicksige.database.v3";
 const LEGACY_STORAGE_KEYS = ["quicksige.prototype.database.v2"];
 export const BACKUP_KEY = "quicksige.database.migration-backup.v2";
 export const MIGRATION_ERROR_KEY = "quicksige.database.migration-error";
-export const CURRENT_SCHEMA_VERSION = 32;
+export const CURRENT_SCHEMA_VERSION = 36;
 const CATEGORY_HIERARCHY_SCHEMA_VERSION = 24;
 const CATEGORY_ASSIGNMENT_CORRECTION_SCHEMA_VERSION = 20;
 const AUTOMATIC_TITLE_BLOCK_REMOVAL_SCHEMA_VERSION = 30;
@@ -59,6 +63,7 @@ const persistedDatabaseSchema = z.object({
   companies: z.array(z.object({ id: z.string(), organizationId: z.string() }).passthrough()),
   contactAffiliations: z.array(z.object({ id: z.string(), contactId: z.string(), companyId: z.string() }).passthrough()),
   projectContactAssignments: z.array(z.object({ id: z.string(), projectId: z.string(), contactId: z.string() }).passthrough()),
+  projectRoleDefinitions: z.array(z.object({ id: z.string(), organizationId: z.string(), name: z.string() }).passthrough()),
   externalContactIdentities: z.array(z.object({ id: z.string(), contactId: z.string(), provider: z.enum(["microsoft", "google"]) }).passthrough()),
   contactImportBatches: z.array(z.object({ id: z.string(), status: z.enum(["completed", "undone", "partially_undone"]) }).passthrough()),
   assessmentRuns: z.array(z.object({ id: z.string(), projectId: z.string() }).passthrough()),
@@ -90,20 +95,26 @@ type PersistedBuildingBlock = BuildingBlock & {
   source?: "system" | "organization";
 };
 
-type PersistedProject = Project & { documentLocale?: Locale };
+type PersistedProject = Omit<Project, "overviewSections" | "participantsSectionName"> & {
+  documentLocale?: Locale;
+  participantsSectionName?: string;
+  overviewSections?: Array<ProjectOverviewSection & { templateId?: string }>;
+};
 type PersistedPlan = Omit<Plan, "provenance"> & {
   documentLocale?: Locale;
   title?: string;
   provenance?: Plan["provenance"];
 };
+type PersistedProjectContactAssignment = ProjectContactAssignment & { companyId?: string };
 
-type PersistedDatabase = Omit<AppDatabase, "assessmentRuns" | "contacts" | "companies" | "contactAffiliations" | "projectContactAssignments" | "externalContactIdentities" | "contactImportBatches"> & {
+type PersistedDatabase = Omit<AppDatabase, "assessmentRuns" | "contacts" | "companies" | "contactAffiliations" | "projectContactAssignments" | "projectRoleDefinitions" | "externalContactIdentities" | "contactImportBatches"> & {
   assessmentRuns?: ProjectAssessmentRun[];
   assessments?: Record<string, AssessmentAnswers>;
   contacts?: AppDatabase["contacts"];
   companies?: AppDatabase["companies"];
   contactAffiliations?: AppDatabase["contactAffiliations"];
-  projectContactAssignments?: AppDatabase["projectContactAssignments"];
+  projectContactAssignments?: PersistedProjectContactAssignment[];
+  projectRoleDefinitions?: AppDatabase["projectRoleDefinitions"];
   externalContactIdentities?: AppDatabase["externalContactIdentities"];
   contactImportBatches?: AppDatabase["contactImportBatches"];
 };
@@ -117,6 +128,12 @@ type PersistedOverviewTemplate = Partial<OverviewTemplate> & Pick<OverviewTempla
   lifecycle?: "active" | "archived";
 };
 
+function withoutAssignmentCompany(assignment: PersistedProjectContactAssignment): ProjectContactAssignment {
+  const canonicalAssignment = { ...assignment };
+  Reflect.deleteProperty(canonicalAssignment, "companyId");
+  return canonicalAssignment;
+}
+
 const LEGACY_BLOCK_METADATA_FIELDS = ["color", "code", "tags", "provenance", "contentRevision", "reviewedAt", "source"] as const;
 
 export type ContactsRepositorySnapshot = Pick<AppDatabase,
@@ -124,6 +141,7 @@ export type ContactsRepositorySnapshot = Pick<AppDatabase,
   | "companies"
   | "contactAffiliations"
   | "projectContactAssignments"
+  | "projectRoleDefinitions"
   | "externalContactIdentities"
   | "contactImportBatches"
   | "projects"
@@ -138,6 +156,7 @@ export function contactsRepositorySnapshot(database: AppDatabase): ContactsRepos
     companies: database.companies,
     contactAffiliations: database.contactAffiliations,
     projectContactAssignments: database.projectContactAssignments,
+    projectRoleDefinitions: database.projectRoleDefinitions,
     externalContactIdentities: database.externalContactIdentities,
     contactImportBatches: database.contactImportBatches,
     projects: database.projects,
@@ -179,6 +198,7 @@ function migrateProject(project: PersistedProject, locale: Locale): Project {
     emergencyContacts: project.emergencyContacts ?? [],
     customFields: project.customFields ?? [],
     customSections: project.customSections ?? [],
+    participantsSectionName: project.participantsSectionName?.trim() || (locale === "de" ? "Projektbeteiligte" : "Project participants"),
     overviewSections: project.overviewSections ?? [],
     assets: (project.assets ?? []).map((asset) => ({
       ...asset,
@@ -186,11 +206,19 @@ function migrateProject(project: PersistedProject, locale: Locale): Project {
     })),
     documentFolders,
   };
-  if (migratedProject.overviewSections.length > 0) return migratedProject;
-  let identifierIndex = 0;
+  let overviewSections = migratedProject.overviewSections;
+  if (overviewSections.length === 0) {
+    let identifierIndex = 0;
+    overviewSections = legacyProjectOverviewSections(migratedProject, (prefix) => `${project.id}-${prefix}-${identifierIndex++}`, locale);
+  }
+  const persistedOrder = Array.isArray(project.overviewSectionOrder)
+    ? project.overviewSectionOrder
+    : [PROJECT_PARTICIPANTS_SECTION_ID, ...overviewSections.map((section) => section.id)];
+  const overviewSectionOrder = normalizeProjectOverviewSectionOrder(persistedOrder, overviewSections);
   return {
     ...migratedProject,
-    overviewSections: legacyProjectOverviewSections(migratedProject, (prefix) => `${project.id}-${prefix}-${identifierIndex++}`, locale),
+    overviewSections: orderProjectOverviewSections(overviewSections, overviewSectionOrder) as ProjectOverviewSection[],
+    overviewSectionOrder,
   };
 }
 
@@ -213,6 +241,13 @@ function removeSyntheticProjectInformation(project: Project, sourceSchemaVersion
   (["description", "address", "city"] as const).forEach((field) => {
     if (!project[field]?.trim()) Reflect.deleteProperty(migratedProject, field);
   });
+  return migratedProject;
+}
+
+function removeLegacyLiveProjectNumber(project: Project): Project {
+  if (!Object.hasOwn(project, "projectNumber")) return project;
+  const migratedProject = { ...project };
+  Reflect.deleteProperty(migratedProject, "projectNumber");
   return migratedProject;
 }
 
@@ -467,6 +502,56 @@ function normalizeBlockPlacement(block: BuildingBlock, categories: BuildingBlock
   };
 }
 
+function migrateAssignmentCompaniesToContactAffiliations(
+  organizationId: string,
+  assignments: PersistedProjectContactAssignment[],
+  affiliations: ContactCompanyAffiliation[],
+): { assignments: ProjectContactAssignment[]; affiliations: ContactCompanyAffiliation[] } {
+  const migratedAffiliations = affiliations.map((affiliation) => ({ ...affiliation }));
+  const migratedAssignments = assignments.map((assignment) => {
+    if (assignment.companyId) {
+      const existingAffiliation = migratedAffiliations.find((affiliation) => (
+        affiliation.contactId === assignment.contactId && affiliation.companyId === assignment.companyId
+      ));
+      if (existingAffiliation && assignment.lifecycle === "active") {
+        existingAffiliation.lifecycle = "active";
+        existingAffiliation.updatedAt = assignment.updatedAt;
+      } else if (!existingAffiliation) {
+        migratedAffiliations.push({
+          id: `affiliation-${assignment.id}`,
+          organizationId,
+          contactId: assignment.contactId,
+          companyId: assignment.companyId,
+          jobTitle: "",
+          department: "",
+          primary: false,
+          lifecycle: assignment.lifecycle,
+          createdAt: assignment.createdAt,
+          updatedAt: assignment.updatedAt,
+        });
+      }
+    }
+    return withoutAssignmentCompany(assignment);
+  });
+  const primaryAffiliationIds = new Set<string>();
+  const processedContactIds = new Set<string>();
+  for (const affiliation of migratedAffiliations) {
+    if (affiliation.lifecycle !== "active" || processedContactIds.has(affiliation.contactId)) continue;
+    const activeAffiliations = migratedAffiliations.filter((candidate) => (
+      candidate.contactId === affiliation.contactId && candidate.lifecycle === "active"
+    ));
+    processedContactIds.add(affiliation.contactId);
+    primaryAffiliationIds.add(activeAffiliations.find((candidate) => candidate.primary)?.id ?? activeAffiliations[0].id);
+  }
+  return {
+    assignments: migratedAssignments,
+    affiliations: migratedAffiliations.map((affiliation) => ({
+      ...affiliation,
+      primary: affiliation.lifecycle === "active" && primaryAffiliationIds.has(affiliation.id),
+    })),
+  };
+}
+
 export function migrateDatabase(value: unknown): AppDatabase | null {
   if (!isDatabase(value)) return null;
   const source = value as PersistedDatabase;
@@ -480,16 +565,39 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
     .filter((project) => (source.schemaVersion ?? 0) >= DEMO_CONTENT_REFRESH_SCHEMA_VERSION || project.id !== REMOVED_DEMO_PROJECT_ID)
     .map((project) => migrateProject(project as PersistedProject, locale))
     .map((project) => removeSyntheticProjectInformation(project, source.schemaVersion ?? 0))
+    .map(removeLegacyLiveProjectNumber)
     .map((project) => refreshLogisticsDemoDocuments(project, defaultLogisticsProject, source.schemaVersion ?? 0));
+  const canonicalProjectContacts = migrateAssignmentCompaniesToContactAffiliations(
+    organization.id,
+    source.projectContactAssignments ?? [],
+    source.contactAffiliations ?? [],
+  );
   const contactMigration = migrateLegacyProjectContacts(
     organization.id,
     projectsBeforeContactMigration,
     source.contacts ?? [],
     source.companies ?? [],
-    source.contactAffiliations ?? [],
-    source.projectContactAssignments ?? [],
+    canonicalProjectContacts.affiliations,
+    canonicalProjectContacts.assignments,
   );
-  const projects = contactMigration.projects;
+  const projects = contactMigration.projects.map((project) => {
+    const overviewSections = project.overviewSections.map((section) => {
+      const detachedSection = { ...section } as ProjectOverviewSection & { templateId?: string };
+      Reflect.deleteProperty(detachedSection, "templateId");
+      return detachedSection;
+    });
+    const overviewSectionOrder = normalizeProjectOverviewSectionOrder(project.overviewSectionOrder, overviewSections);
+    return {
+      ...project,
+      overviewSections: orderProjectOverviewSections(overviewSections, overviewSectionOrder),
+      overviewSectionOrder,
+    };
+  });
+  const projectRoleMigration = migrateProjectRoleCatalog(
+    organization.id,
+    source.projectRoleDefinitions ?? [],
+    contactMigration.assignments,
+  );
   const projectById = new Map(projects.map((project) => [project.id, project]));
   const legacyAssessments = source.assessments ?? {};
   const assessmentRuns = (source.assessmentRuns?.length
@@ -562,9 +670,16 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
     contacts: contactMigration.contacts,
     companies: contactMigration.companies,
     contactAffiliations: contactMigration.affiliations,
-    projectContactAssignments: contactMigration.assignments,
+    projectContactAssignments: projectRoleMigration.assignments,
+    projectRoleDefinitions: projectRoleMigration.definitions,
     externalContactIdentities: source.externalContactIdentities ?? [],
-    contactImportBatches: source.contactImportBatches ?? [],
+    contactImportBatches: (source.contactImportBatches ?? []).map((batch) => ({
+      ...batch,
+      items: batch.items.map((item) => item.previousAssignment ? {
+        ...item,
+        previousAssignment: withoutAssignmentCompany(item.previousAssignment),
+      } : item),
+    })),
     assessmentRuns,
     blocks,
     categories,

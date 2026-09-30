@@ -3,6 +3,8 @@ import { validateProjectForm } from "./projectValidation";
 
 const validProject = {
   name: "Campus",
+  participantsSectionName: "Project participants",
+  overviewSectionOrder: ["system:project-participants", "section-1"],
   overviewSections: [{
     id: "section-1",
     name: "Project information",
@@ -18,6 +20,14 @@ describe("project form validation", () => {
 
   it("rejects a missing project name", () => {
     expect(validateProjectForm({ ...validProject, name: "" }).success).toBe(false);
+  });
+
+  it("requires editable project section titles", () => {
+    expect(validateProjectForm({ ...validProject, participantsSectionName: "" }).success).toBe(false);
+    expect(validateProjectForm({
+      ...validProject,
+      overviewSections: [{ ...validProject.overviewSections[0], name: "" }],
+    }).success).toBe(false);
   });
 
   it("preserves overview sections after validation", () => {

@@ -168,14 +168,12 @@ export function legacyProjectOverviewSections(project: Project, createId: Create
   const sections: ProjectOverviewSection[] = [];
   if (generalEntries.length) sections.push({
     id: createId("overview-section"),
-    templateId: "overview-template-standard",
     name: german ? "Allgemein" : "Project information",
     placeholderKey: german ? "allgemein" : "project_information",
     entries: generalEntries,
   });
   if (project.emergencyContacts.length) sections.push({
     id: createId("overview-section"),
-    templateId: "overview-template-emergency",
     name: german ? "Notfallkontakte" : "Emergency contacts",
     placeholderKey: german ? "notfallkontakte" : "emergency_contacts",
     entries: [repeatingEntry(
@@ -187,7 +185,6 @@ export function legacyProjectOverviewSections(project: Project, createId: Create
   });
   if (project.participants.length) sections.push({
     id: createId("overview-section"),
-    templateId: "overview-template-participants",
     name: german ? "Projektbeteiligte" : "Project participants",
     placeholderKey: german ? "projektbeteiligte" : "project_participants",
     entries: [repeatingEntry(
@@ -199,7 +196,6 @@ export function legacyProjectOverviewSections(project: Project, createId: Create
   });
   sections.push(...project.customSections.map((section) => ({
     id: createId("overview-section"),
-    templateId: normalizeOverviewKey(section.title) === "baustellenlogistik" ? "overview-template-logistics" : undefined,
     name: section.title,
     placeholderKey: section.placeholderKey,
     entries: section.fields.map((field) => textEntry(createId, field.key, field.value)),

@@ -198,13 +198,17 @@ describe("contact import", () => {
 
   it("commits contacts, company, affiliation, external identity, project assignment, and journal atomically", () => {
     const database = createSeedDatabase();
+    database.projectRoleDefinitions.push({
+      id: "project-role-fire-protection", organizationId: database.organization.id, name: "Fire protection",
+      lifecycle: "active", sortOrder: 0, createdAt: "2026-09-29T12:00:00.000Z", updatedAt: "2026-09-29T12:00:00.000Z",
+    });
     let sequence = 0;
     const result = commitContactImport(database, {
       source: "microsoft",
       sourceLabel: "Microsoft Outlook",
       projectAssignment: {
         projectId: database.projects[0].id,
-        roles: [{ role: "architect" }, { role: "custom", customLabel: "Fire protection" }],
+        roles: [{ role: "architect" }, { role: "custom", roleDefinitionId: "project-role-fire-protection", customLabel: "Fire protection" }],
       },
       decisions: [{
         action: "create",
@@ -224,10 +228,30 @@ describe("contact import", () => {
     expect(result.database.externalContactIdentities.some((value) => value.contactId === createdItem.contactId)).toBe(true);
     expect(result.database.projectContactAssignments.find((value) => value.contactId === createdItem.contactId)?.roles).toEqual(expect.arrayContaining([
       expect.objectContaining({ role: "architect" }),
-      expect.objectContaining({ role: "custom", customLabel: "Fire protection" }),
+      expect.objectContaining({ role: "custom", roleDefinitionId: "project-role-fire-protection", customLabel: "Fire protection" }),
     ]));
     expect(result.database.contactImportBatches[0].id).toBe(result.batch.id);
     expect(database.contacts.some((value) => value.id === createdItem.contactId)).toBe(false);
+  });
+
+  it("assigns an imported contact to a project without requiring a role", () => {
+    const database = createSeedDatabase();
+    let sequence = 0;
+    const result = commitContactImport(database, {
+      source: "csv",
+      sourceLabel: "contacts.csv",
+      projectAssignment: { projectId: database.projects[0].id, roles: [] },
+      decisions: [{
+        action: "create",
+        candidate: {
+          sourceKey: "roleless-contact", prefix: "", givenName: "Roleless", familyName: "Participant", suffix: "", displayName: "Roleless Participant",
+          companyName: "", jobTitle: "", department: "", emails: [], phones: [], addresses: [], notes: "", tags: [], warnings: [],
+        },
+      }],
+    }, (prefix) => `${prefix}-${sequence += 1}`, "2026-09-30T12:00:00.000Z");
+
+    const contactId = result.batch.items[0].contactId;
+    expect(result.database.projectContactAssignments.find((assignment) => assignment.contactId === contactId)?.roles).toEqual([]);
   });
 
   it("re-imports a provider contact through its stable external identity without duplicating it", () => {

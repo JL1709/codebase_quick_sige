@@ -1,11 +1,37 @@
 import { Packer } from "docx";
-import { describe, expect, it } from "vitest";
+import { jsPDF } from "jspdf";
+import { describe, expect, it, vi } from "vitest";
 import { createSeedDatabase } from "../data/seed";
 import { annotationBoundsFromDrag, createAnnotationElement } from "../domain/planAnnotations";
 import type { PlanAssetElement } from "../domain/types";
 import { buildPlanDocxDocument, buildPlanPdf, buildSupportingDocumentPdf, planCanvasFontSizeToPdfPoints } from "./exports";
 
 describe("document exports", () => {
+  it("uses a PDF cover only for page one and a placeholder when a later page is unavailable", () => {
+    const database = createSeedDatabase();
+    const project = structuredClone(database.projects[0]);
+    const asset = project.assets.find((candidate) => candidate.mimeType === "application/pdf")!;
+    asset.previewDataUrl = "cover-preview";
+    const plan = structuredClone(database.plans[0]);
+    const element = plan.layout.elements.find((candidate): candidate is PlanAssetElement => candidate.kind === "pdf_page")!;
+    plan.layout.elements = [element];
+    const pdfApi = jsPDF.API as unknown as Record<string, (...args: unknown[]) => unknown>;
+    const addImage = vi.spyOn(pdfApi, "addImage").mockReturnThis();
+    try {
+      element.pageNumber = 2;
+      buildPlanPdf(project, plan, [], database.categories, "en");
+      expect(addImage).not.toHaveBeenCalled();
+      buildPlanPdf(project, plan, [], database.categories, "en", undefined, new Map([[element.id, "page-two-preview"]]));
+      expect(addImage).toHaveBeenCalledWith("page-two-preview", "PNG", expect.any(Number), expect.any(Number), expect.any(Number), expect.any(Number), undefined, "FAST");
+      addImage.mockClear();
+      element.pageNumber = 1;
+      buildPlanPdf(project, plan, [], database.categories, "en");
+      expect(addImage).toHaveBeenCalledWith("cover-preview", "PNG", expect.any(Number), expect.any(Number), expect.any(Number), expect.any(Number), undefined, "FAST");
+    } finally {
+      addImage.mockRestore();
+    }
+  });
+
   it("preserves canvas typography at physical A0 scale", () => {
     expect(planCanvasFontSizeToPdfPoints(8)).toBeCloseTo(22.68, 2);
     expect(planCanvasFontSizeToPdfPoints(7)).toBeCloseTo(19.84, 2);

@@ -19,8 +19,8 @@ import {
   type ContactImportDecisionAction,
   type ContactImportOverwriteField,
 } from "../domain/contactImportCommit";
-import { contactDisplayName, STANDARD_PROJECT_ROLES } from "../domain/contacts";
-import type { Contact, ContactSource, ExternalContactIdentity, ProjectParticipantRole } from "../domain/types";
+import { contactDisplayName, projectContactRoleFromKey, projectRoleDefinitionForKey, STANDARD_PROJECT_ROLES } from "../domain/contacts";
+import type { Contact, ContactSource, ExternalContactIdentity } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
 import { importGoogleContacts, importMicrosoftContacts, type ContactProviderCollection } from "../integrations/contactProviders";
 import { useApp } from "../state/AppProvider";
@@ -66,7 +66,7 @@ function providerErrorMessage(error: unknown, t: (key: string) => string): strin
 }
 
 export function ContactImportModal({ open, onClose, onImported, defaultProjectId = "" }: { open: boolean; onClose: () => void; onImported?: (contactIds: string[]) => void; defaultProjectId?: string }) {
-  const { database, commitContactImport, undoContactImportBatch, recordContactProviderEvent } = useApp();
+  const { database, commitContactImport, createProjectRoleDefinition, undoContactImportBatch, recordContactProviderEvent } = useApp();
   const { locale, t } = useI18n();
   const fileInput = useRef<HTMLInputElement>(null);
   const providerAbortController = useRef<AbortController | null>(null);
@@ -91,8 +91,8 @@ export function ContactImportModal({ open, onClose, onImported, defaultProjectId
   const [providerCollections, setProviderCollections] = useState<ContactProviderCollection[]>([]);
   const [selectedProviderCollections, setSelectedProviderCollections] = useState<Set<string>>(new Set());
   const [projectId, setProjectId] = useState(defaultProjectId);
-  const [roles, setRoles] = useState<Set<ProjectParticipantRole>>(new Set(["contractor"]));
-  const [customRole, setCustomRole] = useState("");
+  const [roleKeys, setRoleKeys] = useState<Set<string>>(new Set());
+  const [newRoleName, setNewRoleName] = useState("");
   const [importTag, setImportTag] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -225,7 +225,10 @@ export function ContactImportModal({ open, onClose, onImported, defaultProjectId
       decisions: taggedDecisions,
       projectAssignment: projectId ? {
         projectId,
-        roles: [...roles].map((role) => ({ role, customLabel: role === "custom" ? customRole.trim() : undefined })),
+        roles: [...roleKeys].flatMap((roleKey, index) => {
+          const role = projectContactRoleFromKey(database, roleKey, `import-role-${index}`, projectId);
+          return role ? [{ role: role.role, roleDefinitionId: role.roleDefinitionId, customLabel: role.customLabel }] : [];
+        }),
       } : undefined,
     });
     setResult({
@@ -239,10 +242,18 @@ export function ContactImportModal({ open, onClose, onImported, defaultProjectId
     });
     setStep("result");
   };
-  const toggleRole = (role: ProjectParticipantRole) => setRoles((current) => {
+  const toggleRole = (roleKey: string) => setRoleKeys((current) => {
     const selected = new Set(current);
-    if (selected.has(role)) selected.delete(role); else selected.add(role);
+    if (selected.has(roleKey)) selected.delete(roleKey); else selected.add(roleKey);
     return selected;
+  });
+  const activeCustomRoles = database.projectRoleDefinitions
+    .filter((definition) => definition.lifecycle === "active" && (!definition.projectId || definition.projectId === projectId))
+    .sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name));
+  const selectedRoleLabels = [...roleKeys].flatMap((roleKey) => {
+    if (roleKey.startsWith("system:")) return [t(`contacts.role.${roleKey.slice("system:".length)}`)];
+    const definition = projectRoleDefinitionForKey(database, roleKey, projectId);
+    return definition ? [definition.name] : [];
   });
   const downloadCsvTemplate = () => {
     const url = URL.createObjectURL(new Blob([exportContactCsvTemplate(locale)], { type: "text/csv;charset=utf-8" }));
@@ -322,12 +333,11 @@ export function ContactImportModal({ open, onClose, onImported, defaultProjectId
       <fieldset className="contact-fieldset"><legend>{t("contacts.import.importOptions")}</legend><div className="form-grid">
         <label className="field span-two"><span>{t("contacts.import.addTag")}</span><input value={importTag} maxLength={80} onChange={(event) => setImportTag(event.target.value)} placeholder={t("contacts.import.addTagPlaceholder")} /></label>
         <label className="field"><span>{t("contacts.import.project")}</span><select value={projectId} onChange={(event) => setProjectId(event.target.value)}><option value="">{t("contacts.import.noProject")}</option>{database.projects.filter((project) => project.status !== "archived").map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
-        <fieldset className="contact-fieldset span-two" disabled={!projectId}><legend>{t("contacts.roles")}</legend><div className="role-checkbox-grid">{[...STANDARD_PROJECT_ROLES, "custom" as const].map((value) => <label key={value}><input type="checkbox" checked={roles.has(value)} onChange={() => toggleRole(value)} /><span>{t(`contacts.role.${value}`)}</span></label>)}</div></fieldset>
-        {roles.has("custom") && projectId && <label className="field span-two"><span>{t("contacts.customRole")}</span><input value={customRole} onChange={(event) => setCustomRole(event.target.value)} /></label>}
+        <fieldset className="contact-fieldset span-two" disabled={!projectId}><legend>{t("contacts.roles")}</legend><div className="role-checkbox-grid">{STANDARD_PROJECT_ROLES.map((value) => { const roleKey = `system:${value}`; return <label key={value}><input type="checkbox" checked={roleKeys.has(roleKey)} onChange={() => toggleRole(roleKey)} /><span>{t(`contacts.role.${value}`)}</span></label>; })}{activeCustomRoles.map((definition) => { const roleKey = `custom:${definition.id}`; return <label key={definition.id}><input type="checkbox" checked={roleKeys.has(roleKey)} onChange={() => toggleRole(roleKey)} /><span>{definition.name}</span></label>; })}</div><div className="role-create-inline"><input aria-label={t("projectRoles.name")} value={newRoleName} onChange={(event) => setNewRoleName(event.target.value)} /><Button type="button" size="small" variant="secondary" disabled={!newRoleName.trim()} onClick={() => { const definition = createProjectRoleDefinition(newRoleName); if (definition) setRoleKeys((current) => new Set([...current, `custom:${definition.id}`])); setNewRoleName(""); }}>{t("projectRoles.add")}</Button></div></fieldset>
       </div></fieldset>
-    </div><div className="modal-footer"><Button variant="secondary" onClick={() => setStep(providerCandidates.length ? "provider" : sheets.length ? "mapping" : "source")}>{t("common.back")}</Button><Button disabled={Boolean(projectId) && (roles.size === 0 || (roles.has("custom") && !customRole.trim()))} onClick={() => setStep("confirm")}>{t("common.continue")}</Button></div></>}
+    </div><div className="modal-footer"><Button variant="secondary" onClick={() => setStep(providerCandidates.length ? "provider" : sheets.length ? "mapping" : "source")}>{t("common.back")}</Button><Button onClick={() => setStep("confirm")}>{t("common.continue")}</Button></div></>}
 
-    {step === "confirm" && <><div className="modal-body import-confirm-step"><h3>{t("contacts.import.confirmTitle")}</h3><p>{t("contacts.import.confirmHelp")}</p><dl><div><dt>{t("contacts.import.create")}</dt><dd>{actionCounts.create}</dd></div><div><dt>{t("contacts.import.update")}</dt><dd>{actionCounts.update}</dd></div><div><dt>{t("contacts.import.merge")}</dt><dd>{actionCounts.merge}</dd></div><div><dt>{t("contacts.import.skip")}</dt><dd>{actionCounts.skip}</dd></div>{importTag.trim() && <div><dt>{t("contacts.tag")}</dt><dd>{importTag.trim()}</dd></div>}{projectId && <><div><dt>{t("contacts.project")}</dt><dd>{database.projects.find((project) => project.id === projectId)?.name}</dd></div><div><dt>{t("contacts.roles")}</dt><dd>{[...roles].map((role) => role === "custom" ? customRole.trim() : t(`contacts.role.${role}`)).join(", ")}</dd></div></>}</dl></div><div className="modal-footer"><Button variant="secondary" onClick={() => setStep("review")}>{t("common.back")}</Button><Button onClick={finishImport}>{t("contacts.import.importAction", { count: actionCounts.create + actionCounts.update + actionCounts.merge })}</Button></div></>}
+    {step === "confirm" && <><div className="modal-body import-confirm-step"><h3>{t("contacts.import.confirmTitle")}</h3><p>{t("contacts.import.confirmHelp")}</p><dl><div><dt>{t("contacts.import.create")}</dt><dd>{actionCounts.create}</dd></div><div><dt>{t("contacts.import.update")}</dt><dd>{actionCounts.update}</dd></div><div><dt>{t("contacts.import.merge")}</dt><dd>{actionCounts.merge}</dd></div><div><dt>{t("contacts.import.skip")}</dt><dd>{actionCounts.skip}</dd></div>{importTag.trim() && <div><dt>{t("contacts.tag")}</dt><dd>{importTag.trim()}</dd></div>}{projectId && <><div><dt>{t("contacts.project")}</dt><dd>{database.projects.find((project) => project.id === projectId)?.name}</dd></div><div><dt>{t("contacts.roles")}</dt><dd>{selectedRoleLabels.join(", ") || t("projectRoles.noSelectedRoles")}</dd></div></>}</dl></div><div className="modal-footer"><Button variant="secondary" onClick={() => setStep("review")}>{t("common.back")}</Button><Button onClick={finishImport}>{t("contacts.import.importAction", { count: actionCounts.create + actionCounts.update + actionCounts.merge })}</Button></div></>}
 
     {step === "result" && result && <><div className="modal-body import-result-step"><span className="import-result-icon"><Upload /></span><h3>{t("contacts.import.complete")}</h3><p>{t("contacts.import.completeTextDetailed", { created: result.created, updated: result.updated, merged: result.merged, skipped: result.skipped, failed: result.failed })}</p>{result.undone && <p className="import-status" role="status">{t("contacts.undoResult", { reverted: result.reverted ?? 0, conflicts: result.conflicts ?? 0 })}</p>}</div><div className="modal-footer">{result.skipped + result.failed > 0 && <Button variant="ghost" onClick={downloadErrorReport}>{t("contacts.import.downloadReport")}</Button>}<Button variant="secondary" disabled={result.undone} onClick={() => { const undo = undoContactImportBatch(result.batchId); setResult((current) => current ? { ...current, undone: true, reverted: undo.reverted, conflicts: undo.conflicts } : current); }}>{t("contacts.undoImport")}</Button><Button onClick={closeImport}>{t("common.close")}</Button></div></>}
   </Modal>;

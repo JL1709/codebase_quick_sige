@@ -20,7 +20,7 @@ if (header?.kind === "header") {
   header.brandText = { ...header.brandText, de: "QS Safety" };
   header.titleText = { ...header.titleText, de: "Sicherheitsplan - Exportpruefung" };
   header.projectNameText = { ...header.projectNameText, de: "Logistikzentrum Exportpruefung" };
-  header.projectDetailsText = { ...header.projectDetailsText, de: "QS-2026-014 - Exportgelaende Leipzig" };
+  header.projectDetailsText = { ...header.projectDetailsText, de: "Exportgelaende Leipzig" };
   header.statusText = { ...header.statusText, de: "Freigabe QA" };
 }
 if (titleBlock?.kind === "title_block") {

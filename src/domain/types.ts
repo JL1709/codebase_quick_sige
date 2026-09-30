@@ -6,7 +6,7 @@ export type Season = "spring" | "summer" | "autumn" | "winter" | "year_round";
 export type RecommendationStrength = "required_review" | "strong" | "optional";
 export type RecordLifecycle = "active" | "archived";
 export type ContactMethodType = "work" | "mobile" | "home" | "other";
-export type ProjectParticipantRole = "client" | "owner" | "coordinator" | "architect" | "planner" | "site_manager" | "contractor" | "custom";
+export type ProjectParticipantRole = "client" | "owner" | "responsible_third_party" | "coordinator" | "architect" | "planner" | "site_manager" | "contractor" | "custom";
 export type ContactSource = "manual" | "migration" | "vcard" | "csv" | "xlsx" | "microsoft" | "google";
 
 export interface Organization { id: string; name: string; accentColor: string }
@@ -103,7 +103,19 @@ export interface ContactCompanyAffiliation {
 export interface ProjectContactRole {
   id: string;
   role: ProjectParticipantRole;
+  roleDefinitionId?: string;
   customLabel?: string;
+}
+
+export interface ProjectRoleDefinition {
+  id: string;
+  organizationId: string;
+  projectId?: string;
+  name: string;
+  lifecycle: RecordLifecycle;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ProjectContactAssignment {
@@ -111,7 +123,6 @@ export interface ProjectContactAssignment {
   organizationId: string;
   projectId: string;
   contactId: string;
-  companyId?: string;
   roles: ProjectContactRole[];
   lifecycle: RecordLifecycle;
   createdAt: string;
@@ -192,7 +203,6 @@ export interface ProjectOverviewEntry {
 
 export interface ProjectOverviewSection {
   id: string;
-  templateId?: string;
   name: string;
   placeholderKey: string;
   entries: ProjectOverviewEntry[];
@@ -250,7 +260,9 @@ export interface Project {
   emergencyContacts: EmergencyContact[];
   customFields: CustomField[];
   customSections: CustomSection[];
+  participantsSectionName: string;
   overviewSections: ProjectOverviewSection[];
+  overviewSectionOrder: string[];
   assets: ProjectAsset[];
   documentFolders: ProjectDocumentFolder[];
   createdAt: string;
@@ -488,7 +500,7 @@ export interface AuditEvent { id: string; projectId?: string; action: string; ac
 export interface AppDatabase {
   schemaVersion: number; organization: Organization; user: AppUser; projects: Project[];
   contacts: Contact[]; companies: Company[]; contactAffiliations: ContactCompanyAffiliation[];
-  projectContactAssignments: ProjectContactAssignment[]; externalContactIdentities: ExternalContactIdentity[];
+  projectContactAssignments: ProjectContactAssignment[]; projectRoleDefinitions: ProjectRoleDefinition[]; externalContactIdentities: ExternalContactIdentity[];
   contactImportBatches: ContactImportBatch[];
   assessmentRuns: ProjectAssessmentRun[]; blocks: BuildingBlock[]; categories: BuildingBlockCategory[];
   plans: Plan[]; revisions: PlanRevision[]; overviewTemplates: OverviewTemplate[]; documentTemplates: DocumentTemplate[];
@@ -497,5 +509,7 @@ export interface AppDatabase {
 
 export interface ProjectFormValues {
   name: string;
+  participantsSectionName: string;
   overviewSections: ProjectOverviewSection[];
+  overviewSectionOrder: string[];
 }

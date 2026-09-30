@@ -1,4 +1,4 @@
-import { Plus, Trash2 } from "lucide-react";
+import { CircleCheck, Plus, Trash2 } from "lucide-react";
 import { type FormEvent, useMemo, useState } from "react";
 import { companyForContact, contactDisplayName, normalizeDomain, normalizeEmail, normalizePhone } from "../domain/contacts";
 import type { Company, Contact, ContactAddress, ContactEmail, ContactMethodType, ContactPhone } from "../domain/types";
@@ -14,7 +14,7 @@ function methodTypeOptions(t: (key: string) => string) {
   return (["work", "mobile", "home", "other"] as ContactMethodType[]).map((type) => <option key={type} value={type}>{t(`contacts.method.${type}`)}</option>);
 }
 
-export function ContactFormModal({ open, contact, onClose, onSaved }: { open: boolean; contact?: Contact; onClose: () => void; onSaved?: (contact: Contact) => void }) {
+export function ContactFormModal({ open, contact, projectParticipantContext = false, onClose, onSaved }: { open: boolean; contact?: Contact; projectParticipantContext?: boolean; onClose: () => void; onSaved?: (contact: Contact) => void }) {
   const { database, saveContact, saveCompany, saveContactAffiliation } = useApp();
   const { t } = useI18n();
   const affiliation = useMemo(() => contact && database.contactAffiliations.find((candidate) => candidate.contactId === contact.id && candidate.primary), [contact, database.contactAffiliations]);
@@ -124,6 +124,7 @@ export function ContactFormModal({ open, contact, onClose, onSaved }: { open: bo
         <label className="field"><span>{t("contacts.tags")}</span><input value={tags} onChange={(event) => setTags(event.target.value)} placeholder={t("contacts.tagsPlaceholder")} /></label>
         <label className="field"><span>{t("contacts.notes")}</span><textarea value={notes} onChange={(event) => setNotes(event.target.value)} /></label>
         {contact && <p className="field-help">{t("contacts.editing", { name: contactDisplayName(contact) })}</p>}
+        {projectParticipantContext && !contact && <div className="contact-catalog-notice"><CircleCheck size={18} aria-hidden="true" /><span><strong>{t("contacts.savedToContacts")}</strong><small>{t("contacts.savedToContactsHelp")}</small></span></div>}
       </div>
       <div className="modal-footer"><Button type="button" variant="secondary" onClick={onClose}>{t("common.cancel")}</Button><Button type="submit">{t("common.save")}</Button></div>
     </form>

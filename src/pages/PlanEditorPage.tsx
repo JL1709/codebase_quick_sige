@@ -7,16 +7,18 @@ import {
 } from "lucide-react";
 import Moveable, { type OnResize } from "react-moveable";
 import Selecto from "react-selecto";
-import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { useNavigate, useParams } from "react-router-dom";
 import { BlockVisual } from "../components/BlockVisual";
+import { CanvasAssetImage } from "../components/CanvasAssetImage";
+import { CanvasInlineText as InlineText } from "../components/CanvasInlineText";
 import { PlanCreationDialog } from "../components/PlanCreationDialog";
 import { Badge, Button, EmptyState, Modal } from "../components/Ui";
-import { blobObjectUrl, getBlob, saveBlob } from "../data/blobRepository";
-import { renderPdfPage } from "../documents/pdfPreview";
+import { getBlob, saveBlob } from "../data/blobRepository";
 import { hydrateBlockImages } from "../domain/blockImages";
-import { calculateAnchoredScroll, calculateFitZoom, clampCanvasZoom, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, stepCanvasZoom } from "../domain/canvasViewport";
+import { MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, stepCanvasZoom } from "../domain/canvasViewport";
+import { useCanvasViewport } from "../hooks/useCanvasViewport";
 import { readableTextColor } from "../domain/colorContrast";
 import { createCanvasClipboard, pasteCanvasClipboard, type CanvasClipboardSnapshot } from "../domain/planClipboard";
 import { PLAN_PRESENTATION } from "../domain/planPresentation";
@@ -33,7 +35,7 @@ import {
   type ElementResizeMeasurement,
 } from "../domain/planLayout";
 import { BLOCK_LAYOUT_VALIDATION_RULE_CODES, createPlanValidationIssues, type PlanValidationIssue } from "../domain/planValidation";
-import type { BlockLayoutMode, BuildingBlockCategory, DocumentTemplate, Plan, PlanAnnotationStyle, PlanAssetElement, PlanBlockElement, PlanConnectorPoint, PlanElement, PlanItem, PlanMargins, PlanPaperRaster, PlanSection, PlanSectionElement, PlanShapeElement, PlanTextElement, Project, ProjectAsset } from "../domain/types";
+import type { BlockLayoutMode, BuildingBlockCategory, DocumentTemplate, Plan, PlanAnnotationStyle, PlanAssetElement, PlanBlockElement, PlanConnectorPoint, PlanElement, PlanItem, PlanMargins, PlanPaperRaster, PlanSection, PlanSectionElement, PlanShapeElement, PlanTextElement, ProjectAsset } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
 import { translate } from "../i18n/translations";
 import { newId, useApp } from "../state/AppProvider";
@@ -41,6 +43,7 @@ import { NotFoundPage } from "./NotFoundPage";
 
 const DOUBLE_CLICK_INTERVAL_MS = 500;
 const DOUBLE_CLICK_DISTANCE_PX = 8;
+const VALIDATION_FOCUS_MINIMUM_ZOOM = 0.8;
 
 interface PendingWordPlanGeneration {
   template: DocumentTemplate;
@@ -117,8 +120,6 @@ export function PlanEditorPage() {
   const [publishOpen, setPublishOpen] = useState(false);
   const [publishInput, setPublishInput] = useState(() => ({ index: String.fromCharCode(65 + database.revisions.filter((revision) => revision.projectId === projectId).length), changeSummary: "", approvedBy: "" }));
   const [publishedIndex, setPublishedIndex] = useState("");
-  const [zoom, setZoom] = useState(0.7);
-  const [fitMode, setFitMode] = useState(true);
   const [libraryOpen, setLibraryOpen] = useState(true);
   const [validationOpen, setValidationOpen] = useState(false);
   const [insertOpen, setInsertOpen] = useState(false);
@@ -138,6 +139,13 @@ export function PlanEditorPage() {
   });
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const canvasShellRef = useRef<HTMLElement | null>(null);
+  const { viewport, fitPlan, setZoomAroundPoint, focusCanvasPoint } = useCanvasViewport(
+    canvasShellRef,
+    A0_LANDSCAPE_WIDTH * CSS_PIXELS_PER_LAYOUT_UNIT,
+    A0_LANDSCAPE_HEIGHT * CSS_PIXELS_PER_LAYOUT_UNIT,
+    Boolean(plan),
+  );
+  const { zoom } = viewport;
   const canvasClipboardRef = useRef<CanvasClipboardSnapshot | null>(null);
   const moveableRef = useRef<{ updateRect: () => void } | null>(null);
   const validationTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -155,58 +163,6 @@ export function PlanEditorPage() {
   );
   validationOpenRef.current = validationOpen;
 
-  const recalculateFit = useCallback(() => {
-    const viewport = canvasShellRef.current;
-    if (!viewport) return;
-    setZoom(calculateFitZoom(
-      viewport.clientWidth,
-      viewport.clientHeight,
-      A0_LANDSCAPE_WIDTH * CSS_PIXELS_PER_LAYOUT_UNIT,
-      A0_LANDSCAPE_HEIGHT * CSS_PIXELS_PER_LAYOUT_UNIT,
-    ));
-  }, []);
-  const fitPlan = useCallback(() => {
-    setFitMode(true);
-    window.requestAnimationFrame(recalculateFit);
-  }, [recalculateFit]);
-  const setZoomAroundPoint = useCallback((nextZoom: number, pointerX?: number, pointerY?: number) => {
-    const viewport = canvasShellRef.current;
-    const clampedZoom = clampCanvasZoom(nextZoom);
-    setFitMode(false);
-    if (!viewport) { setZoom(clampedZoom); return; }
-    const anchorX = pointerX ?? viewport.clientWidth / 2;
-    const anchorY = pointerY ?? viewport.clientHeight / 2;
-    const nextScroll = calculateAnchoredScroll(viewport.scrollLeft, viewport.scrollTop, anchorX, anchorY, zoom, clampedZoom);
-    setZoom(clampedZoom);
-    window.requestAnimationFrame(() => viewport.scrollTo({ left: nextScroll.left, top: nextScroll.top }));
-  }, [zoom]);
-
-  useEffect(() => {
-    const viewport = canvasShellRef.current;
-    if (!viewport) return undefined;
-    const resizeObserver = new ResizeObserver(() => { if (fitMode) recalculateFit(); else moveableRef.current?.updateRect(); });
-    resizeObserver.observe(viewport);
-    if (fitMode) recalculateFit();
-    return () => resizeObserver.disconnect();
-  }, [fitMode, libraryOpen, recalculateFit]);
-
-  useEffect(() => {
-    const viewport = canvasShellRef.current;
-    if (!viewport) return undefined;
-    const handleWheel = (event: WheelEvent) => {
-      if (!event.ctrlKey && !event.metaKey) return;
-      event.preventDefault();
-      const bounds = viewport.getBoundingClientRect();
-      const direction = event.deltaY < 0 ? "in" : "out";
-      const stepCount = Math.min(6, Math.max(1, Math.round(Math.abs(event.deltaY) / 100)));
-      let nextZoom = zoom;
-      for (let index = 0; index < stepCount; index += 1) nextZoom = stepCanvasZoom(nextZoom, direction);
-      setZoomAroundPoint(nextZoom, event.clientX - bounds.left, event.clientY - bounds.top);
-    };
-    viewport.addEventListener("wheel", handleWheel, { passive: false });
-    return () => viewport.removeEventListener("wheel", handleWheel);
-  }, [setZoomAroundPoint, zoom]);
-
   useEffect(() => {
     if (!validationOpen && !insertOpen && !styleOpen && !canvasSettingsOpen) return undefined;
     const dismiss = (event: PointerEvent) => {
@@ -221,10 +177,7 @@ export function PlanEditorPage() {
     return () => document.removeEventListener("pointerdown", dismiss);
   }, [canvasSettingsOpen, insertOpen, styleOpen, validationOpen]);
 
-  useEffect(() => {
-    const frame = window.requestAnimationFrame(() => moveableRef.current?.updateRect());
-    return () => window.cancelAnimationFrame(frame);
-  }, [zoom, libraryOpen, plan, selectedElementIds]);
+  useLayoutEffect(() => { moveableRef.current?.updateRect(); }, [viewport, libraryOpen, plan, selectedElementIds]);
 
   const blockMap = useMemo(() => new Map(database.blocks.map((block) => [block.id, block])), [database.blocks]);
   const categoryMap = useMemo(() => new Map(database.categories.map((category) => [category.id, category])), [database.categories]);
@@ -313,7 +266,7 @@ export function PlanEditorPage() {
         event.preventDefault(); if (key === "y" || event.shiftKey) redo(); else undo(); return;
       }
       if (command && (key === "+" || key === "=" || key === "-")) {
-        event.preventDefault(); setZoomAroundPoint(stepCanvasZoom(zoom, key === "-" ? "out" : "in")); return;
+        event.preventDefault(); setZoomAroundPoint((currentZoom) => stepCanvasZoom(currentZoom, key === "-" ? "out" : "in")); return;
       }
       if (event.shiftKey && key === "1") { event.preventDefault(); fitPlan(); return; }
       if (!command && (key === "t" || key === "r")) {
@@ -716,10 +669,12 @@ export function PlanEditorPage() {
     setSelected(element?.kind === "block" ? { sectionId: element.sectionId, itemId: element.itemId, elementId: element.id } : null);
     setValidationOpen(false);
     setFocusedIssueElementId(issue.elementId);
-    if (zoom < 0.8) setZoomAroundPoint(0.8);
+    if (element) focusCanvasPoint({
+      x: (element.x + element.width / 2) * CSS_PIXELS_PER_LAYOUT_UNIT,
+      y: (element.y + element.height / 2) * CSS_PIXELS_PER_LAYOUT_UNIT,
+    }, VALIDATION_FOCUS_MINIMUM_ZOOM);
     window.requestAnimationFrame(() => {
       const target = elementRefs.current.get(issue.elementId as string);
-      target?.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
       target?.focus({ preventScroll: true });
       window.setTimeout(() => setFocusedIssueElementId(null), 1_500);
     });
@@ -878,7 +833,7 @@ export function PlanEditorPage() {
       {libraryOpen && <aside className="editor-sidebar"><div className="editor-pane-header"><div className="editor-pane-heading"><h2>{t("editor.catalog")}</h2></div><div className="search-shell"><Search size={15} /><input className="search-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("editor.searchBlocks")} aria-label={t("editor.searchBlocks")} /></div></div><div className="editor-library"><CategoryLibrary categories={database.categories.filter((category) => category.lifecycle === "active")} blocks={activeBlocks} expanded={expandedCategories} locale={locale} presentBlockIds={presentBlockIds} onToggle={(id) => setExpandedCategories((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; })} onAdd={(id) => addBlock(id)} t={t} /><LibraryGroup title={t("editor.projectFiles")} defaultOpen><ProjectDocumentsLibrary assets={project.assets.filter((asset) => asset.mimeType.startsWith("image/") || asset.mimeType === "application/pdf")} onAddAsset={addAsset} onAddPdfPages={addAssetPages} t={t} /></LibraryGroup></div></aside>}
       <main ref={canvasShellRef} className="editor-canvas-shell">
         {blockFitMessage && <div className="block-fit-message" role="status"><TriangleAlert size={14} />{blockFitMessage}</div>}
-        <div className="canvas-stage" style={{ width: A0_LANDSCAPE_WIDTH * CSS_PIXELS_PER_LAYOUT_UNIT * zoom, height: A0_LANDSCAPE_HEIGHT * CSS_PIXELS_PER_LAYOUT_UNIT * zoom }}>
+        <div className="canvas-stage" style={{ width: A0_LANDSCAPE_WIDTH * CSS_PIXELS_PER_LAYOUT_UNIT * zoom, height: A0_LANDSCAPE_HEIGHT * CSS_PIXELS_PER_LAYOUT_UNIT * zoom, transform: `translate(${viewport.x}px, ${viewport.y}px)` }}>
           <PlanCanvas ref={canvasRef} plan={plan} project={project} locale={locale} zoom={zoom} blockMap={blockMap} categoryMap={categoryMap} selectedIds={selectedElementIds} editing={editing} activeInsertTool={activeInsertTool} focusedIssueElementId={focusedIssueElementId} setElementRef={(id, element) => { if (element) elementRefs.current.set(id, element); else elementRefs.current.delete(id); }} onInsert={addAnnotation} onSelect={(element) => { setSelectedElementId(element.id); setSelectedElementIds([element.id]); if (element.kind === "block") setSelected({ sectionId: element.sectionId, itemId: element.itemId, elementId: element.id }); else setSelected(null); }} onClearSelection={() => { setEditing(null); setSelected(null); setSelectedElementId(null); setSelectedElementIds([]); }} onEditCommit={commitInlineEdit} onEditCancel={() => setEditing(null)} t={t} />
         </div>
         <Selecto
@@ -1432,28 +1387,6 @@ function PlanElementView({ element, plan, project, locale, blockMap, categoryMap
   return null;
 }
 
-function InlineText({ value, editing, field, multiline = false, className, onCommit, onCancel, label }: { value: string; editing: boolean; field: InlineField; multiline?: boolean; className?: string; onCommit: (value: string) => void; onCancel: () => void; label: string }) {
-  const [draft, setDraft] = useState(value);
-  const cancelled = useRef(false);
-  useEffect(() => { setDraft(value); }, [value, editing]);
-  if (!editing) return <span className={className} data-inline-field={field}>{value}</span>;
-  const sharedProps = {
-    autoFocus: true,
-    className: `canvas-inline-editor ${className ?? ""}`,
-    value: draft,
-    "aria-label": label,
-    onClick: (event: React.MouseEvent) => event.stopPropagation(),
-    onPointerDown: (event: React.PointerEvent) => event.stopPropagation(),
-    onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setDraft(event.target.value),
-    onBlur: () => { if (!cancelled.current) onCommit(draft); },
-    onKeyDown: (event: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-      if (event.key === "Escape") { cancelled.current = true; event.preventDefault(); onCancel(); }
-      if (event.key === "Enter" && (!multiline || event.metaKey || event.ctrlKey)) { event.preventDefault(); onCommit(draft); }
-    },
-  };
-  return multiline ? <textarea {...sharedProps} /> : <input {...sharedProps} />;
-}
-
 function InsertAnnotationPopover({ onSelect, t }: { onSelect: (tool: AnnotationInsertTool) => void; t: (key: string) => string }) {
   const tools: Array<{ tool: AnnotationInsertTool; icon: React.ReactNode; shortcut?: string }> = [
     { tool: "text", icon: <Type size={16} />, shortcut: "T" },
@@ -1563,31 +1496,4 @@ function ValidationPopover({ issues, onNavigate, t }: { issues: PlanValidationIs
       <span><small>{t(`editor.validation.severity.${issue.severity}`)}</small><strong>{issue.title}</strong><span>{issue.description}</span>{issue.suggestedAction && <em>{issue.suggestedAction}</em>}</span>
     </button>)}</div>
   </div>;
-}
-
-function CanvasAssetImage({ asset, pdfPage, pageNumber, fitMode, crop, previewWidth = 1_200, t }: { asset: Project["assets"][number]; pdfPage: boolean; pageNumber?: number; fitMode?: "contain" | "cover"; crop?: { x: number; y: number; width: number; height: number }; previewWidth?: number; t: (key: string) => string }) {
-  const [url, setUrl] = useState(pdfPage ? asset.previewDataUrl : asset.dataUrl);
-  useEffect(() => {
-    let active = true;
-    let objectUrl: string | undefined;
-    const resolvePreview = async () => {
-      const requestedPdfPage = pageNumber ?? 1;
-      if (pdfPage && requestedPdfPage === 1 && (asset.previewBlobId || asset.previewDataUrl)) {
-        return blobObjectUrl(asset.previewBlobId, asset.previewDataUrl);
-      }
-      if (pdfPage && asset.blobId) {
-        const blob = await getBlob(asset.blobId); if (blob) return renderPdfPage(blob, pageNumber ?? 1, previewWidth);
-      }
-      if (pdfPage && asset.dataUrl) {
-        return renderPdfPage(await (await fetch(asset.dataUrl)).blob(), pageNumber ?? 1, previewWidth);
-      }
-      return blobObjectUrl(pdfPage ? asset.previewBlobId : asset.blobId, pdfPage ? asset.previewDataUrl : asset.dataUrl);
-    };
-    void resolvePreview().then((next) => {
-      if (!active) { if (next?.startsWith("blob:")) URL.revokeObjectURL(next); return; }
-      objectUrl = next; setUrl(next);
-    });
-    return () => { active = false; if (objectUrl?.startsWith("blob:")) URL.revokeObjectURL(objectUrl); };
-  }, [asset, pdfPage, pageNumber, previewWidth]);
-  return url ? <img src={url} alt={asset.filename} style={{ objectFit: fitMode ?? "contain", objectPosition: `${crop?.x ?? 50}% ${crop?.y ?? 50}%` }} /> : <div className="pdf-page-placeholder"><FileOutput size={28} /><strong>{asset.filename}</strong><span>PDF · {t("editor.page")} {pageNumber ?? 1}</span></div>;
 }

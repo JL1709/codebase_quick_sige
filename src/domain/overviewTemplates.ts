@@ -282,11 +282,22 @@ export function instantiateOverviewSection(
   const localizedTemplate = localizeOverviewTemplate(template, locale);
   return {
     id: createId("overview-section"),
-    templateId: template.id,
     name: localizedTemplate.name,
     placeholderKey: normalizeOverviewKey(localizedTemplate.name, "template"),
     entries: localizedTemplate.entries.map((entry) => instantiateEntry(entry, createId)),
   };
+}
+
+export function uniqueProjectOverviewSectionKey(
+  sectionName: string,
+  sections: ProjectOverviewSection[],
+): string {
+  const baseKey = normalizeOverviewKey(sectionName, "section");
+  const existingKeys = new Set(sections.map((section) => section.placeholderKey));
+  if (!existingKeys.has(baseKey)) return baseKey;
+  let suffix = 2;
+  while (existingKeys.has(`${baseKey}_${suffix}`)) suffix += 1;
+  return `${baseKey}_${suffix}`;
 }
 
 function formatEntryValue(entry: ProjectOverviewEntry, locale: Locale): unknown {

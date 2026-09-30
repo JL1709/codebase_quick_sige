@@ -4,6 +4,7 @@ import { ArchiveRestore, Check, CircleAlert, CircleHelp, Copy, Database, Downloa
 import { type ChangeEvent, type CSSProperties, type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Modal, PageHeader } from "../components/Ui";
 import { FieldTypeHelpModal } from "../components/FieldTypeHelpModal";
+import { ProjectRolesTemplateSection } from "../components/ProjectRolesTemplateSection";
 import { getBlob, saveBlob } from "../data/blobRepository";
 import {
   countOverviewEntries,
@@ -90,13 +91,15 @@ export function TemplatesPage() {
   return <div className="page settings-page">
     <PageHeader title={t("templates.pageTitle")} description={t("templates.pageSubtitle")} />
 
+    <ProjectRolesTemplateSection />
+
     <section className="settings-section">
       <div className="settings-section-header">
         <div><h2>{t("templates.overviewTitle")}</h2><p>{t("templates.overviewText")}</p></div>
         <Button onClick={() => openOverview()}><Plus size={15} />{t("templates.addOverview")}</Button>
       </div>
       <div className="template-list">
-        {database.overviewTemplates.map((template) => (
+        {database.overviewTemplates.filter((template) => template.id !== "overview-template-participants").map((template) => (
           <article className="template-row" key={template.id}>
             <div><strong>{overviewTemplateName(template, locale)}</strong><span>{countOverviewEntries(template.entries)} {t("overview.entries")}</span></div>
             <div className="row-actions">

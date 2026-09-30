@@ -6,20 +6,22 @@ import { createPlanFromAssessment } from "../domain/recommendationEngine";
 import { buildRevisionSnapshot } from "../domain/revisionSnapshot";
 import { activePlanForProject, createDraftFromCurrentPlan, createDraftFromRevision, normalizePlanReason, replaceActivePlan } from "../domain/planLifecycle";
 import { categoryPlacementIds, normalizeCategoryColorOwnership } from "../domain/categoryTree";
-import { instantiateOverviewSection, localizeOverviewTemplate, normalizeOverviewKey, validateOverviewTemplate } from "../domain/overviewTemplates";
-import { ensureSinglePrimary, projectWithResolvedParticipants } from "../domain/contacts";
+import { instantiateOverviewSection, localizeOverviewTemplate, uniqueProjectOverviewSectionKey, validateOverviewTemplate } from "../domain/overviewTemplates";
+import { ensureSinglePrimary, projectContactRoleKey, projectWithResolvedParticipants } from "../domain/contacts";
+import { normalizeProjectOverviewSectionOrder, orderProjectOverviewSections } from "../domain/projectOverviewOrder";
 import { commitContactImport as applyContactImport, type ContactImportCommitInput } from "../domain/contactImportCommit";
 import type {
   AppDatabase, AssessmentAnswers, BuildingBlock, BuildingBlockCategory, Company, Contact, ContactCompanyAffiliation,
   ContactImportBatch, DocumentTemplate, GeneratedDocument, Locale, OverviewTemplate, Plan, PlanRevision, Project,
-  ProjectAssessmentRun, ProjectContactAssignment, ProjectDocumentConfiguration, ProjectFormValues, ProjectStatus, Recommendation,
+  ProjectAssessmentRun, ProjectContactAssignment, ProjectDocumentConfiguration, ProjectFormValues, ProjectRoleDefinition, ProjectStatus, Recommendation,
 } from "../domain/types";
 
 interface PublishInput { index: string; changeSummary: string; approvedBy: string }
 export interface CreateProjectContactSelection {
   contactId: string;
-  roles: Array<{ role: ProjectContactAssignment["roles"][number]["role"]; customLabel?: string }>;
+  roles: Array<{ role: ProjectContactAssignment["roles"][number]["role"]; roleDefinitionId?: string; customLabel?: string }>;
 }
+export interface CreateProjectRoleDefinitionInput { id: string; name: string }
 export type ContactMergeResolution = Partial<Pick<Contact, "prefix" | "givenName" | "familyName" | "suffix" | "displayName" | "notes">>;
 export type CompanyMergeResolution = Partial<Pick<Company, "website" | "domain" | "email" | "phone" | "address" | "notes">>;
 const ASSESSMENT_DEFINITION_VERSION = 1;
@@ -33,7 +35,7 @@ export type CreatePlanInput =
 interface AppContextValue {
   database: AppDatabase;
   setLocale: (locale: Locale) => void;
-  createProject: (values: ProjectFormValues, contactSelections?: CreateProjectContactSelection[]) => Project;
+  createProject: (values: ProjectFormValues, contactSelections?: CreateProjectContactSelection[], projectRoleDefinitions?: CreateProjectRoleDefinitionInput[]) => Project;
   deleteProject: (projectId: string) => Promise<void>;
   updateProject: (project: Project) => void;
   updateProjectStatus: (projectId: string, status: ProjectStatus) => void;
@@ -42,8 +44,7 @@ interface AppContextValue {
   restoreContact: (contactId: string) => void;
   deleteContact: (contactId: string) => boolean;
   mergeContacts: (survivorId: string, mergedId: string, resolution?: ContactMergeResolution) => void;
-  tagContacts: (contactIds: string[], tag: string) => void;
-  assignContactsToProject: (contactIds: string[], projectId: string, role: ProjectContactAssignment["roles"][number]["role"], customLabel?: string) => void;
+  assignContactsToProject: (contactIds: string[], projectId: string, role?: ProjectContactAssignment["roles"][number]["role"], customLabel?: string, roleDefinitionId?: string) => void;
   saveCompany: (company: Company) => void;
   mergeCompanies: (survivorId: string, mergedId: string, resolution?: CompanyMergeResolution) => void;
   archiveCompany: (companyId: string) => void;
@@ -52,6 +53,10 @@ interface AppContextValue {
   saveContactAffiliation: (affiliation: ContactCompanyAffiliation) => void;
   saveProjectContactAssignment: (assignment: ProjectContactAssignment) => void;
   removeProjectContactAssignment: (assignmentId: string) => void;
+  createProjectRoleDefinition: (name: string, projectId?: string) => ProjectRoleDefinition | undefined;
+  saveProjectRoleDefinition: (definition: ProjectRoleDefinition) => void;
+  archiveProjectRoleDefinition: (definitionId: string) => void;
+  reorderProjectRoleDefinitions: (orderedDefinitionIds: string[]) => void;
   addContactImportBatch: (batch: ContactImportBatch) => void;
   commitContactImport: (input: ContactImportCommitInput) => ContactImportBatch;
   undoContactImportBatch: (batchId: string) => { reverted: number; conflicts: number };
@@ -96,9 +101,18 @@ export function newId(prefix: string): string {
 function applyProjectTemplates(project: Project, templateIds: string[], templates: OverviewTemplate[], locale: Locale): Project {
   return templateIds.reduce((current, templateId) => {
     const template = templates.find((candidate) => candidate.id === templateId);
-    const localizedTemplate = template && localizeOverviewTemplate(template, locale);
-    if (!template || !localizedTemplate || current.overviewSections.some((section) => section.templateId === template.id || section.placeholderKey === normalizeOverviewKey(localizedTemplate.name, "template"))) return current;
-    return { ...current, overviewSections: [...current.overviewSections, instantiateOverviewSection(template, newId, locale)] };
+    if (!template) return current;
+    const instantiatedSection = instantiateOverviewSection(template, newId, locale);
+    const section = {
+      ...instantiatedSection,
+      placeholderKey: uniqueProjectOverviewSectionKey(instantiatedSection.name, current.overviewSections),
+    };
+    const overviewSections = [...current.overviewSections, section];
+    return {
+      ...current,
+      overviewSections,
+      overviewSectionOrder: normalizeProjectOverviewSectionOrder([...current.overviewSectionOrder, section.id], overviewSections),
+    };
   }, project);
 }
 
@@ -133,45 +147,83 @@ export function AppProvider({ children, repository: providedRepository }: { chil
     user: { ...current.user, preferredLocale: locale },
     generatedDocuments: current.generatedDocuments.map((document) => ({ ...document, stale: true })),
   })), [commit]);
-  const createProject = useCallback((values: ProjectFormValues, contactSelections: CreateProjectContactSelection[] = []): Project => {
+  const createProject = useCallback((
+    values: ProjectFormValues,
+    contactSelections: CreateProjectContactSelection[] = [],
+    projectRoleDefinitions: CreateProjectRoleDefinitionInput[] = [],
+  ): Project => {
     if (database.user.role === "viewer") throw new Error("forbidden");
+    const normalizedProjectRoleDefinitions = projectRoleDefinitions.map((definition) => ({
+      id: definition.id,
+      name: definition.name.trim(),
+    })).filter((definition, index, definitions) => (
+      Boolean(definition.id && definition.name)
+      && !definitions.some((candidate, candidateIndex) => candidateIndex < index && (
+        candidate.id === definition.id || candidate.name.toLocaleLowerCase() === definition.name.toLocaleLowerCase()
+      ))
+    ));
+    if (normalizedProjectRoleDefinitions.length !== projectRoleDefinitions.length) throw new Error("invalid_project_role_definition");
+    const projectRoleDefinitionById = new Map(normalizedProjectRoleDefinitions.map((definition) => [definition.id, definition]));
     const selectionsByContact = new Map<string, CreateProjectContactSelection>();
     for (const selection of contactSelections) {
       const contact = database.contacts.find((candidate) => candidate.id === selection.contactId && candidate.organizationId === database.organization.id);
-      const validRoles = selection.roles.filter((role) => role.role !== "custom" || role.customLabel?.trim());
-      if (!contact || validRoles.length !== selection.roles.length || validRoles.length === 0) throw new Error("invalid_project_contact_assignment");
+      const validRoles = selection.roles.flatMap<CreateProjectContactSelection["roles"][number]>((role) => {
+        if (role.role !== "custom") return [{ role: role.role }];
+        const definition = database.projectRoleDefinitions.find((candidate) => (
+          candidate.id === role.roleDefinitionId
+          && candidate.organizationId === database.organization.id
+          && !candidate.projectId
+          && candidate.lifecycle === "active"
+        )) ?? (role.roleDefinitionId ? projectRoleDefinitionById.get(role.roleDefinitionId) : undefined);
+        return definition ? [{ role: role.role, roleDefinitionId: definition.id, customLabel: definition.name }] : [];
+      });
+      if (!contact || validRoles.length !== selection.roles.length) throw new Error("invalid_project_contact_assignment");
       const existing = selectionsByContact.get(selection.contactId);
       selectionsByContact.set(selection.contactId, { contactId: selection.contactId, roles: [...(existing?.roles ?? []), ...validRoles] });
     }
     const normalizedSelections = [...selectionsByContact.values()];
     const now = new Date().toISOString();
+    const overviewSectionOrder = normalizeProjectOverviewSectionOrder(values.overviewSectionOrder, values.overviewSections);
     const initialProject: Project = {
       id: newId("project"), organizationId: database.organization.id,
       name: values.name,
       status: "draft",
       participants: [], emergencyContacts: [], customFields: [], customSections: [],
-      overviewSections: values.overviewSections,
+      participantsSectionName: values.participantsSectionName,
+      overviewSections: orderProjectOverviewSections(values.overviewSections, overviewSectionOrder),
+      overviewSectionOrder,
       assets: [], documentFolders: [], createdAt: now, updatedAt: now,
     };
     const project = initialProject;
+    const scopedRoleDefinitions: ProjectRoleDefinition[] = normalizedProjectRoleDefinitions.map((definition, sortOrder) => ({
+      ...definition,
+      organizationId: database.organization.id,
+      projectId: project.id,
+      lifecycle: "active",
+      sortOrder,
+      createdAt: now,
+      updatedAt: now,
+    }));
     commit((current) => {
       const assignments = normalizedSelections.flatMap((selection) => {
         const contact = current.contacts.find((candidate) => candidate.id === selection.contactId && candidate.organizationId === current.organization.id);
         const roles = selection.roles.filter((role, index, candidates) => (
-          (role.role !== "custom" || role.customLabel?.trim())
-          && !candidates.some((candidate, candidateIndex) => candidateIndex < index && candidate.role === role.role && candidate.customLabel?.trim() === role.customLabel?.trim())
+          !candidates.some((candidate, candidateIndex) => candidateIndex < index
+            && candidate.role === role.role
+            && candidate.roleDefinitionId === role.roleDefinitionId)
         ));
-        if (!contact || roles.length === 0) return [];
-        const affiliation = current.contactAffiliations.find((candidate) => candidate.contactId === contact.id && candidate.primary && candidate.lifecycle === "active");
+        if (!contact) return [];
         return [{
           id: newId("assignment"), organizationId: current.organization.id, projectId: project.id, contactId: contact.id,
-          companyId: affiliation?.companyId,
-          roles: roles.map((role) => ({ id: newId("role"), role: role.role, customLabel: role.role === "custom" ? role.customLabel?.trim() : undefined })),
+          roles: roles.map((role) => ({ id: newId("role"), role: role.role, roleDefinitionId: role.role === "custom" ? role.roleDefinitionId : undefined, customLabel: role.role === "custom" ? role.customLabel?.trim() : undefined })),
           lifecycle: "active" as const, createdAt: now, updatedAt: now,
         }];
       });
       return {
-        ...current, projects: [project, ...current.projects], projectContactAssignments: [...assignments, ...current.projectContactAssignments],
+        ...current,
+        projects: [project, ...current.projects],
+        projectRoleDefinitions: [...current.projectRoleDefinitions, ...scopedRoleDefinitions],
+        projectContactAssignments: [...assignments, ...current.projectContactAssignments],
         auditEvents: [
           ...current.auditEvents,
           { id: newId("audit"), projectId: project.id, action: "project.created", actorName: current.user.name, createdAt: now, details: project.name },
@@ -180,7 +232,7 @@ export function AppProvider({ children, repository: providedRepository }: { chil
       };
     });
     return project;
-  }, [commit, database.contacts, database.organization.id, database.user.role]);
+  }, [commit, database.contacts, database.organization.id, database.projectRoleDefinitions, database.user.role]);
 
   const deleteProject = useCallback(async (projectId: string): Promise<void> => {
     const project = database.projects.find((candidate) => candidate.id === projectId);
@@ -200,6 +252,7 @@ export function AppProvider({ children, repository: providedRepository }: { chil
       return {
         ...current,
         projects: current.projects.filter((candidate) => candidate.id !== projectId),
+        projectRoleDefinitions: current.projectRoleDefinitions.filter((definition) => definition.projectId !== projectId),
         projectContactAssignments: current.projectContactAssignments.filter((assignment) => assignment.projectId !== projectId),
         assessmentRuns: current.assessmentRuns.filter((run) => run.projectId !== projectId),
         plans: current.plans.filter((plan) => plan.projectId !== projectId),
@@ -213,7 +266,13 @@ export function AppProvider({ children, repository: providedRepository }: { chil
 
   const updateProject = useCallback((project: Project) => {
     const now = new Date().toISOString();
-    const canonicalProject = { ...project, participants: [] };
+    const overviewSectionOrder = normalizeProjectOverviewSectionOrder(project.overviewSectionOrder, project.overviewSections);
+    const canonicalProject = {
+      ...project,
+      participants: [],
+      overviewSections: orderProjectOverviewSections(project.overviewSections, overviewSectionOrder),
+      overviewSectionOrder,
+    };
     commit((current) => ({
       ...current,
       projects: current.projects.map((candidate) => candidate.id === project.id ? { ...canonicalProject, updatedAt: now } : candidate),
@@ -301,12 +360,12 @@ export function AppProvider({ children, repository: providedRepository }: { chil
       });
       const assignments = current.projectContactAssignments.map((assignment) => assignment.contactId === mergedId ? { ...assignment, contactId: survivorId, updatedAt: now } : assignment);
       const deduplicatedAssignments = assignments.filter((assignment, index) => !assignments.some((candidate, candidateIndex) => (
-        candidateIndex < index && candidate.projectId === assignment.projectId && candidate.contactId === assignment.contactId && candidate.companyId === assignment.companyId
+        candidateIndex < index && candidate.projectId === assignment.projectId && candidate.contactId === assignment.contactId
       ))).map((assignment) => {
-        const duplicates = assignments.filter((candidate) => candidate.projectId === assignment.projectId && candidate.contactId === assignment.contactId && candidate.companyId === assignment.companyId);
+        const duplicates = assignments.filter((candidate) => candidate.projectId === assignment.projectId && candidate.contactId === assignment.contactId);
         return duplicates.length < 2 ? assignment : {
           ...assignment,
-          roles: duplicates.flatMap((candidate) => candidate.roles).filter((role, index, roles) => !roles.some((candidate, candidateIndex) => candidateIndex < index && candidate.role === role.role && candidate.customLabel === role.customLabel)),
+          roles: duplicates.flatMap((candidate) => candidate.roles).filter((role, index, roles) => !roles.some((candidate, candidateIndex) => candidateIndex < index && projectContactRoleKey(candidate) === projectContactRoleKey(role))),
         };
       });
       const rewiredAffiliations = current.contactAffiliations.map((affiliation) => affiliation.contactId === mergedId ? { ...affiliation, contactId: survivorId, updatedAt: now } : affiliation);
@@ -330,34 +389,19 @@ export function AppProvider({ children, repository: providedRepository }: { chil
     });
   }, [commitContacts]);
 
-  const tagContacts = useCallback((contactIds: string[], tag: string) => {
-    const normalizedTag = tag.trim().slice(0, 80);
-    if (!normalizedTag || database.user.role === "viewer") return;
-    const allowedContactIds = new Set(database.contacts
-      .filter((contact) => contactIds.includes(contact.id) && contact.organizationId === database.organization.id)
-      .map((contact) => contact.id));
-    if (allowedContactIds.size === 0) return;
-    const now = new Date().toISOString();
-    commitContacts((current) => touchContactProjects({
-      ...current,
-      contacts: current.contacts.map((contact) => allowedContactIds.has(contact.id) && !contact.tags.includes(normalizedTag)
-        ? { ...contact, tags: [...contact.tags, normalizedTag], updatedAt: now }
-        : contact),
-      auditEvents: [...current.auditEvents, {
-        id: newId("audit"), action: "contacts.tagged", actorName: current.user.name, createdAt: now,
-        details: `${allowedContactIds.size}:${normalizedTag}`,
-      }],
-    }, allowedContactIds, now));
-  }, [commitContacts, database]);
-
   const assignContactsToProject = useCallback((
     contactIds: string[],
     projectId: string,
-    role: ProjectContactAssignment["roles"][number]["role"],
-    customLabel?: string,
+    role?: ProjectContactAssignment["roles"][number]["role"],
+    _customLabel?: string,
+    roleDefinitionId?: string,
   ) => {
-    const normalizedCustomLabel = customLabel?.trim();
-    if (database.user.role === "viewer" || (role === "custom" && !normalizedCustomLabel)) return;
+    const roleDefinition = roleDefinitionId ? database.projectRoleDefinitions.find((definition) => (
+      definition.id === roleDefinitionId
+      && definition.lifecycle === "active"
+      && (!definition.projectId || definition.projectId === projectId)
+    )) : undefined;
+    if (database.user.role === "viewer" || (role === "custom" && !roleDefinition)) return;
     const project = database.projects.find((candidate) => candidate.id === projectId && candidate.organizationId === database.organization.id);
     const allowedContactIds = new Set(database.contacts
       .filter((contact) => contactIds.includes(contact.id) && contact.organizationId === database.organization.id)
@@ -369,18 +413,18 @@ export function AppProvider({ children, repository: providedRepository }: { chil
       for (const contactId of allowedContactIds) {
         const existingIndex = assignments.findIndex((assignment) => assignment.projectId === projectId && assignment.contactId === contactId);
         const existing = assignments[existingIndex];
-        const roleExists = existing?.roles.some((candidate) => candidate.role === role && candidate.customLabel === normalizedCustomLabel);
-        if (existing && !roleExists) assignments[existingIndex] = {
+        const roleExists = !role || existing?.roles.some((candidate) => candidate.role === role && candidate.roleDefinitionId === roleDefinition?.id);
+        if (existing && role && !roleExists) assignments[existingIndex] = {
           ...existing,
-          roles: [...existing.roles, { id: newId("role"), role, customLabel: role === "custom" ? normalizedCustomLabel : undefined }],
+          roles: [...existing.roles, { id: newId("role"), role, roleDefinitionId: roleDefinition?.id, customLabel: role === "custom" ? roleDefinition?.name : undefined }],
           lifecycle: "active",
           updatedAt: now,
         };
+        else if (existing && existing.lifecycle !== "active") assignments[existingIndex] = { ...existing, lifecycle: "active", updatedAt: now };
         else if (!existing) {
-          const affiliation = current.contactAffiliations.find((candidate) => candidate.contactId === contactId && candidate.primary && candidate.lifecycle === "active");
           assignments.unshift({
-            id: newId("assignment"), organizationId: current.organization.id, projectId, contactId, companyId: affiliation?.companyId,
-            roles: [{ id: newId("role"), role, customLabel: role === "custom" ? normalizedCustomLabel : undefined }],
+            id: newId("assignment"), organizationId: current.organization.id, projectId, contactId,
+            roles: role ? [{ id: newId("role"), role, roleDefinitionId: roleDefinition?.id, customLabel: role === "custom" ? roleDefinition?.name : undefined }] : [],
             lifecycle: "active", createdAt: now, updatedAt: now,
           });
         }
@@ -390,7 +434,7 @@ export function AppProvider({ children, repository: providedRepository }: { chil
         projectContactAssignments: assignments,
         auditEvents: [...current.auditEvents, {
           id: newId("audit"), projectId, action: "project_contacts.bulk_assigned", actorName: current.user.name,
-          createdAt: now, details: `${allowedContactIds.size}:${role}`,
+          createdAt: now, details: `${allowedContactIds.size}:${role ?? "no-role"}`,
         }],
       }, allowedContactIds, now);
     });
@@ -420,7 +464,6 @@ export function AppProvider({ children, repository: providedRepository }: { chil
       if (!survivor || !merged || survivor.organizationId !== current.organization.id || merged.organizationId !== current.organization.id) return current;
       const affectedContactIds = new Set([
         ...current.contactAffiliations.filter((affiliation) => affiliation.companyId === survivorId || affiliation.companyId === mergedId).map((affiliation) => affiliation.contactId),
-        ...current.projectContactAssignments.filter((assignment) => assignment.companyId === survivorId || assignment.companyId === mergedId).map((assignment) => assignment.contactId),
       ]);
       const companies = current.companies.map((company) => {
         if (company.id === survivorId) return {
@@ -455,7 +498,6 @@ export function AppProvider({ children, repository: providedRepository }: { chil
         ...current,
         companies,
         contactAffiliations,
-        projectContactAssignments: current.projectContactAssignments.map((assignment) => assignment.companyId === mergedId ? { ...assignment, companyId: survivorId, updatedAt: now } : assignment),
         auditEvents: [...current.auditEvents, { id: newId("audit"), action: "company.merged", actorName: current.user.name, createdAt: now, details: `${mergedId}->${survivorId}` }],
       }, affectedContactIds, now);
     });
@@ -482,7 +524,6 @@ export function AppProvider({ children, repository: providedRepository }: { chil
     const referenced = !company
       || company.lifecycle !== "archived"
       || database.contactAffiliations.some((affiliation) => affiliation.companyId === companyId)
-      || database.projectContactAssignments.some((assignment) => assignment.companyId === companyId)
       || database.contactImportBatches.some((batch) => batch.items.some((item) => item.companyId === companyId));
     if (referenced) return false;
     const now = new Date().toISOString();
@@ -513,13 +554,27 @@ export function AppProvider({ children, repository: providedRepository }: { chil
       if (current.user.role === "viewer" || assignment.organizationId !== current.organization.id) return current;
       const project = current.projects.find((candidate) => candidate.id === assignment.projectId);
       const contact = current.contacts.find((candidate) => candidate.id === assignment.contactId);
-      if (!project || !contact || project.organizationId !== current.organization.id || contact.organizationId !== current.organization.id || assignment.roles.length === 0) return current;
+      if (!project || !contact || project.organizationId !== current.organization.id || contact.organizationId !== current.organization.id) return current;
+      const resolvedRoles = assignment.roles.flatMap<ProjectContactAssignment["roles"][number]>((role) => {
+        if (role.role !== "custom") return [{ ...role, roleDefinitionId: undefined, customLabel: undefined }];
+        const definition = current.projectRoleDefinitions.find((candidate) => (
+          candidate.id === role.roleDefinitionId
+          && candidate.organizationId === current.organization.id
+          && (!candidate.projectId || candidate.projectId === assignment.projectId)
+        ));
+        return definition ? [{ ...role, roleDefinitionId: definition.id, customLabel: definition.name }] : [];
+      });
+      if (resolvedRoles.length !== assignment.roles.length) return current;
+      const normalizedRoles = resolvedRoles.filter((role, index, roles) => (
+        !roles.some((candidate, candidateIndex) => candidateIndex < index && projectContactRoleKey(candidate) === projectContactRoleKey(role))
+      ));
+      const normalizedAssignment = { ...assignment, roles: normalizedRoles };
       const exists = current.projectContactAssignments.some((candidate) => candidate.id === assignment.id);
       return touchContactProjects({
         ...current,
         projectContactAssignments: exists
-          ? current.projectContactAssignments.map((candidate) => candidate.id === assignment.id ? { ...assignment, updatedAt: now } : candidate)
-          : [{ ...assignment, createdAt: assignment.createdAt || now, updatedAt: now }, ...current.projectContactAssignments],
+          ? current.projectContactAssignments.map((candidate) => candidate.id === assignment.id ? { ...normalizedAssignment, updatedAt: now } : candidate)
+          : [{ ...normalizedAssignment, createdAt: assignment.createdAt || now, updatedAt: now }, ...current.projectContactAssignments],
         auditEvents: [...current.auditEvents, { id: newId("audit"), projectId: assignment.projectId, action: exists ? "project_contact.updated" : "project_contact.created", actorName: current.user.name, createdAt: now, details: assignment.id }],
       }, new Set([assignment.contactId]), now);
     });
@@ -536,6 +591,89 @@ export function AppProvider({ children, repository: providedRepository }: { chil
         projectContactAssignments: current.projectContactAssignments.filter((candidate) => candidate.id !== assignmentId),
         auditEvents: [...current.auditEvents, { id: newId("audit"), projectId: assignment.projectId, action: "project_contact.removed", actorName: current.user.name, createdAt: now, details: assignmentId }],
       }, new Set([assignment.contactId]), now);
+    });
+  }, [commitContacts]);
+
+  const saveProjectRoleDefinition = useCallback((definition: ProjectRoleDefinition) => {
+    const now = new Date().toISOString();
+    commitContacts((current) => {
+      const name = definition.name.trim();
+      const projectScopeIsValid = !definition.projectId || current.projects.some((project) => (
+        project.id === definition.projectId && project.organizationId === current.organization.id
+      ));
+      if (current.user.role === "viewer" || definition.organizationId !== current.organization.id || !name || !projectScopeIsValid) return current;
+      const nameConflict = current.projectRoleDefinitions.some((candidate) => (
+        candidate.id !== definition.id
+        && candidate.lifecycle === "active"
+        && candidate.projectId === definition.projectId
+        && candidate.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase()
+      ));
+      if (nameConflict) return current;
+      const exists = current.projectRoleDefinitions.some((candidate) => candidate.id === definition.id);
+      const savedDefinition = { ...definition, name, updatedAt: now, createdAt: definition.createdAt || now };
+      const projectRoleDefinitions = exists
+        ? current.projectRoleDefinitions.map((candidate) => candidate.id === definition.id ? savedDefinition : candidate)
+        : [...current.projectRoleDefinitions, savedDefinition];
+      const affectedContactIds = new Set(current.projectContactAssignments
+        .filter((assignment) => assignment.roles.some((role) => role.roleDefinitionId === definition.id))
+        .map((assignment) => assignment.contactId));
+      return touchContactProjects({
+        ...current,
+        projectRoleDefinitions,
+        projectContactAssignments: current.projectContactAssignments.map((assignment) => ({
+          ...assignment,
+          roles: assignment.roles.map((role) => role.roleDefinitionId === definition.id ? { ...role, customLabel: name } : role),
+        })),
+      }, affectedContactIds, now);
+    });
+  }, [commitContacts]);
+
+  const archiveProjectRoleDefinition = useCallback((definitionId: string) => {
+    const definition = database.projectRoleDefinitions.find((candidate) => candidate.id === definitionId);
+    if (!definition || database.user.role === "viewer") return;
+    saveProjectRoleDefinition({ ...definition, lifecycle: "archived" });
+  }, [database.projectRoleDefinitions, database.user.role, saveProjectRoleDefinition]);
+
+  const createProjectRoleDefinition = useCallback((name: string, projectId?: string): ProjectRoleDefinition | undefined => {
+    const normalizedName = name.trim();
+    if (!normalizedName || database.user.role === "viewer") return undefined;
+    if (projectId && !database.projects.some((project) => project.id === projectId && project.organizationId === database.organization.id)) return undefined;
+    const existing = database.projectRoleDefinitions.find((definition) => (
+      definition.projectId === projectId
+      && definition.name.trim().toLocaleLowerCase() === normalizedName.toLocaleLowerCase()
+    ));
+    if (existing) {
+      if (existing.lifecycle === "archived") saveProjectRoleDefinition({ ...existing, lifecycle: "active" });
+      return { ...existing, lifecycle: "active" };
+    }
+    const now = new Date().toISOString();
+    const definition: ProjectRoleDefinition = {
+      id: newId("project-role"), organizationId: database.organization.id, name: normalizedName,
+      projectId,
+      lifecycle: "active",
+      sortOrder: database.projectRoleDefinitions.filter((candidate) => candidate.projectId === projectId).length,
+      createdAt: now,
+      updatedAt: now,
+    };
+    saveProjectRoleDefinition(definition);
+    return definition;
+  }, [database.organization.id, database.projectRoleDefinitions, database.projects, database.user.role, saveProjectRoleDefinition]);
+
+  const reorderProjectRoleDefinitions = useCallback((orderedDefinitionIds: string[]) => {
+    commitContacts((current) => {
+      if (current.user.role === "viewer") return current;
+      const knownIds = new Set(current.projectRoleDefinitions.filter((definition) => !definition.projectId).map((definition) => definition.id));
+      if (orderedDefinitionIds.length !== knownIds.size || orderedDefinitionIds.some((id) => !knownIds.has(id))) return current;
+      const sortOrderById = new Map(orderedDefinitionIds.map((id, index) => [id, index]));
+      const now = new Date().toISOString();
+      return {
+        ...current,
+        projectRoleDefinitions: current.projectRoleDefinitions.map((definition) => definition.projectId ? definition : ({
+          ...definition,
+          sortOrder: sortOrderById.get(definition.id) ?? definition.sortOrder,
+          updatedAt: now,
+        })),
+      };
     });
   }, [commitContacts]);
 
@@ -623,8 +761,7 @@ export function AppProvider({ children, repository: providedRepository }: { chil
       }
       for (const companyId of createdCompanyIds) {
         const company = companies.find((candidate) => candidate.id === companyId);
-        const referenced = contactAffiliations.some((affiliation) => affiliation.companyId === companyId)
-          || projectContactAssignments.some((assignment) => assignment.companyId === companyId);
+        const referenced = contactAffiliations.some((affiliation) => affiliation.companyId === companyId);
         if (!company || referenced || changedAfterImport(company.updatedAt)) result.conflicts += 1;
         else companies = companies.filter((candidate) => candidate.id !== companyId);
       }
@@ -848,13 +985,14 @@ export function AppProvider({ children, repository: providedRepository }: { chil
     }));
   }, [commit]);
   const saveOverviewTemplate = useCallback((template: OverviewTemplate, locale?: Locale) => commit((current) => {
+    if (template.id === "overview-template-participants") return current;
     const validationLocale = locale ?? current.user.preferredLocale;
     const localizedTemplate = localizeOverviewTemplate(template, validationLocale);
     const localizedTemplates = current.overviewTemplates.map((candidate) => localizeOverviewTemplate(candidate, validationLocale));
     if (!validateOverviewTemplate(localizedTemplate, localizedTemplates).valid) return current;
     return { ...current, overviewTemplates: current.overviewTemplates.some((candidate) => candidate.id === template.id) ? current.overviewTemplates.map((candidate) => candidate.id === template.id ? template : candidate) : [template, ...current.overviewTemplates] };
   }), [commit]);
-  const deleteOverviewTemplate = useCallback((templateId: string) => commit((current) => ({ ...current, overviewTemplates: current.overviewTemplates.filter((template) => template.id !== templateId) })), [commit]);
+  const deleteOverviewTemplate = useCallback((templateId: string) => commit((current) => templateId === "overview-template-participants" ? current : ({ ...current, overviewTemplates: current.overviewTemplates.filter((template) => template.id !== templateId) })), [commit]);
   const saveDocumentTemplate = useCallback((template: DocumentTemplate) => commit((current) => {
     const existing = current.documentTemplates.find((candidate) => candidate.id === template.id);
     const saved = { ...template, lifecycle: template.lifecycle ?? "active" as const, revision: existing && existing.blobId !== template.blobId ? (existing.revision ?? 1) + 1 : template.revision ?? 1 };
@@ -883,9 +1021,9 @@ export function AppProvider({ children, repository: providedRepository }: { chil
   const resetDemo = useCallback(() => setDatabase(repository.current.reset()), []);
   const value = useMemo<AppContextValue>(() => ({
     database, setLocale, createProject, deleteProject, updateProject, updateProjectStatus, beginAssessment, saveAssessment, createPlan, updatePlan, publishPlan,
-    saveContact, archiveContact, restoreContact, deleteContact, mergeContacts, tagContacts, assignContactsToProject,
+    saveContact, archiveContact, restoreContact, deleteContact, mergeContacts, assignContactsToProject,
     saveCompany, mergeCompanies, archiveCompany, restoreCompany, deleteCompany,
-    saveContactAffiliation, saveProjectContactAssignment, removeProjectContactAssignment, addContactImportBatch, commitContactImport, undoContactImportBatch, recordContactExport,
+    saveContactAffiliation, saveProjectContactAssignment, removeProjectContactAssignment, createProjectRoleDefinition, saveProjectRoleDefinition, archiveProjectRoleDefinition, reorderProjectRoleDefinitions, addContactImportBatch, commitContactImport, undoContactImportBatch, recordContactExport,
     recordContactProviderEvent,
     saveBlock, archiveBlock, restoreBlock, saveCategory, reorderCategories, archiveCategory, restoreCategory,
     applyOverviewTemplates: applyTemplatesToProject, saveOverviewTemplate, deleteOverviewTemplate,
@@ -902,7 +1040,7 @@ export function AppProvider({ children, repository: providedRepository }: { chil
     getPlanForProject: (projectId) => activePlanForProject(database.plans, projectId),
     getAssessmentRun: (assessmentRunId) => database.assessmentRuns.find((run) => run.id === assessmentRunId),
     getLatestAssessmentRun: (projectId) => database.assessmentRuns.find((run) => run.projectId === projectId),
-  }), [database, setLocale, createProject, deleteProject, updateProject, updateProjectStatus, saveContact, archiveContact, restoreContact, deleteContact, mergeContacts, tagContacts, assignContactsToProject, saveCompany, mergeCompanies, archiveCompany, restoreCompany, deleteCompany, saveContactAffiliation, saveProjectContactAssignment, removeProjectContactAssignment, addContactImportBatch, commitContactImport, undoContactImportBatch, recordContactExport, recordContactProviderEvent, beginAssessment, saveAssessment, createPlan, updatePlan, publishPlan, saveBlock, archiveBlock, restoreBlock, saveCategory, reorderCategories, archiveCategory, restoreCategory, applyTemplatesToProject, saveOverviewTemplate, deleteOverviewTemplate, saveDocumentTemplate, deleteDocumentTemplate, setDocumentTemplate, addGeneratedDocument, restoreMigrationBackup, downloadMigrationBackup, resetDemo]);
+  }), [database, setLocale, createProject, deleteProject, updateProject, updateProjectStatus, saveContact, archiveContact, restoreContact, deleteContact, mergeContacts, assignContactsToProject, saveCompany, mergeCompanies, archiveCompany, restoreCompany, deleteCompany, saveContactAffiliation, saveProjectContactAssignment, removeProjectContactAssignment, createProjectRoleDefinition, saveProjectRoleDefinition, archiveProjectRoleDefinition, reorderProjectRoleDefinitions, addContactImportBatch, commitContactImport, undoContactImportBatch, recordContactExport, recordContactProviderEvent, beginAssessment, saveAssessment, createPlan, updatePlan, publishPlan, saveBlock, archiveBlock, restoreBlock, saveCategory, reorderCategories, archiveCategory, restoreCategory, applyTemplatesToProject, saveOverviewTemplate, deleteOverviewTemplate, saveDocumentTemplate, deleteDocumentTemplate, setDocumentTemplate, addGeneratedDocument, restoreMigrationBackup, downloadMigrationBackup, resetDemo]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

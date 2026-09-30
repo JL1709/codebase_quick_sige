@@ -29,7 +29,7 @@ export interface ContactImportCommitInput {
   decisions: ContactImportDecision[];
   projectAssignment?: {
     projectId: string;
-    roles: Array<Pick<ProjectContactRole, "role" | "customLabel">>;
+    roles: Array<Pick<ProjectContactRole, "role" | "roleDefinitionId" | "customLabel">>;
   };
 }
 
@@ -230,34 +230,47 @@ export function commitContactImport(
       const existingAssignment = database.projectContactAssignments.find((assignment) => (
         assignment.projectId === input.projectAssignment!.projectId && assignment.contactId === contact.id
       ));
-      const selectedRoles = input.projectAssignment.roles.filter((role, index, roles) => (
-        (role.role !== "custom" || role.customLabel?.trim())
-        && !roles.some((candidate, candidateIndex) => candidateIndex < index
+      const selectedRoles = input.projectAssignment.roles.flatMap<Pick<ProjectContactRole, "role" | "roleDefinitionId" | "customLabel">>((role) => {
+        if (role.role !== "custom") return [{ role: role.role, roleDefinitionId: undefined, customLabel: undefined }];
+        const definition = database.projectRoleDefinitions.find((candidate) => (
+          candidate.id === role.roleDefinitionId
+          && candidate.organizationId === database.organization.id
+          && candidate.lifecycle === "active"
+          && (!candidate.projectId || candidate.projectId === input.projectAssignment!.projectId)
+        ));
+        return definition ? [{ role: role.role, roleDefinitionId: definition.id, customLabel: definition.name }] : [];
+      }).filter((role, index, roles) => (
+        !roles.some((candidate, candidateIndex) => candidateIndex < index
           && candidate.role === role.role
-          && candidate.customLabel?.trim() === role.customLabel?.trim())
+          && candidate.roleDefinitionId === role.roleDefinitionId)
       ));
       const missingRoles = selectedRoles.filter((selectedRole) => !existingAssignment?.roles.some((role) => (
-        role.role === selectedRole.role && role.customLabel?.trim() === selectedRole.customLabel?.trim()
+        role.role === selectedRole.role
+        && role.roleDefinitionId === selectedRole.roleDefinitionId
+        && role.customLabel?.trim() === selectedRole.customLabel?.trim()
       )));
       if (existingAssignment && missingRoles.length > 0) {
         previousAssignment = structuredClone(existingAssignment);
         database.projectContactAssignments = database.projectContactAssignments.map((assignment) => assignment.id === existingAssignment.id ? {
           ...assignment,
-          companyId: company?.id ?? assignment.companyId,
           roles: [...assignment.roles, ...missingRoles.map((role) => ({
-            id: id("role"), role: role.role, customLabel: role.role === "custom" ? role.customLabel?.trim() : undefined,
+            id: id("role"), role: role.role,
+            roleDefinitionId: role.role === "custom" ? role.roleDefinitionId : undefined,
+            customLabel: role.role === "custom" ? role.customLabel?.trim() : undefined,
           }))],
           lifecycle: "active",
           updatedAt: now,
         } : assignment);
-      } else if (!existingAssignment && selectedRoles.length > 0) {
+      } else if (!existingAssignment) {
         const assignmentId = id("assignment");
         assignmentIds.push(assignmentId);
         database.projectContactAssignments.unshift({
           id: assignmentId, organizationId: database.organization.id, projectId: input.projectAssignment.projectId,
-          contactId: contact.id, companyId: company?.id,
+          contactId: contact.id,
           roles: selectedRoles.map((role) => ({
-            id: id("role"), role: role.role, customLabel: role.role === "custom" ? role.customLabel?.trim() : undefined,
+            id: id("role"), role: role.role,
+            roleDefinitionId: role.role === "custom" ? role.roleDefinitionId : undefined,
+            customLabel: role.role === "custom" ? role.customLabel?.trim() : undefined,
           })),
           lifecycle: "active", createdAt: now, updatedAt: now,
         });

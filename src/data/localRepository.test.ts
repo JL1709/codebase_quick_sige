@@ -133,7 +133,18 @@ describe("local database migration", () => {
     expect(migratedUserProject).not.toHaveProperty("constructionType");
     expect(migratedUserProject).not.toHaveProperty("startDate");
     expect(migratedUserProject).not.toHaveProperty("endDate");
-    expect(migrated?.projects.find((project) => project.id === "project-logistics-center")?.projectNumber).toBe("QS-2026-014");
+    expect(migrated?.projects.find((project) => project.id === "project-logistics-center")).not.toHaveProperty("projectNumber");
+  });
+
+  it("removes the legacy project number from an existing logistics demo project", () => {
+    const source = structuredClone(createSeedDatabase());
+    source.schemaVersion = 35;
+    source.projects[0].projectNumber = "QS-2026-014";
+
+    const migrated = migrateDatabase(source);
+
+    expect(migrated?.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(migrated?.projects[0]).not.toHaveProperty("projectNumber");
   });
 
   it("removes Riverside and replaces only the bundled logistics documents", () => {
@@ -449,6 +460,41 @@ describe("local database migration", () => {
     expect(migrated?.contacts).toEqual([expect.objectContaining({ displayName: "Ada Lovelace", source: "migration" })]);
     expect(migrated?.companies).toEqual([expect.objectContaining({ name: "Safety GmbH" })]);
     expect(migrated?.projectContactAssignments).toEqual([expect.objectContaining({ projectId: project.id, roles: [expect.objectContaining({ role: "coordinator" })] })]);
+  });
+
+  it("creates reusable role definitions and a canonical project overview order", () => {
+    const source = structuredClone(createSeedDatabase()) as unknown as Record<string, unknown>;
+    source.schemaVersion = 32;
+    delete source.projectRoleDefinitions;
+    source.contactAffiliations = [];
+    const project = (source.projects as Array<Record<string, unknown>>)[0];
+    delete project.overviewSectionOrder;
+    delete project.participantsSectionName;
+    const legacySection = (project.overviewSections as Array<Record<string, unknown>>)[0];
+    legacySection.templateId = "overview-template-standard";
+    const assignments = source.projectContactAssignments as Array<{ companyId?: string; roles: Array<Record<string, unknown>> }>;
+    const legacyCompanyId = (source.companies as Array<{ id: string }>)[0].id;
+    assignments[0].companyId = legacyCompanyId;
+    assignments[0].roles = [{ id: "legacy-fire-role", role: "custom", customLabel: "Fire lead" }];
+
+    const migrated = migrateDatabase(source);
+    const migratedRole = migrated?.projectContactAssignments[0].roles[0];
+
+    expect(migrated?.projectRoleDefinitions).toEqual([expect.objectContaining({ name: "Fire lead", lifecycle: "active" })]);
+    expect(migratedRole?.roleDefinitionId).toBe(migrated?.projectRoleDefinitions[0].id);
+    expect(migrated?.projectContactAssignments[0]).not.toHaveProperty("companyId");
+    expect(migrated?.contactAffiliations).toContainEqual(expect.objectContaining({
+      contactId: migrated?.projectContactAssignments[0].contactId,
+      companyId: legacyCompanyId,
+      primary: true,
+      lifecycle: "active",
+    }));
+    expect(migrated?.projects[0].overviewSectionOrder[0]).toBe("system:project-participants");
+    expect(migrated?.projects[0].participantsSectionName).toBe("Projektbeteiligte");
+    expect(migrated?.projects[0].overviewSections.every((section) => !("templateId" in section))).toBe(true);
+    expect(migrated?.projects[0].overviewSections.map((section) => section.id)).toEqual(
+      migrated?.projects[0].overviewSectionOrder.filter((id) => id !== "system:project-participants"),
+    );
   });
 
   it("rejects malformed payloads instead of erasing them into partial state", () => {

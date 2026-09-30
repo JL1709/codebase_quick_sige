@@ -78,12 +78,17 @@ test("creates, imports, exports, and assigns canonical contacts", async ({ page 
   await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Projects" }).click();
   await page.getByRole("article").filter({ hasText: "Logistikzentrum West" }).getByRole("link", { name: "Open" }).click();
   const importedAssignment = page.locator(".project-contact-list article").filter({ hasText: "Katherine Johnson" });
-  await expect(importedAssignment).toContainText("Contractor");
+  await expect(importedAssignment).not.toContainText("Contractor");
   await expect(importedAssignment).toContainText("Architect");
   await page.getByRole("button", { name: "Add contact" }).click();
-  await page.getByLabel("Search").fill("Grace Hopper");
-  await page.getByLabel("Person").selectOption({ index: 0 });
-  await page.getByLabel("Project role").selectOption("architect");
+  const assignmentDialog = page.getByRole("dialog", { name: "Add contact" });
+  await assignmentDialog.getByRole("combobox", { name: "Add person" }).fill("Grace Hopper");
+  await assignmentDialog.getByRole("option", { name: /Grace Hopper/ }).click();
+  await expect(assignmentDialog.locator(".project-contact-picker-selection")).toContainText("Grace Hopper");
+  await expect(assignmentDialog.getByRole("button", { name: "Add", exact: true })).toBeEnabled();
+  await assignmentDialog.getByRole("button", { name: "Manage roles" }).click();
+  await assignmentDialog.getByRole("checkbox", { name: "Architect", exact: true }).check();
+  await assignmentDialog.getByRole("button", { name: "Done" }).click();
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await expect(page.locator(".project-contact-list").getByText("Grace Hopper", { exact: true })).toBeVisible();
   await expect(page.locator(".project-contact-list article").filter({ hasText: "Grace Hopper" }).getByText("Architect", { exact: true })).toBeVisible();
@@ -108,20 +113,166 @@ test("keeps Contacts and project assignments read-only for viewers", async ({ pa
   await expect(page.getByRole("button", { name: "New contact" })).toBeDisabled();
 });
 
-test("persists workspace preferences and completes bulk tagging and reviewed merge", async ({ page }) => {
+test("confirms participant removal and can immediately re-add the first contact with a shared role", async ({ page }) => {
+  await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Projects" }).click();
+  await page.getByRole("article").filter({ hasText: "Logistikzentrum West" }).getByRole("link", { name: "Open" }).click();
+
+  const participantsPanel = page.locator(".project-contacts-panel");
+  await expect(participantsPanel.getByRole("button", { name: "Import", exact: true })).toHaveCount(0);
+
+  let annaRow = participantsPanel.locator(".project-contact-list article").filter({ hasText: "Dr. Anna Richter" });
+  await annaRow.getByRole("button", { name: "Remove from project" }).click();
+  const confirmation = page.getByRole("dialog", { name: "Remove project participant?" });
+  await expect(confirmation).toContainText("The contact will remain available in Contacts.");
+  await confirmation.getByRole("button", { name: "Cancel" }).click();
+  await expect(annaRow).toBeVisible();
+
+  await annaRow.getByRole("button", { name: "Remove from project" }).click();
+  await confirmation.getByRole("button", { name: "Remove from project" }).click();
+  await expect(annaRow).toHaveCount(0);
+
+  await participantsPanel.getByRole("button", { name: "Add contact" }).click();
+  const assignmentDialog = page.getByRole("dialog", { name: "Add contact" });
+  await assignmentDialog.getByRole("combobox", { name: "Add person" }).fill("Westpark Projekt GmbH");
+  await assignmentDialog.getByRole("option", { name: /Dr\. Anna Richter/ }).click();
+  await expect(assignmentDialog.locator(".project-contact-picker-selection")).toContainText("Dr. Anna Richter");
+  await expect(assignmentDialog.getByRole("button", { name: "Add", exact: true })).toBeEnabled();
+  await assignmentDialog.getByRole("button", { name: "Manage roles" }).click();
+  await assignmentDialog.getByLabel("Site manager").check();
+  await assignmentDialog.getByRole("button", { name: "Done" }).click();
+  await expect(assignmentDialog.getByRole("button", { name: "Add", exact: true })).toBeEnabled();
+  await assignmentDialog.getByRole("button", { name: "Add", exact: true }).click();
+
+  annaRow = participantsPanel.locator(".project-contact-list article").filter({ hasText: "Dr. Anna Richter" });
+  const danielRow = participantsPanel.locator(".project-contact-list article").filter({ hasText: "Daniel König" });
+  await expect(annaRow).toContainText("Site manager");
+  await expect(danielRow).toContainText("Site manager");
+
+  await participantsPanel.getByRole("button", { name: "New contact" }).click();
+  await expect(page.getByText("Saved in Contacts", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Cancel" }).click();
+
+  await page.goto("/projects/new");
+  const newProjectParticipants = page.locator(".project-create-contacts");
+  await expect(newProjectParticipants.getByRole("button", { name: "Import", exact: true })).toHaveCount(0);
+});
+
+test("reuses organization roles and persists participant placement in the project overview", async ({ page }) => {
+  await page.goto("/templates");
+  const projectRoles = page.locator(".project-roles-template-section");
+  await projectRoles.getByRole("button", { name: "Add role" }).click();
+  await page.getByLabel("Role name").fill("Fire safety lead");
+  await page.getByRole("dialog", { name: "Add role" }).getByRole("button", { name: "Save" }).click();
+  await expect(projectRoles.getByText("Fire safety lead", { exact: true })).toBeVisible();
+  await projectRoles.getByRole("button", { name: "Add role" }).click();
+  await page.getByLabel("Role name").fill("Safety advisor");
+  await page.getByRole("dialog", { name: "Add role" }).getByRole("button", { name: "Save" }).click();
+  await projectRoles.getByRole("button", { name: "Move up: Safety advisor" }).click();
+  await expect(projectRoles.locator(".project-role-settings-groups > div").nth(1).getByRole("article").nth(0)).toContainText("Safety advisor");
+
+  await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Projects" }).click();
+  await page.getByRole("article").filter({ hasText: "Logistikzentrum West" }).getByRole("link", { name: "Open" }).click();
+  await page.getByRole("button", { name: "Edit project information" }).click();
+  await expect(page.getByRole("heading", { name: "Edit project" })).toBeVisible();
+
+  const participants = page.locator(".project-contacts-panel");
+  await expect(participants.getByText("Daniel König", { exact: true })).toBeVisible();
+  const danielAssignment = participants.locator(".project-contact-list article").filter({ hasText: "Daniel König" });
+  await expect(page.getByRole("dialog", { name: "Edit assignment" })).toHaveCount(0);
+  await danielAssignment.getByRole("button", { name: "Manage roles" }).click();
+  await danielAssignment.getByLabel("Fire safety lead").check();
+  await danielAssignment.getByRole("button", { name: "Done" }).click();
+  await expect(danielAssignment).toContainText("Fire safety lead");
+  await danielAssignment.getByRole("button", { name: "Remove: Fire safety lead" }).click();
+  await danielAssignment.getByRole("button", { name: "Remove: Site manager" }).click();
+  await expect(danielAssignment.getByText("No role selected yet", { exact: true })).toBeVisible();
+
+  await danielAssignment.getByRole("button", { name: "Manage roles" }).click();
+  await danielAssignment.getByRole("checkbox", { name: "Fire safety lead", exact: true }).check();
+  await danielAssignment.getByRole("checkbox", { name: "Fire safety lead", exact: true }).uncheck();
+  await danielAssignment.getByRole("button", { name: "Done" }).click();
+  await expect(danielAssignment.getByText("No role selected yet", { exact: true })).toBeVisible();
+
+  await danielAssignment.getByRole("button", { name: "Manage roles" }).click();
+  await danielAssignment.getByLabel("Fire safety lead").check();
+  await danielAssignment.getByRole("button", { name: "Done" }).click();
+  await expect(danielAssignment).toContainText("Fire safety lead");
+
+  await participants.getByLabel("Section title").fill("Project participants");
+  await page.getByRole("button", { name: "Move section down: Project participants" }).click();
+  await page.locator(".project-composer-footer").getByRole("button", { name: "Save" }).click();
+
+  const overviewSections = page.locator(".overview-grid > section");
+  await expect(overviewSections.nth(0).getByRole("heading", { level: 2 })).toHaveText("Allgemein");
+  await expect(overviewSections.nth(1).getByRole("heading", { level: 2 })).toHaveText("Project participants");
+  await page.reload();
+  await expect(page.locator(".overview-grid > section").nth(1).getByRole("heading", { level: 2 })).toHaveText("Project participants");
+  await expect(page.locator(".project-contact-list article").filter({ hasText: "Daniel König" })).toContainText("Fire safety lead");
+
+  await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Contacts" }).click();
+  await page.locator(".contacts-table-row").filter({ hasText: "Daniel König" }).getByRole("button", { name: /Daniel König/ }).click();
+  await page.locator(".contact-preview-actions").getByRole("button", { name: "Edit" }).click();
+  await page.getByLabel("Company name").fill("Canonical Build GmbH");
+  await page.getByLabel("Job title").fill("Lead site manager");
+  await page.getByRole("button", { name: "Save" }).click();
+
+  await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Projects" }).click();
+  await page.getByRole("article").filter({ hasText: "Logistikzentrum West" }).getByRole("link", { name: "Open" }).click();
+  const updatedDaniel = page.locator(".project-contact-list article").filter({ hasText: "Daniel König" });
+  await expect(updatedDaniel).toContainText("Canonical Build GmbH");
+  await expect(updatedDaniel.getByRole("button", { name: "Manage roles" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Edit assignment" })).toHaveCount(0);
+});
+
+test("creates project-only participant roles as pills without adding them to Templates", async ({ page }) => {
+  await page.goto("/projects/new");
+  await page.getByLabel("Project name").fill("Scoped roles project");
+  await page.locator(".project-section-library").getByRole("button", { name: /Project participants/ }).click();
+  const participants = page.locator(".project-create-contacts");
+  await participants.getByRole("combobox", { name: "Add person" }).fill("Anna Richter");
+  await participants.getByRole("option", { name: /Dr\. Anna Richter/ }).click();
+  const participantRow = participants.locator(".project-create-contact-list > div").filter({ hasText: "Dr. Anna Richter" });
+  await expect(participantRow.getByText("No role selected yet", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Create project" })).toBeEnabled();
+
+  await participantRow.getByRole("button", { name: "Manage roles" }).click();
+  await participantRow.getByRole("button", { name: /Create new role/ }).click();
+  await participantRow.getByLabel("Role name").fill("Lifting coordinator");
+  const reusableRoleChoice = participantRow.getByRole("switch", { name: "Save as reusable template role" });
+  await expect(reusableRoleChoice).toHaveAttribute("aria-checked", "true");
+  await reusableRoleChoice.click();
+  await expect(reusableRoleChoice).toHaveAttribute("aria-checked", "false");
+  await participantRow.getByRole("button", { name: "Add role" }).click();
+  await expect(participantRow.locator(".project-role-pill").filter({ hasText: "Lifting coordinator" })).toBeVisible();
+  await participantRow.getByRole("button", { name: "Done" }).click();
+
+  await page.getByRole("button", { name: "Create project" }).click();
+  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("link", { name: "Overview" }).click();
+  await expect(page.locator(".project-contact-list article").filter({ hasText: "Dr. Anna Richter" })).toContainText("Lifting coordinator");
+
+  await page.goto("/templates");
+  await expect(page.locator(".project-roles-template-section").getByText("Lifting coordinator", { exact: true })).toHaveCount(0);
+});
+
+test("persists workspace preferences and completes a reviewed merge", async ({ page }) => {
   await importCsvContacts(page, [
     "First Name,Last Name,Email,Notes",
     "Grace,Hopper,grace@example.com,Surviving note",
     "Katherine,Johnson,katherine@example.com,Merged note",
   ].join("\n"));
 
-  await page.locator(".contacts-toolbar > select").filter({ has: page.locator('option[value="csv"]') }).selectOption("csv");
-  await page.locator(".contacts-column-picker").getByText("Columns").click();
+  await expect(page.locator(".contacts-toolbar .contacts-column-picker")).toHaveCount(0);
+  const columnPicker = page.locator(".contacts-table-panel > .contacts-column-picker");
+  await columnPicker.locator("summary").click();
+  await expect(columnPicker).toHaveAttribute("open", "");
+  await page.locator(".contacts-toolbar .search-input").click();
+  await expect(columnPicker).not.toHaveAttribute("open", "");
+  await columnPicker.locator("summary").click();
   await page.getByLabel("Updated", { exact: true }).check();
   await page.reload();
-  await expect(page.locator(".contacts-toolbar > select").filter({ has: page.locator('option[value="csv"]') })).toHaveValue("csv");
+  await expect(columnPicker).toBeVisible();
   await expect(page.getByLabel("Updated", { exact: true })).toBeChecked();
-  await expect(page.locator(".contacts-table-head").getByText("Updated", { exact: true })).toBeVisible();
+  await expect(page.locator(".contacts-table-head > span").filter({ hasText: /^Updated$/ })).toBeVisible();
   await page.getByRole("tab", { name: /Companies/ }).click();
   await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Projects" }).click();
   await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Contacts" }).click();
@@ -130,11 +281,7 @@ test("persists workspace preferences and completes bulk tagging and reviewed mer
 
   await page.getByLabel("Select Grace Hopper").check();
   await page.getByLabel("Select Katherine Johnson").check();
-  await page.getByRole("button", { name: "Add tag" }).click();
-  await page.getByLabel("Tag", { exact: true }).fill("Engineering");
-  await page.getByRole("button", { name: "Apply" }).click();
-  await expect(page.locator(".contacts-table-row").filter({ hasText: "Grace Hopper" })).toContainText("Engineering");
-  await expect(page.locator(".contacts-table-row").filter({ hasText: "Katherine Johnson" })).toContainText("Engineering");
+  await expect(page.getByRole("button", { name: "Add tag" })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Review duplicates" }).click();
   const firstNameChoices = page.getByRole("group", { name: "First name" });

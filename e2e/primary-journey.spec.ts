@@ -69,10 +69,13 @@ test("complete project workflow remains localized and revision-safe", async ({ p
   await expect(page.locator("body")).not.toContainText(/local prototype|\bmvp\b|multilingual catalog/i);
 
   const dashboardProject = page.getByRole("article").filter({ hasText: "Logistikzentrum West" });
+  await expect(dashboardProject).not.toContainText("QS-2026-014");
   const projectStatus = dashboardProject.getByLabel("Project status: Logistikzentrum West");
   await projectStatus.selectOption("draft");
   await expect(projectStatus).toHaveValue("draft");
   await dashboardProject.getByRole("link", { name: "Open" }).click();
+  await expect(page.locator(".project-workspace-title")).toHaveText("Logistikzentrum West");
+  await expect(page.locator(".project-workspace-title span")).toHaveCount(0);
   const navigation = page.getByRole("navigation", { name: "Project navigation" });
   const initialNavigationBox = await navigation.boundingBox();
   expect(initialNavigationBox).not.toBeNull();
@@ -85,14 +88,16 @@ test("complete project workflow remains localized and revision-safe", async ({ p
     expect(Math.round(box?.width ?? -1)).toBe(Math.round(initialNavigationBox?.width ?? -2));
   }
 
-  const generalInformation = page.locator(".overview-template-section").filter({ has: page.getByRole("heading", { name: "Allgemein" }) });
+  const generalInformation = page.locator(".overview-template-section").first();
+  await expect(generalInformation.getByRole("heading", { name: "Allgemein" })).toBeVisible();
   await expect(page.getByText(/^Record \d+$/)).toHaveCount(0);
   await generalInformation.getByRole("button", { name: "Edit", exact: true }).click();
   await generalInformation.getByRole("textbox", { name: "Bauherr", exact: true }).fill("Westpark Projektgesellschaft mbH");
   await generalInformation.getByRole("button", { name: "Save", exact: true }).click();
   await expect(generalInformation.getByText("Westpark Projektgesellschaft mbH", { exact: true })).toBeVisible();
 
-  const logisticsInformation = page.locator(".overview-template-section").filter({ has: page.getByRole("heading", { name: "Baustellenlogistik" }) });
+  const logisticsInformation = page.locator(".overview-template-section").last();
+  await expect(logisticsInformation.getByRole("heading", { name: "Baustellenlogistik" })).toBeVisible();
   await logisticsInformation.getByRole("button", { name: "Edit", exact: true }).click();
   const topLevelRows = logisticsInformation.locator(".project-overview-entry-tree > .project-overview-builder-node");
   await expect(topLevelRows.nth(0).locator(".overview-entry-label-input")).toHaveValue("Anlieferzeitfenster");
@@ -119,7 +124,8 @@ test("complete project workflow remains localized and revision-safe", async ({ p
   await logisticsInformation.getByRole("button", { name: "Save", exact: true }).click();
   await expect(logisticsInformation.getByText("Nur nach Anmeldung", { exact: true })).toHaveCount(0);
 
-  const emergencyInformation = page.locator(".overview-template-section").filter({ has: page.getByRole("heading", { name: "Notfallkontakte" }) });
+  const emergencyInformation = page.locator(".overview-template-section").nth(1);
+  await expect(emergencyInformation.getByRole("heading", { name: "Notfallkontakte" })).toBeVisible();
   await emergencyInformation.getByRole("button", { name: "Edit", exact: true }).click();
   const records = emergencyInformation.locator(".project-overview-record");
   await expect(records).toHaveCount(3);
@@ -194,11 +200,16 @@ test("project creation applies templates and guided assessment creates a plan", 
   await expect(page.getByLabel("Project number")).toHaveCount(0);
   await expect(page.getByLabel("Address")).toHaveCount(0);
   await expect(page.getByLabel("Construction project type")).toHaveCount(0);
+  await expect(page.locator(".project-ordered-section")).toHaveCount(0);
   await page.getByLabel("Project name").fill("Minimal project");
-  const additionalInformation = page.locator(".project-additional-fields");
-  await additionalInformation.getByRole("button", { name: "Add entry" }).click();
-  await additionalInformation.getByPlaceholder("Label").fill("Internal reference");
-  await additionalInformation.getByLabel("Value (optional)").fill("MP-01");
+  await page.locator(".project-section-library").getByRole("button", { name: /Custom section/ }).click();
+  const customSection = page.locator(".project-included-section").first();
+  await customSection.getByLabel("Section title").fill("Internal project data");
+  await customSection.getByRole("button", { name: "Add entry" }).click();
+  await customSection.getByPlaceholder("Label").fill("Internal reference");
+  await customSection.locator('input[aria-label="Internal reference"]').fill("MP-01");
+  await page.locator(".project-section-library").getByRole("button", { name: /Custom section/ }).click();
+  await page.locator(".project-included-section").nth(1).getByLabel("Section title").fill("Approvals");
   await page.getByRole("button", { name: "Create project" }).click();
   await expect(page).toHaveURL(/\/projects\/[^/]+\/plan$/);
   await expect(page.getByRole("button", { name: "Create safety plan" })).toBeVisible();
@@ -211,9 +222,20 @@ test("project creation applies templates and guided assessment creates a plan", 
     const generatedInformationFields = [
       "projectNumber", "description", "address", "city", "constructionType", "startDate", "endDate",
     ].filter((field) => project && Object.hasOwn(project, field));
-    return { generatedInformationFields, name: project?.name };
+    const overviewSections = project?.overviewSections as Array<Record<string, unknown>> | undefined;
+    return {
+      generatedInformationFields,
+      name: project?.name,
+      overviewSectionNames: overviewSections?.map((section) => section.name),
+      retainedTemplateReference: overviewSections?.some((section) => Object.hasOwn(section, "templateId")),
+    };
   });
-  expect(minimalProjectState).toEqual({ generatedInformationFields: [], name: "Minimal project" });
+  expect(minimalProjectState).toEqual({
+    generatedInformationFields: [],
+    name: "Minimal project",
+    overviewSectionNames: ["Internal project data", "Approvals"],
+    retainedTemplateReference: false,
+  });
   await page.getByRole("navigation", { name: "Project navigation" }).getByRole("link", { name: "Overview" }).click();
   await expect(page.getByText("Minimal project", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Internal reference", { exact: true })).toBeVisible();
@@ -221,29 +243,31 @@ test("project creation applies templates and guided assessment creates a plan", 
 
   await page.goto("/projects/new");
   await page.getByLabel("Project name").fill("Single-template project");
-  const generalTemplate = page.locator(".project-template-card").filter({ hasText: "General" });
-  await generalTemplate.getByRole("button", { name: "Preview" }).click();
-  await expect(generalTemplate.getByText("Client", { exact: true })).toBeVisible();
-  await generalTemplate.getByRole("button", { name: "Include" }).click();
-  const includedGeneral = page.locator(".project-included-section").filter({ has: page.getByRole("heading", { name: "General" }) });
-  await includedGeneral.getByLabel("Client").fill("Template Client GmbH");
+  const generalTemplate = page.locator(".project-section-template-list article").filter({ hasText: "General" });
+  await generalTemplate.locator(".project-template-preview-trigger").click();
+  const generalPreview = page.getByRole("dialog", { name: "General" });
+  await expect(generalPreview.getByText("Client", { exact: true })).toBeVisible();
+  await generalPreview.getByRole("button", { name: "Add to project" }).click();
+  const includedGeneral = page.locator(".project-included-section").last();
+  await includedGeneral.getByLabel("Section title").fill("Project basics");
+  await includedGeneral.getByPlaceholder("Label").first().fill("Customer");
+  await includedGeneral.locator('input[aria-label="Customer"]').fill("Template Client GmbH");
   await page.getByRole("button", { name: "Create project" }).click();
   await expect(page.getByRole("button", { name: "Create safety plan" })).toBeVisible();
   await page.getByRole("navigation", { name: "Project navigation" }).getByRole("link", { name: "Overview" }).click();
   await expect(page.getByText("Single-template project", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("Client", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Project basics" })).toBeVisible();
+  await expect(page.getByText("Customer", { exact: true })).toBeVisible();
   await expect(page.getByText("Template Client GmbH", { exact: true })).toBeVisible();
   await expect(page.getByText("Fire brigade / emergency services", { exact: true })).toHaveCount(0);
 
   await page.goto("/projects/new");
   await page.getByLabel("Project name").fill("North Campus Extension");
-  const projectInformationTemplate = page.locator(".project-template-card").filter({ hasText: "General" });
-  const emergencyServicesTemplate = page.locator(".project-template-card").filter({ hasText: "Emergency contacts" });
-  await projectInformationTemplate.getByRole("button", { name: "Include" }).click();
-  await emergencyServicesTemplate.getByRole("button", { name: "Include" }).click();
-  await expect(projectInformationTemplate.getByRole("button", { name: "Included" })).toBeDisabled();
-  await expect(emergencyServicesTemplate.getByRole("button", { name: "Included" })).toBeDisabled();
-  await page.locator(".project-included-section").filter({ has: page.getByRole("heading", { name: "General" }) }).getByLabel("Client").fill("North Campus GmbH");
+  const sectionLibrary = page.locator(".project-section-library");
+  await sectionLibrary.getByRole("button", { name: "Add template: General" }).click();
+  await sectionLibrary.getByRole("button", { name: "Add template: Emergency contacts" }).click();
+  await expect(page.locator(".project-included-section")).toHaveCount(2);
+  await page.locator(".project-included-section").filter({ has: page.locator('input[value="General"]') }).locator('input[aria-label="Client"]').fill("North Campus GmbH");
   await page.getByRole("button", { name: "Create project" }).click();
 
   await expect(page.getByRole("button", { name: "Create safety plan" })).toBeVisible();
@@ -301,6 +325,122 @@ test("project creation applies templates and guided assessment creates a plan", 
       request.onerror = () => resolve(true);
     });
   }, deletionState.blobId)).toBe(false);
+});
+
+test("project sections are editable, repeatable, and detached from their source templates", async ({ page }) => {
+  await useEnglishInterface(page);
+  await page.goto("/projects/new");
+  await page.getByLabel("Project name").fill("Detached section project");
+
+  const sectionLibrary = page.locator(".project-section-library");
+  await sectionLibrary.getByRole("button", { name: /Project participants/ }).click();
+  await page.locator(".project-create-contacts").getByLabel("Section title").fill("Site contacts");
+
+  await sectionLibrary.getByRole("button", { name: /Custom section/ }).click();
+  await sectionLibrary.getByRole("button", { name: /Custom section/ }).click();
+  const customSections = page.locator(".project-included-section");
+  await customSections.nth(0).getByLabel("Section title").fill("Permits");
+  await customSections.nth(1).getByLabel("Section title").fill("Handover");
+
+  const orderedSections = page.locator(".project-ordered-section");
+  const participantDragHandle = orderedSections.nth(0).getByRole("button", { name: /Reorder section/ });
+  const participantDragHandleBox = await participantDragHandle.boundingBox();
+  const participantSectionBeforeDrag = await orderedSections.nth(0).boundingBox();
+  const handoverSectionBox = await orderedSections.nth(2).boundingBox();
+  const permitsSectionBeforeDrag = await orderedSections.nth(1).boundingBox();
+  expect(participantDragHandleBox).not.toBeNull();
+  expect(participantSectionBeforeDrag).not.toBeNull();
+  expect(handoverSectionBox).not.toBeNull();
+  expect(permitsSectionBeforeDrag).not.toBeNull();
+  await page.mouse.move((participantDragHandleBox?.x ?? 0) + 12, (participantDragHandleBox?.y ?? 0) + 12);
+  await page.mouse.down();
+  await page.mouse.move((participantDragHandleBox?.x ?? 0) + 20, (participantDragHandleBox?.y ?? 0) + 20, { steps: 3 });
+  await page.mouse.move((handoverSectionBox?.x ?? 0) + 120, (handoverSectionBox?.y ?? 0) + (handoverSectionBox?.height ?? 0) / 2, { steps: 10 });
+  await expect.poll(async () => (await orderedSections.nth(1).boundingBox())?.y ?? 0).toBeLessThan(permitsSectionBeforeDrag?.y ?? 0);
+  await expect(page.locator(".project-section-drag-overlay")).toContainText("Site contacts");
+  const participantSectionDuringDrag = await orderedSections.nth(0).boundingBox();
+  const dragOverlayBox = await page.locator(".project-section-drag-overlay").boundingBox();
+  expect(Math.round(participantSectionDuringDrag?.height ?? 0)).toBe(Math.round(participantSectionBeforeDrag?.height ?? -1));
+  expect(dragOverlayBox?.height ?? Number.POSITIVE_INFINITY).toBeLessThan(participantSectionBeforeDrag?.height ?? 0);
+  await page.mouse.up();
+  await expect(orderedSections.locator('input[aria-label="Section title"]')).toHaveCount(3);
+  expect(await orderedSections.locator('input[aria-label="Section title"]').evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).value))).toEqual(["Permits", "Handover", "Site contacts"]);
+
+  const participantContactPicker = page.locator(".project-create-contacts").getByRole("combobox", { name: "Add person" });
+  await participantContactPicker.fill("Westpark Projekt GmbH");
+  await page.locator(".project-create-contacts").getByRole("option", { name: /Dr\. Anna Richter/ }).click();
+  const selectedParticipant = page.locator(".project-create-contact-list > div").filter({ hasText: "Dr. Anna Richter" });
+  await expect(selectedParticipant).toContainText("Westpark Projekt GmbH");
+  await expect(selectedParticipant).toContainText("anna.richter@example.test");
+  await expect(selectedParticipant).toContainText("+49 341 555 100");
+  await expect(selectedParticipant.getByText("No role selected yet", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Create project" })).toBeEnabled();
+  await selectedParticipant.getByRole("button", { name: "Manage roles" }).click();
+  await selectedParticipant.getByRole("checkbox", { name: "Architect", exact: true }).check();
+  await selectedParticipant.getByRole("button", { name: "Done" }).click();
+  await participantContactPicker.fill("anna.richter@example.test");
+  await expect(page.locator(".project-create-contacts").getByText("No matching contacts found.", { exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await sectionLibrary.getByRole("button", { name: "Add template: General" }).click();
+  const copiedTemplateSection = page.locator(".project-included-section").last();
+  await copiedTemplateSection.getByLabel("Section title").fill("Project profile");
+  await copiedTemplateSection.getByPlaceholder("Label").first().fill("Project client");
+  await copiedTemplateSection.locator('input[aria-label="Project client"]').fill("Independent GmbH");
+
+  await page.getByRole("button", { name: "Create project" }).click();
+  const projectId = new URL(page.url()).pathname.split("/")[2];
+  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("link", { name: "Overview" }).click();
+  await expect(page.getByRole("heading", { name: "Site contacts" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Permits" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Handover" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Project profile" })).toBeVisible();
+  await expect(page.getByText("Project client", { exact: true })).toBeVisible();
+
+  const participantsPanel = page.locator(".project-contacts-panel");
+  await participantsPanel.getByRole("button", { name: "Edit section title: Site contacts" }).click();
+  await participantsPanel.getByLabel("Section title").fill("Project team");
+  await participantsPanel.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(participantsPanel.getByRole("heading", { name: "Project team" })).toBeVisible();
+
+  const projectProfile = page.locator(".overview-template-section").last();
+  await projectProfile.getByRole("button", { name: "Edit", exact: true }).click();
+  await projectProfile.getByLabel("Section title").fill("Project profile revised");
+  await projectProfile.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Project profile revised" })).toBeVisible();
+
+  await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Templates" }).click();
+  const generalTemplateRow = page.locator(".template-row").filter({ hasText: "General" });
+  await generalTemplateRow.getByRole("button", { name: "Edit" }).click();
+  await page.getByLabel(/^Template name/).fill("General revised");
+  await page.getByLabel("Label").first().fill("Template-only client");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+
+  await page.goto(`/projects/${projectId}`);
+  await expect(page.getByRole("heading", { name: "Project team" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Project profile revised" })).toBeVisible();
+  await expect(page.getByText("Project client", { exact: true })).toBeVisible();
+  await expect(page.getByText("General revised", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Template-only client", { exact: true })).toHaveCount(0);
+
+  const persistedComposition = await page.evaluate((id) => {
+    const database = JSON.parse(window.localStorage.getItem("quicksige.database.v3") ?? "{}") as {
+      projects?: Array<{ id: string; participantsSectionName?: string; overviewSections?: Array<Record<string, unknown>> }>;
+    };
+    const project = database.projects?.find((candidate) => candidate.id === id);
+    return {
+      participantsSectionName: project?.participantsSectionName,
+      sectionNames: project?.overviewSections?.map((section) => section.name),
+      placeholderKeys: project?.overviewSections?.map((section) => section.placeholderKey),
+      retainedTemplateReference: project?.overviewSections?.some((section) => Object.hasOwn(section, "templateId")),
+    };
+  }, projectId);
+  expect(persistedComposition).toEqual({
+    participantsSectionName: "Project team",
+    sectionNames: ["Permits", "Handover", "Project profile revised"],
+    placeholderKeys: ["custom_section", "custom_section_2", "general"],
+    retainedTemplateReference: false,
+  });
 });
 
 test("safety plan hub creates revision and current-plan drafts without overwriting working history", async ({ page }) => {
@@ -526,7 +666,9 @@ test("catalog content is manageable and primary pages meet critical accessibilit
     return category?.translations.de.name ?? "";
   })).toBe("Baustelleneinrichtung");
   await categoryBrowser.getByRole("button", { name: "Edit: Access and emergency organization", exact: true }).click();
-  await expect(categoryDialog.getByLabel("Color", { exact: true })).toBeDisabled();
+  await expect(categoryDialog.locator('input[type="color"]')).toHaveCount(0);
+  await expect(categoryDialog.getByText("Automatic", { exact: true })).toBeVisible();
+  await expect(categoryDialog.getByText("Derived from root category “Site setup”.", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect.poll(() => page.evaluate(() => {
     const stored = window.localStorage.getItem("quicksige.database.v3");
@@ -655,9 +797,9 @@ test("primary layouts remain usable at supported desktop widths", async ({ page 
   ]) {
     await page.setViewportSize(viewport);
     await page.goto("/projects/new");
-    const picker = page.locator(".project-template-browser");
+    const picker = page.locator(".project-section-library");
     await expect(picker).toBeVisible();
-    for (const row of await picker.locator(".project-template-card").all()) {
+    for (const row of await picker.locator(".project-section-template-list article").all()) {
       const rowBox = await row.boundingBox();
       const pickerBox = await picker.boundingBox();
       expect(rowBox).not.toBeNull(); expect(pickerBox).not.toBeNull();
@@ -753,12 +895,13 @@ test("overview template builder supports hierarchy, drag placement, dates, and p
 
   await page.goto("/projects/new");
   await page.getByLabel("Project name").fill("Template-driven project");
-  const handoverTemplate = page.locator(".project-template-card").filter({ hasText: "Site handover" });
-  await handoverTemplate.getByRole("button", { name: "Preview" }).click();
-  await expect(handoverTemplate.getByText("Handover details", { exact: true })).toBeVisible();
-  await handoverTemplate.getByRole("button", { name: "Include" }).click();
-  const includedHandover = page.locator(".project-included-section").filter({ has: page.getByRole("heading", { name: "Site handover" }) });
-  await includedHandover.getByLabel("Permit number").fill("B-2042");
+  const handoverTemplate = page.locator(".project-section-template-list article").filter({ hasText: "Site handover" });
+  await handoverTemplate.locator(".project-template-preview-trigger").click();
+  const handoverPreview = page.getByRole("dialog", { name: "Site handover" });
+  await expect(handoverPreview.getByText("Handover details", { exact: true })).toBeVisible();
+  await handoverPreview.getByRole("button", { name: "Add to project" }).click();
+  const includedHandover = page.locator(".project-included-section").filter({ has: page.locator('input[value="Site handover"]') });
+  await includedHandover.locator('input[aria-label="Permit number"]').fill("B-2042");
   await page.getByRole("button", { name: "Create project" }).click();
   await page.getByRole("navigation", { name: "Project navigation" }).getByRole("link", { name: "Overview" }).click();
   const overviewSection = page.locator(".overview-template-section").filter({ hasText: "Site handover" });
@@ -1257,6 +1400,9 @@ test("primary navigation collapses to a persistent icon rail", async ({ page }) 
   }));
   const expandedWidth = (await sidebar.boundingBox())?.width ?? 0;
   const expandedHorizontalCenters = await readHorizontalCenters();
+  await expect(sidebar.locator(".user-chip-details")).toHaveText("max@example.test");
+  await expect(sidebar.locator(".user-chip-chevron")).toHaveCount(0);
+  await expect(sidebar.locator(".avatar")).not.toHaveAttribute("title");
 
   await page.getByRole("button", { name: "Collapse navigation" }).click();
   await expect(appFrame).toHaveClass(/navigation-collapsed/);

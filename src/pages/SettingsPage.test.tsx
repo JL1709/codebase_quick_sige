@@ -5,7 +5,7 @@ import { createSeedDatabase } from "../data/seed";
 import type { AppDatabase, DocumentTemplate, Locale } from "../domain/types";
 import { I18nProvider } from "../i18n/I18nProvider";
 import { AppProvider } from "../state/AppProvider";
-import { TemplatesPage } from "./SettingsPage";
+import { SettingsPage, TemplatesPage } from "./SettingsPage";
 
 afterEach(cleanup);
 
@@ -37,6 +37,18 @@ function renderTemplatesPage(database: AppDatabase, locale: Locale = "en") {
   return memory;
 }
 
+function renderSettingsPage(database: AppDatabase, locale: Locale = "en") {
+  const memory = createMemoryRepository(database);
+  render(
+    <AppProvider repository={memory.repository}>
+      <I18nProvider locale={locale} setLocale={() => undefined}>
+        <SettingsPage />
+      </I18nProvider>
+    </AppProvider>,
+  );
+  return memory;
+}
+
 function wordTemplatesSection(): HTMLElement {
   return screen.getByRole("heading", { name: "Word templates" }).closest("section") as HTMLElement;
 }
@@ -45,7 +57,37 @@ function overviewTemplatesSection(): HTMLElement {
   return screen.getByRole("heading", { name: "Overview templates" }).closest("section") as HTMLElement;
 }
 
+describe("Project role templates", () => {
+  it("manages reusable organization roles from Templates", () => {
+    const memory = renderTemplatesPage(createSeedDatabase());
+
+    const projectRolesSection = screen.getByRole("heading", { name: "Project roles" }).closest("section") as HTMLElement;
+    fireEvent.click(within(projectRolesSection).getByRole("button", { name: "Add role" }));
+    fireEvent.change(screen.getByLabelText("Role name"), { target: { value: "Fire safety lead" } });
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Add role" })).getByRole("button", { name: "Save" }));
+
+    expect(within(projectRolesSection).getByText("Fire safety lead", { exact: true })).toBeInTheDocument();
+    expect(memory.current().projectRoleDefinitions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "Fire safety lead", lifecycle: "active" }),
+    ]));
+  });
+
+  it("keeps Settings focused on platform and workspace configuration", () => {
+    renderSettingsPage(createSeedDatabase());
+
+    expect(screen.queryByRole("heading", { name: "Project roles" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Platform language" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Local data storage" })).toBeInTheDocument();
+  });
+});
+
 describe("Overview template localization", () => {
+  it("does not expose the legacy participant bridge as an editable overview template", () => {
+    renderTemplatesPage(createSeedDatabase());
+
+    expect(within(overviewTemplatesSection()).queryByText("Project participants", { selector: "strong" })).not.toBeInTheDocument();
+  });
+
   it("edits only the active language and saves without a placeholder warning", () => {
     const memory = renderTemplatesPage(createSeedDatabase());
     const confirmation = vi.spyOn(window, "confirm");

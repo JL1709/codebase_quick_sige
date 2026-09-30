@@ -3,6 +3,7 @@ import { migrateLegacyProjectContacts } from "../domain/contacts";
 import { defaultBlockImageSource } from "../domain/blockImages";
 import { categoryPlacementIds } from "../domain/categoryTree";
 import { legacyProjectOverviewSections } from "../domain/projectOverview";
+import { normalizeProjectOverviewSectionOrder, PROJECT_PARTICIPANTS_SECTION_ID } from "../domain/projectOverviewOrder";
 import type {
   AppDatabase,
   AssessmentAnswers,
@@ -497,7 +498,6 @@ function placeExampleProjectDocuments(plan: Plan): Plan {
 const demoProject: Project = {
   id: "project-logistics-center",
   organizationId: "organization-demo",
-  projectNumber: "QS-2026-014",
   name: "Logistikzentrum West",
   description: "Neubau einer Logistikhalle mit Büroeinbau, Außenanlagen und laufendem Werksverkehr.",
   address: "Industriestraße 18",
@@ -529,7 +529,9 @@ const demoProject: Project = {
       { id: "field-waiting-area", key: "Wartebereich", value: "", placeholderKey: "waiting_area" },
     ],
   }],
+  participantsSectionName: "Projektbeteiligte",
   overviewSections: [],
+  overviewSectionOrder: [],
   assets: [
     {
       id: LOGISTICS_SITE_PLAN_ASSET_ID,
@@ -590,6 +592,10 @@ function seedOverviewSections(project: Project, locale: Locale) {
 }
 
 demoProject.overviewSections = seedOverviewSections(demoProject, "de");
+demoProject.overviewSectionOrder = normalizeProjectOverviewSectionOrder(
+  [PROJECT_PARTICIPANTS_SECTION_ID, ...demoProject.overviewSections.map((section) => section.id)],
+  demoProject.overviewSections,
+);
 
 export function createSeedDatabase(): AppDatabase {
   const demoAssessmentRunId = `assessment-${demoProject.id}-initial`;
@@ -597,7 +603,13 @@ export function createSeedDatabase(): AppDatabase {
     demoProject.organizationId,
     [structuredClone(demoProject)],
   );
-  const migratedDemoProject = contactMigration.projects[0];
+  const migratedDemoProject = {
+    ...contactMigration.projects[0],
+    overviewSectionOrder: normalizeProjectOverviewSectionOrder(
+      contactMigration.projects[0].overviewSectionOrder,
+      contactMigration.projects[0].overviewSections,
+    ),
+  };
   const generatedPlan = createPlanFromAssessment(migratedDemoProject, demoAssessment, seedBlocks, seedCategories, undefined, {
     method: "guided_assessment",
     createdByName: "Max",
@@ -624,7 +636,7 @@ export function createSeedDatabase(): AppDatabase {
     updatedAt: createdAt,
   }));
   return {
-    schemaVersion: 32,
+    schemaVersion: 36,
     organization: {
       id: "organization-demo",
       name: "Sicher Planen Ingenieure",
@@ -643,6 +655,7 @@ export function createSeedDatabase(): AppDatabase {
     companies: contactMigration.companies,
     contactAffiliations: contactMigration.affiliations,
     projectContactAssignments: contactMigration.assignments,
+    projectRoleDefinitions: [],
     externalContactIdentities: [],
     contactImportBatches: [],
     assessmentRuns: [

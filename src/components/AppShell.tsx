@@ -1,4 +1,4 @@
-import { BookOpenText, BriefcaseBusiness, ChevronDown, LayoutTemplate, PanelLeftClose, PanelLeftOpen, Settings, Sparkles, Users } from "lucide-react";
+import { BookOpenText, BriefcaseBusiness, LayoutTemplate, PanelLeftClose, PanelLeftOpen, Settings, Sparkles, Users } from "lucide-react";
 import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useI18n } from "../i18n/I18nProvider";
@@ -27,6 +27,8 @@ export function AppShell() {
   } catch {
     contactsPath = "/contacts";
   }
+  const accountEmail = database.user.email.trim();
+  const accountInitial = accountEmail.slice(0, 1).toUpperCase() || "?";
 
   return (
     <div className={`app-frame ${navigationCollapsed ? "navigation-collapsed" : ""}`}>
@@ -60,9 +62,8 @@ export function AppShell() {
 
         <div className="sidebar-bottom">
           <div className="user-chip">
-            <span className="avatar">{database.user.name.slice(0, 1).toUpperCase()}</span>
-            <span className="user-chip-details"><strong>{database.user.name}</strong><small>{database.organization.name}</small></span>
-            <ChevronDown className="user-chip-chevron" size={16} />
+            <span className="avatar" aria-hidden="true">{accountInitial}</span>
+            <span className="user-chip-details"><strong>{accountEmail}</strong></span>
           </div>
         </div>
       </aside>

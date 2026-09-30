@@ -2,7 +2,7 @@
 
 This document is the implementation contract for the Contacts iteration of QuickSiGe. It translates the approved Contacts recommendation into ordered, testable work spanning the local product, future hosted persistence, imports, external providers, project integration, document generation, privacy, and quality assurance. A checkbox may be marked complete only after its observable acceptance criteria pass. The iteration may be called complete only when every checkbox in this document is checked.
 
-**Implementation status (2026-09-29):** the production-local Contacts vertical slice, canonical migration, focused replaceable repository boundary, chunked file parsing/mapping, selectable Outlook folders and Google groups, provider adapters, project integration, portability/interoperability exports, hosted schema/RLS, reviewed field-level import/contact/company merge, hard-delete safeguards, persistent index preferences, bounded 10,000-contact rendering, and responsive Contacts matrix are implemented and automated gates are green. The iteration is intentionally not declared complete: the remaining unchecked work is external/manual acceptance or broader exhaustive matrix coverage, most notably live credentialed Microsoft/Google tests, current-client Outlook drag testing, real Outlook/Google/iCloud samples and round trips, and the remaining comprehensive bilingual/keyboard/document matrices.
+**Implementation status (2026-09-30):** the production-local Contacts vertical slice, canonical migration, reusable organization project-role catalog, detached and editable project-section composition, unified ordered project overview, focused replaceable repository boundary, chunked file parsing/mapping, selectable Outlook folders and Google groups, provider adapters, project integration, portability/interoperability exports, hosted schema/RLS, reviewed field-level import/contact/company merge, hard-delete safeguards, persistent index preferences, bounded 10,000-contact rendering, and responsive Contacts matrix are implemented and automated gates are green. The iteration is intentionally not declared complete: the remaining unchecked work is external/manual acceptance or broader exhaustive matrix coverage, most notably live credentialed Microsoft/Google tests, current-client Outlook drag testing, real Outlook/Google/iCloud samples and round trips, and the remaining comprehensive bilingual/keyboard/document matrices.
 
 ## 1. Iteration outcome
 
@@ -44,7 +44,7 @@ QuickSiGe should gain a first-class, organization-wide Contacts workspace that r
 ### Included in Iteration 3
 
 - [x] Organization-wide People and Companies records.
-- [x] Contact-company affiliations and project-contact assignments with one or more standard or custom project roles.
+- [x] Contact-company affiliations and project-contact assignments with zero or more standard or custom project roles.
 - [x] Search, filters, sorting, configurable columns, bulk actions, archive/restore, duplicate review, and merge.
 - [x] Manual contact and company CRUD.
 - [x] VCF/vCard, CSV, TSV, and XLSX import through file selection and drag-and-drop.
@@ -114,15 +114,15 @@ The following are intentionally not implementation items in this iteration and t
 - [x] Add a contact-company affiliation entity with contact, company, job title, department, primary flag, and validity/lifecycle metadata needed for deterministic behavior.
 - [x] Support a contact with no company, one primary company, or multiple affiliations without duplicating the person.
 - [x] Ensure company updates flow to live contact and project views without rewriting published revision snapshots.
-- [x] Prevent a company from being hard-deleted while an active affiliation or project assignment references it.
+- [x] Prevent a company from being hard-deleted while a contact affiliation or import journal references it.
 
 ### Project assignments and roles
 
-- [x] Add a project-contact assignment entity that references project, contact, optional company/affiliation context, assignment lifecycle, and audit timestamps.
+- [x] Add a project-contact assignment entity that references project, contact, assignment lifecycle, and audit timestamps while resolving company data only from the canonical contact affiliation.
 - [x] Add project-role values separately from the assignment so one contact can hold multiple roles on one project without duplicate contact records.
-- [x] Preserve the existing translated standard roles: client, owner, coordinator, architect, planner, site manager, and contractor.
-- [x] Add a supported custom-role value with a user-entered localized display label where the standard catalog is insufficient.
-- [x] Prevent duplicate active assignments for the same project, contact, company context, and role.
+- [x] Preserve the existing translated standard roles and add the protected responsible-third-party role: client, owner, responsible third party, coordinator, architect, planner, site manager, and contractor.
+- [x] Add reusable organization-owned custom role definitions that can be created, renamed, reordered, archived, restored, and reused in every project.
+- [x] Prevent duplicate active assignments for the same project and contact while allowing multiple roles on that assignment.
 - [x] Keep removing a contact from a project independent from archiving or deleting the canonical contact.
 - [x] Keep project emergency contacts in their existing project-owned model and clearly separate them from project participants.
 
@@ -203,7 +203,7 @@ The following are intentionally not implementation items in this iteration and t
 - [x] Persist each user's tab, sort, filters, and visible-column preferences without mixing them into shared contact data.
 - [x] Add pagination or another tested bounded rendering strategy that remains responsive with at least 10,000 contacts.
 - [x] Display names, primary company, job title, primary email, primary phone, associated projects/roles, source, lifecycle, and updated date clearly.
-- [x] Add row selection and bulk actions for add to project, tag, export, archive, restore, and duplicate review.
+- [x] Add row selection and focused bulk actions for add to project, export, archive, restore, and duplicate review.
 - [x] Add empty, no-results, loading, import-in-progress, and recoverable-error states.
 - [x] Provide an efficient mobile/card presentation without removing core actions or information.
 
@@ -266,20 +266,22 @@ The following are intentionally not implementation items in this iteration and t
 - [x] Replace embedded participant editing with a dedicated project-participant experience backed by canonical project assignments.
 - [x] Add `Add from Contacts` search and multi-select from an existing project's overview.
 - [x] Allow creating a new canonical contact inline without leaving the project and immediately assign it to the project.
-- [x] Allow importing contacts from the project flow and continue into assignment after the import completes.
-- [x] Require at least one standard or custom project role when creating an assignment.
+- [x] Keep imports in the Contacts workspace and remove the import action from project participant flows.
+- [x] Keep project roles fully optional, never preselect a role, and allow assignments to be created or retained with no roles.
 - [x] Allow one person to hold several roles without duplicating the person or their contact methods.
-- [x] Allow changing the assignment's company context without rewriting the contact's unrelated project assignments.
+- [x] Keep contact identity and company editing exclusively in Contacts; project participant rows edit only project roles.
+- [x] Replace the assignment-edit dialog with an inline role picker and remove the project-level company override.
 - [x] Allow removing an assignment while retaining the canonical contact and its other projects.
 - [x] Show where else the contact is used before archive, merge, or removal actions that could affect projects.
 
 ### New project creation
 
 - [x] Add an optional Participants step or section to new-project creation without making contacts mandatory for a valid project.
-- [x] Support searching and selecting existing contacts, creating a contact inline, and importing contacts during new-project creation.
+- [x] Support searching and selecting existing contacts and creating a canonical contact inline during new-project creation; keep imports in the Contacts workspace.
+- [x] Show the selected contact's company, primary email, and primary phone during project creation, matching the project overview identity row.
 - [x] Preserve selected contacts and roles when navigating backward and forward in the creation workflow.
 - [x] Prevent duplicate assignments if the same contact is selected more than once.
-- [x] Preserve existing overview-template selection and additional-information behavior.
+- [x] Replace the single additional-information area with repeatable, editable custom project sections while preserving overview-template selection.
 - [x] Create the project and all selected assignments atomically so a failed assignment does not leave a partially configured project.
 
 ### Resolved project data and outputs
@@ -293,10 +295,44 @@ The following are intentionally not implementation items in this iteration and t
 - [x] Keep previously published revision rendering and exports byte-stable in meaning when live Contacts data later changes.
 - [x] Ensure archived contacts already present in historical revisions remain renderable.
 
+### Reusable project roles and ordered overview composition
+
+- [x] Model custom project roles as organization-owned reusable definitions instead of one-off assignment labels.
+- [x] Support project-scoped custom roles alongside reusable organization roles, with project-scoped roles available to every participant in that project and nowhere else.
+- [x] Present selected participant roles as removable pills and manage multi-role selection through one searchable role picker in project creation and existing projects.
+- [x] Let project users create a role from the picker and explicitly choose whether to save it as a reusable template role, defaulting that choice to true.
+- [x] Keep standard roles protected and add responsible third party as a stable domain role.
+- [x] Migrate legacy custom labels into deduplicated reusable definitions and keep assignments linked by stable role-definition ID.
+- [x] Use the reusable role catalog in existing-project assignment, new-project creation, bulk assignment, and contact import-to-project flows.
+- [x] Add role create, rename, reorder, archive, and restore management to Templates.
+- [x] Keep multiple participants with the same role and multiple roles on one participant unrestricted.
+- [x] Hide the legacy participant overview template from template management and project-template selection.
+- [x] Show canonical project participants in both project overview and Edit project information.
+- [x] Persist one ordered project-overview composition containing participants and all overview sections.
+- [x] Support pointer drag-and-drop plus accessible move-up/move-down controls for overview sections.
+- [x] Apply the persisted order to the overview display and the stored overview-section sequence consumed by generated data.
+- [x] Add local migration, hosted migration/RLS, unit, component, Chromium, and WebKit coverage for role reuse and overview ordering.
+
+### Detached project-section composition
+
+- [x] Separate the project name from optional project composition with a persistent left-side section library.
+- [x] Start new projects with only the project-name panel and clear guidance for adding participants, templates, or custom sections.
+- [x] Preview reusable templates in a dialog and allow adding them directly from the section library.
+- [x] Deep-copy template content into project-owned sections without retaining a template ID, synchronization link, or audit reference.
+- [x] Ensure subsequent template edits and project-section edits never change one another.
+- [x] Allow any number of project-owned custom sections, each created with the editable initial title `Custom section`/`Eigener Bereich`.
+- [x] Make participant and field-section titles editable during creation, in Edit project information, and from the project overview.
+- [x] Make copied-template and custom-section labels, types, nesting, values, titles, deletion, and ordering project-editable.
+- [x] Replace project-participant contact dropdowns with a keyboard-accessible autocomplete searching name, company, job title, email, and phone while excluding assigned contacts.
+- [x] Preserve accessible move controls and implement animated sortable drag-and-drop where surrounding sections make room for the prospective position.
+- [x] Keep section dimensions stable during drag, remove cross-height scaling, and use a compact drag overlay plus a visible destination placeholder.
+- [x] Migrate existing projects to editable participant titles and strip legacy template references from persisted project sections.
+- [x] Cover empty composition, repeatable custom sections, template preview/copy, direct overview editing, migration, and template/project independence in unit and Chromium/WebKit journeys.
+
 ### Phase 5 acceptance
 
 - [x] A contact can be added to an existing project and during project creation without retyping contact information.
-- [x] The same contact can have different companies or roles on different projects without conflicting data.
+- [x] The same contact can have different roles on different projects while every live project resolves the contact's canonical primary company.
 - [x] Editing a live contact updates current project views and invalidates dependent generated documents.
 - [x] Historical revisions and exports continue to show the values captured at publication time.
 - [x] No production workflow reads a second mutable participant source after migration.
@@ -315,7 +351,7 @@ The following are intentionally not implementation items in this iteration and t
 
 ### Guided import experience
 
-- [x] Provide `Import contacts` from the Contacts page and project participant flows.
+- [x] Provide `Import contacts` only from the Contacts workspace; project participant flows reuse or create canonical Contacts without duplicating the import experience.
 - [x] Start with a source chooser for files, Microsoft Outlook, and Google Contacts.
 - [x] Show supported formats, privacy behavior, and provider scope before the user selects a source.
 - [x] Add a file drop zone and keyboard-accessible file chooser.
@@ -573,7 +609,7 @@ The following are intentionally not implementation items in this iteration and t
 - [ ] Add duplicate detection and contact/company merge journeys.
 - [ ] Add file import journeys for vCard, Outlook CSV, German semicolon CSV, Google CSV, multi-sheet XLSX, invalid files, cancellation, result reporting, and undo.
 - [ ] Add mocked Connect Outlook and Connect Google browser journeys through final import and optional project assignment.
-- [ ] Add an existing-project journey that searches Contacts, assigns several roles, changes a role, and removes an assignment without deleting the contact.
+- [x] Add an existing-project journey that searches Contacts, assigns several roles, changes a role, and removes an assignment without deleting the contact.
 - [ ] Add a new-project journey that selects existing contacts, creates one inline, preserves selections through navigation, and creates assignments atomically.
 - [ ] Add a regression journey proving contact edits mark current documents stale while an existing published revision remains unchanged.
 - [ ] Add viewer-permission and cross-organization denial journeys.
@@ -639,7 +675,7 @@ Iteration 3 is complete only when all of the following are true:
 - [x] Drag-and-drop accepts supported contact files and accurately communicates direct Outlook limitations.
 - [ ] Microsoft Outlook import works end to end with delegated `Contacts.Read` and no persisted token.
 - [ ] Google Contacts import works end to end with `contacts.readonly` and no persisted token.
-- [x] Contacts can be assigned to existing projects and during project creation with one or more standard/custom roles.
+- [x] Contacts can be assigned to existing projects and during project creation with zero or more standard/custom roles.
 - [x] All current project views, plans, documents, placeholders, exports, and publication flows use the canonical resolved-participant selector.
 - [x] Live contact changes invalidate dependent current outputs while historical revision snapshots remain unchanged.
 - [x] Local persistence, Supabase migrations, constraints, RLS, backups, and audit events are implemented and tested.
@@ -695,12 +731,12 @@ Complete this section with measured results during implementation; do not mark a
 - [ ] Baseline Chromium/WebKit browser-test counts recorded:
 - [ ] Baseline export-QA result recorded:
 - [ ] Baseline dependency-audit result recorded:
-- [x] Final local schema version and migration fixtures recorded: schema 32; seeded, empty, legacy participant, custom overview, idempotency, malformed-payload, and backup/recovery fixtures pass.
-- [x] Final Supabase migration identifiers and RLS test results recorded: `202609290001_contacts_workspace.sql`; empty and Iteration 2-compatible PostgreSQL 17 migrations plus owner/admin/editor/viewer/non-member/cross-tenant assertions pass.
+- [x] Final local schema version and migration fixtures recorded: schema 36; seeded, empty, legacy participant/company override/project number, custom overview, reusable project roles, ordered project overview, detached project sections, idempotency, malformed-payload, and backup/recovery fixtures pass.
+- [x] Final Supabase migration identifiers and RLS test results recorded: `202609290001_contacts_workspace.sql`, `202609300001_project_roles_overview_order.sql`, `202609300002_project_scoped_roles.sql`, and `202609300003_canonical_contact_company.sql`; empty and Iteration 2-compatible PostgreSQL 17 migrations plus canonical-company, owner/admin/editor/viewer/non-member/cross-tenant role assertions pass.
 - [x] Final lint result recorded: `npm run lint` passes with zero warnings.
-- [x] Final unit/component test counts recorded: 194 tests across 28 files pass.
+- [x] Final unit/component test counts recorded: 234 tests across 32 files pass.
 - [x] Final production-build result recorded: TypeScript project build and Vite production bundle pass.
-- [x] Final Chromium/WebKit browser-test counts recorded: 62 tests pass.
+- [x] Final Chromium/WebKit browser-test counts recorded: 70 tests pass.
 - [x] Final accessibility result recorded: the Contacts journey reports zero serious or critical axe violations in Chromium and WebKit.
 - [x] Final dependency-audit result recorded: `npm audit --audit-level=high` reports zero vulnerabilities.
 - [ ] Outlook CSV/vCard real sanitized smoke result recorded: pending a current Outlook-generated sanitized sample.
