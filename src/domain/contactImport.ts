@@ -1,5 +1,5 @@
-import { normalizeEmail, normalizePhone } from "./contacts";
-import type { Contact, ContactAddress, ContactMethodType, ContactSource, ExternalContactIdentity, ExternalContactProvider } from "./types";
+import { contactDisplayName, normalizeEmail, splitContactFullName } from "./contacts";
+import type { Contact, ContactAddress, ContactMethodType, ContactSource, ExternalContactProvider } from "./types";
 
 export const MAX_CONTACT_IMPORT_BYTES = 10 * 1024 * 1024;
 export const MAX_CONTACT_IMPORT_RECORDS = 10_000;
@@ -44,7 +44,8 @@ export interface ContactImportCandidate {
   givenName: string;
   familyName: string;
   suffix: string;
-  displayName: string;
+  /** A transient full-name value from files/providers; saved contacts use structured name parts only. */
+  fullName: string;
   companyName: string;
   jobTitle: string;
   department: string;
@@ -62,31 +63,39 @@ export interface ContactImportCandidate {
   warnings: string[];
 }
 
+export function structuredNameForCandidate(candidate: Pick<ContactImportCandidate, "prefix" | "givenName" | "familyName" | "suffix" | "fullName">) {
+  const structuredName = {
+    prefix: candidate.prefix.trim(),
+    givenName: candidate.givenName.trim(),
+    familyName: candidate.familyName.trim(),
+    suffix: candidate.suffix.trim(),
+  };
+  if (structuredName.givenName || structuredName.familyName) return structuredName;
+  const parsedName = splitContactFullName(candidate.fullName);
+  return {
+    prefix: structuredName.prefix || parsedName.prefix,
+    givenName: parsedName.givenName,
+    familyName: parsedName.familyName,
+    suffix: structuredName.suffix || parsedName.suffix,
+  };
+}
+
+export function candidateDisplayName(candidate: Pick<ContactImportCandidate, "prefix" | "givenName" | "familyName" | "suffix" | "fullName">): string {
+  return contactDisplayName(structuredNameForCandidate(candidate));
+}
+
 export function matchContactImportCandidate(
   candidate: ContactImportCandidate,
   contacts: Contact[],
-  identities: ExternalContactIdentity[] = [],
 ): Contact | undefined {
-  if (candidate.externalIdentity) {
-    const identity = identities.find((current) => (
-      current.provider === candidate.externalIdentity!.provider
-      && current.providerAccountId === candidate.externalIdentity!.providerAccountId
-      && current.externalContactId === candidate.externalIdentity!.externalContactId
-    ));
-    const providerContact = identity && contacts.find((contact) => contact.id === identity.contactId);
-    if (providerContact) return providerContact;
-  }
   const emailValues = new Set(candidate.emails.map((email) => normalizeEmail(email.value)).filter(Boolean));
-  const phoneValues = new Set(candidate.phones.map((phone) => normalizePhone(phone.value)).filter(Boolean));
-  return contacts.find((contact) => (
-    contact.emails.some((email) => emailValues.has(email.normalizedValue))
-    || contact.phones.some((phone) => phoneValues.has(phone.normalizedValue))
-  ));
+  if (emailValues.size === 0) return undefined;
+  return contacts.find((contact) => contact.emails.some((email) => emailValues.has(email.normalizedValue || normalizeEmail(email.value))));
 }
 
 export type ContactImportField =
   | "ignore"
-  | "displayName"
+  | "fullName"
   | "givenName"
   | "familyName"
   | "prefix"
@@ -115,11 +124,11 @@ export interface DelimitedImportData {
 export type ContactTextEncoding = "utf-8" | "windows-1252" | "iso-8859-1";
 
 const HEADER_ALIASES: Record<string, ContactImportField> = {
-  name: "displayName",
-  fullname: "displayName",
-  "full name": "displayName",
-  "display name": "displayName",
-  anzeigename: "displayName",
+  name: "fullName",
+  fullname: "fullName",
+  "full name": "fullName",
+  "display name": "fullName",
+  anzeigename: "fullName",
   vorname: "givenName",
   firstname: "givenName",
   "first name": "givenName",
@@ -303,7 +312,7 @@ export function candidatesFromDelimited(
   if (data.rows.length > MAX_CONTACT_IMPORT_RECORDS) throw new Error("too_many_records");
   return data.rows.map((row, rowIndex) => {
     const values: Record<ContactImportField, string[]> = {
-      ignore: [], displayName: [], givenName: [], familyName: [], prefix: [], suffix: [], companyName: [], jobTitle: [], department: [],
+      ignore: [], fullName: [], givenName: [], familyName: [], prefix: [], suffix: [], companyName: [], jobTitle: [], department: [],
       email: [], phone: [], street: [], postalCode: [], city: [], region: [], country: [], notes: [], tags: [],
     };
     row.forEach((cell, columnIndex) => values[mapping[columnIndex] ?? "ignore"].push(limitedValue(cell)));
@@ -329,7 +338,7 @@ export function candidatesFromDelimited(
       givenName: values.givenName[0] ?? "",
       familyName: values.familyName[0] ?? "",
       suffix: values.suffix[0] ?? "",
-      displayName: values.displayName[0] ?? "",
+      fullName: values.fullName[0] ?? "",
       companyName: values.companyName[0] ?? "",
       jobTitle: values.jobTitle[0] ?? "",
       department: values.department[0] ?? "",
@@ -383,7 +392,7 @@ function vCardType(parameters: string): ContactMethodType {
 
 function emptyCandidate(sourceKey: string): ContactImportCandidate {
   return {
-    sourceKey, prefix: "", givenName: "", familyName: "", suffix: "", displayName: "", companyName: "", jobTitle: "", department: "",
+    sourceKey, prefix: "", givenName: "", familyName: "", suffix: "", fullName: "", companyName: "", jobTitle: "", department: "",
     emails: [], phones: [], addresses: [], notes: "", tags: [], warnings: [],
   };
 }
@@ -411,7 +420,7 @@ export function parseVCardContacts(text: string): ContactImportCandidate[] {
       const parameters = parameterParts.join(";");
       const charset = parameters.match(/CHARSET=([^;:]+)/i)?.[1]?.replace(/^"|"$/g, "") ?? "utf-8";
       const value = decodeVCardValue(rawValue, /ENCODING=QUOTED-PRINTABLE/i.test(parameters), charset);
-      if (name === "FN") candidate.displayName = limitedValue(value);
+      if (name === "FN") candidate.fullName = limitedValue(value);
       else if (name === "N") {
         const [familyName = "", givenName = "", additional = "", prefix = "", suffix = ""] = value.split(/(?<!\\);/).map((part) => decodeVCardValue(part, false));
         candidate.familyName = limitedValue(familyName);
@@ -431,7 +440,7 @@ export function parseVCardContacts(text: string): ContactImportCandidate[] {
       else if (["PHOTO", "BDAY", "GENDER", "KEY", "SOUND"].includes(name)) ignored.add(name.toLocaleLowerCase());
     }
     if (ignored.size > 0) candidate.warnings.push(`ignored:${[...ignored].sort().join(",")}`);
-    if (!candidate.displayName) candidate.displayName = [candidate.prefix, candidate.givenName, candidate.familyName, candidate.suffix].filter(Boolean).join(" ");
+    if (!candidate.fullName) candidate.fullName = [candidate.prefix, candidate.givenName, candidate.familyName, candidate.suffix].filter(Boolean).join(" ");
     return candidate;
   });
 }
@@ -569,26 +578,29 @@ export function exportCandidatesCsv(candidates: ContactImportCandidate[]): strin
   const emailColumnCount = Math.max(1, ...candidates.map((candidate) => candidate.emails.length));
   const phoneColumnCount = Math.max(1, ...candidates.map((candidate) => candidate.phones.length));
   const headers = [
-    "Display Name", "First Name", "Last Name", "Company", "Job Title",
+    "Title / Prefix", "First Name", "Last Name", "Suffix", "Company", "Job Title",
     ...Array.from({ length: emailColumnCount }, (_, index) => `Email ${index + 1}`),
     ...Array.from({ length: phoneColumnCount }, (_, index) => `Phone ${index + 1}`),
     "Street", "Postal Code", "City", "Country", "Notes", "Tags",
   ];
-  const rows = candidates.map((candidate) => [
-    candidate.displayName, candidate.givenName, candidate.familyName, candidate.companyName, candidate.jobTitle,
-    ...Array.from({ length: emailColumnCount }, (_, index) => candidate.emails[index]?.value ?? ""),
-    ...Array.from({ length: phoneColumnCount }, (_, index) => candidate.phones[index]?.value ?? ""),
-    candidate.addresses[0]?.street ?? "",
-    candidate.addresses[0]?.postalCode ?? "", candidate.addresses[0]?.city ?? "", candidate.addresses[0]?.country ?? "",
-    candidate.notes, candidate.tags.join("; "),
-  ]);
+  const rows = candidates.map((candidate) => {
+    const name = structuredNameForCandidate(candidate);
+    return [
+      name.prefix, name.givenName, name.familyName, name.suffix, candidate.companyName, candidate.jobTitle,
+      ...Array.from({ length: emailColumnCount }, (_, index) => candidate.emails[index]?.value ?? ""),
+      ...Array.from({ length: phoneColumnCount }, (_, index) => candidate.phones[index]?.value ?? ""),
+      candidate.addresses[0]?.street ?? "",
+      candidate.addresses[0]?.postalCode ?? "", candidate.addresses[0]?.city ?? "", candidate.addresses[0]?.country ?? "",
+      candidate.notes, candidate.tags.join("; "),
+    ];
+  });
   return `\uFEFF${[headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
 }
 
 export function exportContactCsvTemplate(locale: "de" | "en"): string {
   const headers = locale === "de"
-    ? ["Anzeigename", "Vorname", "Nachname", "Firma", "Position", "E-Mail-Adresse", "Telefon", "Straße", "PLZ", "Ort", "Land", "Notizen", "Tags"]
-    : ["Display Name", "First Name", "Last Name", "Company", "Job Title", "Email Address", "Phone", "Street", "Postal Code", "City", "Country", "Notes", "Tags"];
+    ? ["Titel / Präfix", "Vorname", "Nachname", "Suffix", "Firma", "Position", "E-Mail-Adresse", "Telefon", "Straße", "PLZ", "Ort", "Land", "Notizen", "Tags"]
+    : ["Title / Prefix", "First Name", "Last Name", "Suffix", "Company", "Job Title", "Email Address", "Phone", "Street", "Postal Code", "City", "Country", "Notes", "Tags"];
   return `\uFEFF${headers.map(csvCell).join(",")}`;
 }
 
@@ -598,11 +610,12 @@ function vCardEscape(value: string): string {
 
 export function exportCandidatesVCard(candidates: ContactImportCandidate[]): string {
   return candidates.map((candidate) => {
+    const name = structuredNameForCandidate(candidate);
     const lines = [
       "BEGIN:VCARD",
       "VERSION:4.0",
-      `FN:${vCardEscape(candidate.displayName || [candidate.givenName, candidate.familyName].filter(Boolean).join(" "))}`,
-      `N:${[candidate.familyName, candidate.givenName, "", candidate.prefix, candidate.suffix].map(vCardEscape).join(";")}`,
+      `FN:${vCardEscape(candidateDisplayName(candidate))}`,
+      `N:${[name.familyName, name.givenName, "", name.prefix, name.suffix].map(vCardEscape).join(";")}`,
     ];
     if (candidate.companyName) lines.push(`ORG:${vCardEscape(candidate.companyName)}`);
     if (candidate.jobTitle) lines.push(`TITLE:${vCardEscape(candidate.jobTitle)}`);

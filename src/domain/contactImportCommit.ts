@@ -1,5 +1,5 @@
-import { contactDisplayName, ensureSinglePrimary, normalizeEmail, normalizePhone } from "./contacts";
-import type { ContactImportCandidate } from "./contactImport";
+import { ensureSinglePrimary, normalizeEmail, normalizePhone } from "./contacts";
+import { structuredNameForCandidate, type ContactImportCandidate } from "./contactImport";
 import type {
   AppDatabase,
   Company,
@@ -14,7 +14,19 @@ import type {
 } from "./types";
 
 export type ContactImportDecisionAction = "create" | "update" | "merge" | "skip";
-export type ContactImportOverwriteField = "prefix" | "givenName" | "familyName" | "suffix" | "displayName" | "notes";
+export type ContactImportOverwriteField =
+  | "prefix"
+  | "givenName"
+  | "familyName"
+  | "suffix"
+  | "companyName"
+  | "jobTitle"
+  | "department"
+  | "emails"
+  | "phones"
+  | "addresses"
+  | "notes"
+  | "tags";
 
 export interface ContactImportDecision {
   candidate: ContactImportCandidate;
@@ -36,11 +48,6 @@ export interface ContactImportCommitInput {
 export interface ContactImportCommitResult {
   database: AppDatabase;
   batch: ContactImportBatch;
-}
-
-function uniqueMethods<T extends { normalizedValue: string }>(existing: T[], incoming: T[]): T[] {
-  const values = new Set(existing.map((value) => value.normalizedValue).filter(Boolean));
-  return [...existing, ...incoming.filter((value) => !values.has(value.normalizedValue))];
 }
 
 function candidateEmails(candidate: ContactImportCandidate, id: (prefix: string) => string): ContactEmail[] {
@@ -66,14 +73,11 @@ function createContact(
   now: string,
   id: (prefix: string) => string,
 ): Contact {
+  const name = structuredNameForCandidate(candidate);
   return {
     id: id("contact"),
     organizationId,
-    prefix: candidate.prefix.trim(),
-    givenName: candidate.givenName.trim(),
-    familyName: candidate.familyName.trim(),
-    suffix: candidate.suffix.trim(),
-    displayName: candidate.displayName.trim(),
+    ...name,
     emails: candidateEmails(candidate, id),
     phones: candidatePhones(candidate, id),
     addresses: candidateAddresses(candidate, id),
@@ -91,33 +95,31 @@ function updateContact(
   candidate: ContactImportCandidate,
   now: string,
   id: (prefix: string) => string,
+  action: Extract<ContactImportDecisionAction, "update" | "merge">,
   overwriteFields: ContactImportOverwriteField[] = [],
 ): Contact {
+  const importedName = structuredNameForCandidate(candidate);
   const incomingEmails = candidateEmails(candidate, id);
   const incomingPhones = candidatePhones(candidate, id);
   const incomingAddresses = candidateAddresses(candidate, id);
   const overwrites = new Set(overwriteFields);
+  const usesImportedField = (field: ContactImportOverwriteField) => action === "update" || overwrites.has(field);
   const importedValue = (field: ContactImportOverwriteField, currentValue: string, nextValue: string) => (
-    (overwrites.has(field) && nextValue.trim()) || currentValue || nextValue.trim()
+    usesImportedField(field) && nextValue.trim() ? nextValue.trim() : currentValue
   );
   return {
     ...existing,
-    prefix: importedValue("prefix", existing.prefix, candidate.prefix),
-    givenName: importedValue("givenName", existing.givenName, candidate.givenName),
-    familyName: importedValue("familyName", existing.familyName, candidate.familyName),
-    suffix: importedValue("suffix", existing.suffix, candidate.suffix),
-    displayName: importedValue("displayName", existing.displayName, candidate.displayName),
-    emails: ensureSinglePrimary(uniqueMethods(existing.emails, incomingEmails)),
-    phones: ensureSinglePrimary(uniqueMethods(existing.phones, incomingPhones)),
-    addresses: ensureSinglePrimary([
-      ...existing.addresses,
-      ...incomingAddresses.filter((address) => !existing.addresses.some((current) => (
-        [current.street, current.postalCode, current.city, current.country].join("|").toLocaleLowerCase()
-        === [address.street, address.postalCode, address.city, address.country].join("|").toLocaleLowerCase()
-      ))),
-    ]),
+    prefix: importedValue("prefix", existing.prefix, importedName.prefix),
+    givenName: importedValue("givenName", existing.givenName, importedName.givenName),
+    familyName: importedValue("familyName", existing.familyName, importedName.familyName),
+    suffix: importedValue("suffix", existing.suffix, importedName.suffix),
+    emails: usesImportedField("emails") && incomingEmails.length > 0 ? incomingEmails : existing.emails,
+    phones: usesImportedField("phones") && incomingPhones.length > 0 ? incomingPhones : existing.phones,
+    addresses: usesImportedField("addresses") && incomingAddresses.length > 0 ? incomingAddresses : existing.addresses,
     notes: importedValue("notes", existing.notes, candidate.notes),
-    tags: [...new Set([...existing.tags, ...candidate.tags.map((tag) => tag.trim()).filter(Boolean)])],
+    tags: usesImportedField("tags") && candidate.tags.some((tag) => tag.trim())
+      ? [...new Set(candidate.tags.map((tag) => tag.trim()).filter(Boolean))]
+      : existing.tags,
     lifecycle: "active",
     updatedAt: now,
   };
@@ -147,16 +149,30 @@ export function commitContactImport(
     }
 
     const contact = previousContact
-      ? updateContact(previousContact, decision.candidate, now, id, decision.overwriteFields)
+      ? updateContact(previousContact, decision.candidate, now, id, decision.action === "merge" ? "merge" : "update", decision.overwriteFields)
       : createContact(database.organization.id, input.source, decision.candidate, now, id);
     database.contacts = previousContact
       ? database.contacts.map((currentContact) => currentContact.id === contact.id ? contact : currentContact)
       : [contact, ...database.contacts];
 
+    const overwriteFields = new Set(decision.overwriteFields ?? []);
+    const importsField = (field: ContactImportOverwriteField) => (
+      !previousContact || decision.action === "update" || overwriteFields.has(field)
+    );
+    const currentAffiliations = previousContact ? database.contactAffiliations.filter((affiliation) => (
+      affiliation.contactId === previousContact.id && affiliation.lifecycle === "active"
+    )) : [];
+    const currentPrimaryAffiliation = currentAffiliations.find((affiliation) => affiliation.primary) ?? currentAffiliations[0];
+    const importedCompanyName = importsField("companyName") ? decision.candidate.companyName.trim() : "";
+    const importedJobTitle = importsField("jobTitle") ? decision.candidate.jobTitle.trim() : "";
+    const importedDepartment = importsField("department") ? decision.candidate.department.trim() : "";
     let company: Company | undefined;
     let previousCompany: Company | undefined;
     let companyCreated = false;
-    const companyName = decision.candidate.companyName.trim();
+    const companyName = importedCompanyName
+      || (importedJobTitle || importedDepartment
+        ? database.companies.find((candidate) => candidate.id === currentPrimaryAffiliation?.companyId)?.name ?? ""
+        : "");
     if (companyName) {
       company = database.companies.find((candidate) => candidate.name.trim().toLocaleLowerCase() === companyName.toLocaleLowerCase());
       if (company) previousCompany = structuredClone(company);
@@ -176,15 +192,27 @@ export function commitContactImport(
     }
 
     const affiliationIds: string[] = [];
-    let previousAffiliation;
+    const previousAffiliations: NonNullable<ContactImportItem["previousAffiliations"]> = [];
+    const rememberAffiliation = (affiliation: NonNullable<ContactImportItem["previousAffiliation"]>) => {
+      if (!previousAffiliations.some((candidate) => candidate.id === affiliation.id)) previousAffiliations.push(structuredClone(affiliation));
+    };
     if (company) {
       const existingAffiliation = database.contactAffiliations.find((affiliation) => affiliation.contactId === contact.id && affiliation.companyId === company!.id);
+      const changesPrimaryCompany = Boolean(previousContact && importedCompanyName);
+      if (changesPrimaryCompany) {
+        database.contactAffiliations = database.contactAffiliations.map((affiliation) => {
+          if (affiliation.contactId !== contact.id || affiliation.lifecycle !== "active" || !affiliation.primary || affiliation.id === existingAffiliation?.id) return affiliation;
+          rememberAffiliation(affiliation);
+          return { ...affiliation, primary: false, updatedAt: now };
+        });
+      }
       if (existingAffiliation) {
-        previousAffiliation = structuredClone(existingAffiliation);
+        rememberAffiliation(existingAffiliation);
         database.contactAffiliations = database.contactAffiliations.map((affiliation) => affiliation.id === existingAffiliation.id ? {
           ...affiliation,
-          jobTitle: affiliation.jobTitle || decision.candidate.jobTitle.trim(),
-          department: affiliation.department || decision.candidate.department.trim(),
+          jobTitle: importedJobTitle || affiliation.jobTitle,
+          department: importedDepartment || affiliation.department,
+          primary: changesPrimaryCompany ? true : affiliation.primary,
           lifecycle: "active",
           updatedAt: now,
         } : affiliation);
@@ -193,8 +221,8 @@ export function commitContactImport(
         affiliationIds.push(affiliationId);
         database.contactAffiliations.unshift({
           id: affiliationId, organizationId: database.organization.id, contactId: contact.id, companyId: company.id,
-          jobTitle: decision.candidate.jobTitle.trim(), department: decision.candidate.department.trim(),
-          primary: !database.contactAffiliations.some((affiliation) => affiliation.contactId === contact.id && affiliation.lifecycle === "active"),
+          jobTitle: importedJobTitle, department: importedDepartment,
+          primary: changesPrimaryCompany || !database.contactAffiliations.some((affiliation) => affiliation.contactId === contact.id && affiliation.lifecycle === "active"),
           lifecycle: "active", createdAt: now, updatedAt: now,
         });
       }
@@ -283,7 +311,7 @@ export function commitContactImport(
       messages: decision.candidate.warnings,
       previousContact: previousContact && structuredClone(previousContact),
       previousCompany,
-      previousAffiliation,
+      previousAffiliations,
       previousAssignment,
       previousExternalIdentity,
       companyCreated,
@@ -308,14 +336,4 @@ export function commitContactImport(
     database.generatedDocuments = database.generatedDocuments.map((document) => document.projectId === input.projectAssignment!.projectId ? { ...document, stale: true } : document);
   }
   return { database, batch };
-}
-
-export function candidateDisplayName(candidate: ContactImportCandidate): string {
-  return contactDisplayName({
-    displayName: candidate.displayName,
-    prefix: candidate.prefix,
-    givenName: candidate.givenName,
-    familyName: candidate.familyName,
-    suffix: candidate.suffix,
-  });
 }

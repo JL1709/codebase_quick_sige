@@ -56,7 +56,6 @@ export interface Contact {
   givenName: string;
   familyName: string;
   suffix: string;
-  displayName: string;
   emails: ContactEmail[];
   phones: ContactPhone[];
   addresses: ContactAddress[];
@@ -152,6 +151,7 @@ export interface ContactImportItem {
   previousContact?: Contact;
   previousCompany?: Company;
   previousAffiliation?: ContactCompanyAffiliation;
+  previousAffiliations?: ContactCompanyAffiliation[];
   previousAssignment?: ProjectContactAssignment;
   previousExternalIdentity?: ExternalContactIdentity;
   companyCreated?: boolean;

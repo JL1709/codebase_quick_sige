@@ -4,12 +4,13 @@ import { defaultBlockImageSource } from "../domain/blockImages";
 import { categoryPlacementIds, normalizeCategoryColorOwnership } from "../domain/categoryTree";
 import { legacyProjectOverviewSections } from "../domain/projectOverview";
 import { normalizeProjectOverviewSectionOrder, orderProjectOverviewSections, PROJECT_PARTICIPANTS_SECTION_ID } from "../domain/projectOverviewOrder";
-import { migrateLegacyProjectContacts, migrateProjectRoleCatalog } from "../domain/contacts";
+import { migrateLegacyProjectContacts, migrateProjectRoleCatalog, splitContactFullName, splitContactGivenNamePrefix } from "../domain/contacts";
 import type {
   AppDatabase,
   AssessmentAnswers,
   BuildingBlock,
   BuildingBlockCategory,
+  Contact,
   ContactCompanyAffiliation,
   CustomField,
   EmergencyContact,
@@ -30,7 +31,7 @@ export const STORAGE_KEY = "quicksige.database.v3";
 const LEGACY_STORAGE_KEYS = ["quicksige.prototype.database.v2"];
 export const BACKUP_KEY = "quicksige.database.migration-backup.v2";
 export const MIGRATION_ERROR_KEY = "quicksige.database.migration-error";
-export const CURRENT_SCHEMA_VERSION = 36;
+export const CURRENT_SCHEMA_VERSION = 37;
 const CATEGORY_HIERARCHY_SCHEMA_VERSION = 24;
 const CATEGORY_ASSIGNMENT_CORRECTION_SCHEMA_VERSION = 20;
 const AUTOMATIC_TITLE_BLOCK_REMOVAL_SCHEMA_VERSION = 30;
@@ -106,11 +107,12 @@ type PersistedPlan = Omit<Plan, "provenance"> & {
   provenance?: Plan["provenance"];
 };
 type PersistedProjectContactAssignment = ProjectContactAssignment & { companyId?: string };
+type PersistedContact = Contact & { displayName?: string };
 
 type PersistedDatabase = Omit<AppDatabase, "assessmentRuns" | "contacts" | "companies" | "contactAffiliations" | "projectContactAssignments" | "projectRoleDefinitions" | "externalContactIdentities" | "contactImportBatches"> & {
   assessmentRuns?: ProjectAssessmentRun[];
   assessments?: Record<string, AssessmentAnswers>;
-  contacts?: AppDatabase["contacts"];
+  contacts?: PersistedContact[];
   companies?: AppDatabase["companies"];
   contactAffiliations?: AppDatabase["contactAffiliations"];
   projectContactAssignments?: PersistedProjectContactAssignment[];
@@ -132,6 +134,21 @@ function withoutAssignmentCompany(assignment: PersistedProjectContactAssignment)
   const canonicalAssignment = { ...assignment };
   Reflect.deleteProperty(canonicalAssignment, "companyId");
   return canonicalAssignment;
+}
+
+function migrateContactName(contact: PersistedContact): Contact {
+  const migratedContact = { ...contact };
+  const legacyDisplayName = migratedContact.displayName?.trim() ?? "";
+  Reflect.deleteProperty(migratedContact, "displayName");
+  if (!migratedContact.givenName?.trim() && !migratedContact.familyName?.trim() && legacyDisplayName) {
+    Object.assign(migratedContact, splitContactFullName(legacyDisplayName));
+  }
+  if (!migratedContact.prefix?.trim()) {
+    const name = splitContactGivenNamePrefix(migratedContact.givenName ?? "");
+    migratedContact.prefix = name.prefix;
+    migratedContact.givenName = name.givenName;
+  }
+  return migratedContact;
 }
 
 const LEGACY_BLOCK_METADATA_FIELDS = ["color", "code", "tags", "provenance", "contentRevision", "reviewedAt", "source"] as const;
@@ -575,7 +592,7 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
   const contactMigration = migrateLegacyProjectContacts(
     organization.id,
     projectsBeforeContactMigration,
-    source.contacts ?? [],
+    (source.contacts ?? []).map(migrateContactName),
     source.companies ?? [],
     canonicalProjectContacts.affiliations,
     canonicalProjectContacts.assignments,
@@ -675,10 +692,11 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
     externalContactIdentities: source.externalContactIdentities ?? [],
     contactImportBatches: (source.contactImportBatches ?? []).map((batch) => ({
       ...batch,
-      items: batch.items.map((item) => item.previousAssignment ? {
+      items: batch.items.map((item) => ({
         ...item,
-        previousAssignment: withoutAssignmentCompany(item.previousAssignment),
-      } : item),
+        previousContact: item.previousContact ? migrateContactName(item.previousContact as PersistedContact) : undefined,
+        previousAssignment: item.previousAssignment ? withoutAssignmentCompany(item.previousAssignment) : undefined,
+      })),
     })),
     assessmentRuns,
     blocks,

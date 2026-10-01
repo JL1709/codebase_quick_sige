@@ -22,7 +22,7 @@ export interface CreateProjectContactSelection {
   roles: Array<{ role: ProjectContactAssignment["roles"][number]["role"]; roleDefinitionId?: string; customLabel?: string }>;
 }
 export interface CreateProjectRoleDefinitionInput { id: string; name: string }
-export type ContactMergeResolution = Partial<Pick<Contact, "prefix" | "givenName" | "familyName" | "suffix" | "displayName" | "notes">>;
+export type ContactMergeResolution = Partial<Pick<Contact, "prefix" | "givenName" | "familyName" | "suffix" | "notes">>;
 export type CompanyMergeResolution = Partial<Pick<Company, "website" | "domain" | "email" | "phone" | "address" | "notes">>;
 const ASSESSMENT_DEFINITION_VERSION = 1;
 
@@ -721,10 +721,11 @@ export function AppProvider({ children, repository: providedRepository }: { chil
           else externalContactIdentities = externalContactIdentities.filter((candidate) => candidate.id !== identityId);
         }
 
-        if (item.previousAffiliation) {
-          const affiliation = contactAffiliations.find((candidate) => candidate.id === item.previousAffiliation!.id);
+        const previousAffiliations = item.previousAffiliations ?? (item.previousAffiliation ? [item.previousAffiliation] : []);
+        for (const previousAffiliation of previousAffiliations) {
+          const affiliation = contactAffiliations.find((candidate) => candidate.id === previousAffiliation.id);
           if (!affiliation || changedAfterImport(affiliation.updatedAt)) result.conflicts += 1;
-          else contactAffiliations = contactAffiliations.map((candidate) => candidate.id === affiliation.id ? item.previousAffiliation! : candidate);
+          else contactAffiliations = contactAffiliations.map((candidate) => candidate.id === affiliation.id ? previousAffiliation : candidate);
         }
         if (item.previousAssignment) {
           const assignment = projectContactAssignments.find((candidate) => candidate.id === item.previousAssignment!.id);

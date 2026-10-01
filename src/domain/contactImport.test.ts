@@ -18,6 +18,7 @@ import {
   sanitizeContactImportLabel,
 } from "./contactImport";
 import { commitContactImport } from "./contactImportCommit";
+import { contactDisplayName } from "./contacts";
 
 function xlsxFixture(formulaOnly = false): ArrayBuffer {
   const files = {
@@ -68,11 +69,15 @@ describe("contact import", () => {
     const existing = database.contacts[0];
     const candidate = {
       sourceKey: "candidate", prefix: existing.prefix, givenName: existing.givenName, familyName: existing.familyName,
-      suffix: existing.suffix, displayName: existing.displayName, companyName: "", jobTitle: "", department: "",
+      suffix: existing.suffix, fullName: contactDisplayName(existing), companyName: "", jobTitle: "", department: "",
       emails: [], phones: [], addresses: [], notes: "", tags: [], warnings: [],
     };
 
     expect(matchContactImportCandidate(candidate, database.contacts)).toBeUndefined();
+    expect(matchContactImportCandidate({
+      ...candidate,
+      phones: [{ value: existing.phones[0].value, type: "work", primary: true }],
+    }, database.contacts)).toBeUndefined();
     expect(matchContactImportCandidate({
       ...candidate,
       emails: [{ value: existing.emails[0].value.toLocaleUpperCase(), type: "work", primary: true }],
@@ -122,7 +127,7 @@ describe("contact import", () => {
       "ADR;TYPE=work:;;Main Street 1;Berlin;;10115;Germany", "CATEGORIES:Planning,Safety", "END:VCARD",
     ].join("\r\n"));
 
-    expect(candidate).toMatchObject({ displayName: "Ada Lovelace", familyName: "Lovelace", givenName: "Ada", companyName: "Analytical Engines", jobTitle: "Engineer" });
+    expect(candidate).toMatchObject({ fullName: "Ada Lovelace", familyName: "Lovelace", givenName: "Ada", companyName: "Analytical Engines", jobTitle: "Engineer" });
     expect(candidate.phones[0].type).toBe("mobile");
     expect(candidate.addresses[0]).toMatchObject({ street: "Main Street 1", city: "Berlin", postalCode: "10115", country: "Germany" });
   });
@@ -135,8 +140,8 @@ describe("contact import", () => {
     ].join("\r\n"));
 
     expect(candidates).toHaveLength(2);
-    expect(candidates[0]).toMatchObject({ displayName: "Jürgen Müller", givenName: "Jürgen", familyName: "Müller", warnings: ["ignored:bday,photo"] });
-    expect(candidates[1]).toMatchObject({ displayName: "Lin Chen" });
+    expect(candidates[0]).toMatchObject({ fullName: "Jürgen Müller", givenName: "Jürgen", familyName: "Müller", warnings: ["ignored:bday,photo"] });
+    expect(candidates[1]).toMatchObject({ fullName: "Lin Chen" });
   });
 
   it("reports a malformed individual card without dropping valid cards in the same file", () => {
@@ -146,8 +151,8 @@ describe("contact import", () => {
     ].join("\r\n"));
 
     expect(candidates).toHaveLength(2);
-    expect(candidates[0]).toMatchObject({ displayName: "Valid Contact" });
-    expect(candidates[1]).toMatchObject({ displayName: "", warnings: ["malformed_card:missing_end"] });
+    expect(candidates[0]).toMatchObject({ fullName: "Valid Contact" });
+    expect(candidates[1]).toMatchObject({ fullName: "", warnings: ["malformed_card:missing_end"] });
   });
 
   it("parses every XLSX worksheet using cached values without losing text leading zeros", async () => {
@@ -213,7 +218,7 @@ describe("contact import", () => {
       decisions: [{
         action: "create",
         candidate: {
-          sourceKey: "outlook-1", prefix: "", givenName: "Grace", familyName: "Hopper", suffix: "", displayName: "Grace Hopper",
+          sourceKey: "outlook-1", prefix: "", givenName: "Grace", familyName: "Hopper", suffix: "", fullName: "Grace Hopper",
           companyName: "Navy", jobTitle: "Engineer", department: "Computing",
           emails: [{ value: "grace@example.com", type: "work", primary: true }], phones: [], addresses: [], notes: "", tags: [], warnings: [],
           externalIdentity: { provider: "microsoft", providerAccountId: "account-1", externalContactId: "outlook-1" },
@@ -222,7 +227,8 @@ describe("contact import", () => {
     }, (prefix) => `${prefix}-${sequence += 1}`, "2026-09-29T12:00:00.000Z");
 
     const createdItem = result.batch.items[0];
-    expect(result.database.contacts.find((value) => value.id === createdItem.contactId)?.displayName).toBe("Grace Hopper");
+    expect(result.database.contacts.find((value) => value.id === createdItem.contactId)).toMatchObject({ givenName: "Grace", familyName: "Hopper" });
+    expect(result.database.contacts.find((value) => value.id === createdItem.contactId)).not.toHaveProperty("displayName");
     expect(result.database.companies.find((value) => value.id === createdItem.companyId)?.name).toBe("Navy");
     expect(result.database.contactAffiliations.some((value) => value.contactId === createdItem.contactId)).toBe(true);
     expect(result.database.externalContactIdentities.some((value) => value.contactId === createdItem.contactId)).toBe(true);
@@ -244,7 +250,7 @@ describe("contact import", () => {
       decisions: [{
         action: "create",
         candidate: {
-          sourceKey: "roleless-contact", prefix: "", givenName: "Roleless", familyName: "Participant", suffix: "", displayName: "Roleless Participant",
+          sourceKey: "roleless-contact", prefix: "", givenName: "Roleless", familyName: "Participant", suffix: "", fullName: "Roleless Participant",
           companyName: "", jobTitle: "", department: "", emails: [], phones: [], addresses: [], notes: "", tags: [], warnings: [],
         },
       }],
@@ -254,13 +260,32 @@ describe("contact import", () => {
     expect(result.database.projectContactAssignments.find((assignment) => assignment.contactId === contactId)?.roles).toEqual([]);
   });
 
-  it("re-imports a provider contact through its stable external identity without duplicating it", () => {
+  it("converts a full-name-only import into structured contact name fields", () => {
+    const database = createSeedDatabase();
+    let sequence = 0;
+    const result = commitContactImport(database, {
+      source: "vcard",
+      sourceLabel: "name-only.vcf",
+      decisions: [{
+        action: "create",
+        candidate: {
+          sourceKey: "name-only", prefix: "", givenName: "", familyName: "", suffix: "", fullName: "Lin Chen",
+          companyName: "", jobTitle: "", department: "", emails: [], phones: [], addresses: [], notes: "", tags: [], warnings: [],
+        },
+      }],
+    }, (prefix) => `${prefix}-${sequence += 1}`, "2026-09-30T12:00:00.000Z");
+
+    expect(result.database.contacts[0]).toMatchObject({ givenName: "Lin", familyName: "Chen" });
+    expect(result.database.contacts[0]).not.toHaveProperty("displayName");
+  });
+
+  it("does not treat a provider identity as a duplicate when its email does not match", () => {
     const database = createSeedDatabase();
     let sequence = 0;
     const id = (prefix: string) => `${prefix}-${sequence += 1}`;
     const initialCandidate = {
-      sourceKey: "people/stable", prefix: "", givenName: "Ada", familyName: "Lovelace", suffix: "", displayName: "Ada Lovelace",
-      companyName: "", jobTitle: "", department: "", emails: [], phones: [], addresses: [], notes: "Initial", tags: [], warnings: [],
+      sourceKey: "people/stable", prefix: "", givenName: "Ada", familyName: "Lovelace", suffix: "", fullName: "Ada Lovelace",
+      companyName: "", jobTitle: "", department: "", emails: [{ value: "initial@example.com", type: "work" as const, primary: true }], phones: [], addresses: [], notes: "Initial", tags: [], warnings: [],
       externalIdentity: { provider: "google" as const, providerAccountId: "account", externalContactId: "people/stable", sourceRevision: "etag-1" },
     };
     const first = commitContactImport(database, {
@@ -269,21 +294,9 @@ describe("contact import", () => {
     const matched = matchContactImportCandidate({
       ...initialCandidate, emails: [{ value: "changed@example.com", type: "work" as const, primary: true }],
       notes: "Updated", externalIdentity: { ...initialCandidate.externalIdentity, sourceRevision: "etag-2" },
-    }, first.database.contacts, first.database.externalContactIdentities);
-    const second = commitContactImport(first.database, {
-      source: "google", sourceLabel: "Google Contacts", decisions: [{
-        action: "update", existingContactId: matched?.id, candidate: {
-          ...initialCandidate, emails: [{ value: "changed@example.com", type: "work", primary: true }],
-          notes: "Updated", externalIdentity: { ...initialCandidate.externalIdentity, sourceRevision: "etag-2" },
-        },
-      }],
-    }, id, "2026-09-29T11:00:00.000Z");
+    }, first.database.contacts);
 
-    expect(matched?.id).toBe(first.batch.items[0].contactId);
-    expect(second.database.contacts).toHaveLength(first.database.contacts.length);
-    expect(second.database.contacts.find((contact) => contact.id === matched?.id)?.notes).toBe("Initial");
-    expect(second.database.contacts.find((contact) => contact.id === matched?.id)?.emails[0].value).toBe("changed@example.com");
-    expect(second.database.externalContactIdentities.find((identity) => identity.contactId === matched?.id)?.sourceRevision).toBe("etag-2");
+    expect(matched).toBeUndefined();
   });
 
   it("overwrites only explicitly selected fields and records reviewed merge decisions", () => {
@@ -301,7 +314,7 @@ describe("contact import", () => {
         existingContactId: existing.id,
         overwriteFields: ["givenName"],
         candidate: {
-          sourceKey: "row-2", prefix: "", givenName: "Imported", familyName: "Replacement", suffix: "", displayName: "",
+          sourceKey: "row-2", prefix: "", givenName: "Imported", familyName: "Replacement", suffix: "", fullName: "",
           companyName: "", jobTitle: "", department: "", emails: [], phones: [], addresses: [], notes: "Imported note", tags: [], warnings: [],
         },
       }],
@@ -315,9 +328,41 @@ describe("contact import", () => {
     expect(result.batch.items[0].action).toBe("merged");
   });
 
+  it("updates non-empty imported fields while preserving values omitted by the import", () => {
+    const database = createSeedDatabase();
+    const existing = database.contacts[0];
+    existing.givenName = "Existing";
+    existing.familyName = "Person";
+    existing.notes = "Keep this note";
+    let sequence = 0;
+    const result = commitContactImport(database, {
+      source: "vcard",
+      sourceLabel: "updated.vcf",
+      decisions: [{
+        action: "update",
+        existingContactId: existing.id,
+        candidate: {
+          sourceKey: "card-1", prefix: "", givenName: "Imported", familyName: "", suffix: "", fullName: "Imported Person",
+          companyName: "New Company", jobTitle: "New role", department: "Planning",
+          emails: [{ value: existing.emails[0].value, type: "work", primary: true }],
+          phones: [{ value: "+49 30 123456", type: "work", primary: true }], addresses: [], notes: "", tags: [], warnings: [],
+        },
+      }],
+    }, (prefix) => `${prefix}-${sequence += 1}`, "2026-09-30T12:00:00.000Z");
+
+    const updated = result.database.contacts.find((contact) => contact.id === existing.id)!;
+    const primaryAffiliation = result.database.contactAffiliations.find((affiliation) => affiliation.contactId === existing.id && affiliation.primary)!;
+    expect(updated).toMatchObject({ givenName: "Imported", familyName: "Person", notes: "Keep this note" });
+    expect(updated).not.toHaveProperty("displayName");
+    expect(updated.phones.map((phone) => phone.value)).toEqual(["+49 30 123456"]);
+    expect(result.database.companies.find((company) => company.id === primaryAffiliation.companyId)?.name).toBe("New Company");
+    expect(primaryAffiliation).toMatchObject({ jobTitle: "New role", department: "Planning" });
+    expect(result.batch.items[0].previousAffiliations?.length).toBeGreaterThan(0);
+  });
+
   it("protects spreadsheet exports and round-trips supported CSV and vCard fields", () => {
     const candidate = {
-      sourceKey: "one", prefix: "", givenName: "Ada", familyName: "Lovelace", suffix: "", displayName: "=cmd", companyName: "Analytical Engines", jobTitle: "Engineer", department: "",
+      sourceKey: "one", prefix: "", givenName: "=cmd", familyName: "Lovelace", suffix: "", fullName: "", companyName: "Analytical Engines", jobTitle: "Engineer", department: "",
       emails: [{ value: "ada@example.com", type: "work" as const, primary: true }, { value: "ada@history.test", type: "other" as const, primary: false }],
       phones: [{ value: "+44 20 1234", type: "work" as const, primary: true }], addresses: [], notes: "Notes", tags: ["Planning"], warnings: [],
     };
@@ -328,6 +373,6 @@ describe("contact import", () => {
     expect(csvRoundTrip.emails.map((email) => email.value)).toEqual(["ada@example.com", "ada@history.test"]);
     const vCard = exportCandidatesVCard([candidate]);
     expect(vCard).toMatch(/^BEGIN:VCARD\r\nVERSION:4.0[\s\S]*END:VCARD$/);
-    expect(parseVCardContacts(vCard)[0]).toMatchObject({ givenName: "Ada", familyName: "Lovelace", companyName: "Analytical Engines", jobTitle: "Engineer", notes: "Notes", tags: ["Planning"] });
+    expect(parseVCardContacts(vCard)[0]).toMatchObject({ givenName: "=cmd", familyName: "Lovelace", companyName: "Analytical Engines", jobTitle: "Engineer", notes: "Notes", tags: ["Planning"] });
   });
 });

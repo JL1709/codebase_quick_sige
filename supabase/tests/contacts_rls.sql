@@ -16,6 +16,24 @@ begin
     select 1
     from information_schema.columns
     where table_schema = 'public'
+      and table_name = 'contacts'
+      and column_name in ('name', 'display_name')
+  ) then
+    raise exception 'Legacy contact name columns were not removed';
+  end if;
+  if not exists (
+    select 1
+    from public.contacts
+    where id = '40000000-0000-0000-0000-000000000001'
+      and given_name = 'Legacy'
+      and family_name = 'Person'
+  ) then
+    raise exception 'Legacy contact name was not backfilled into structured fields';
+  end if;
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
       and table_name = 'project_contact_assignments'
       and column_name = 'company_id'
   ) then

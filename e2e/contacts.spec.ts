@@ -9,10 +9,8 @@ async function importCsvContacts(page: import("@playwright/test").Page, csv: str
     buffer: Buffer.from(csv),
   });
   await page.getByRole("button", { name: "Continue" }).click();
-  await page.getByRole("button", { name: "Continue" }).click();
   await page.getByRole("button", { name: /Import \d+ contacts/ }).click();
-  await expect(page.getByRole("heading", { name: "Import complete" })).toBeVisible();
-  await page.locator(".contact-import-modal .modal-footer").getByRole("button", { name: "Close" }).click();
+  await expect(page.getByRole("dialog", { name: "Import contacts" })).toHaveCount(0);
 }
 
 test.beforeEach(async ({ page }) => {
@@ -29,6 +27,7 @@ test("creates, imports, exports, and assigns canonical contacts", async ({ page 
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations.filter((violation) => violation.impact === "critical" || violation.impact === "serious")).toEqual([]);
   await page.getByRole("button", { name: "New contact" }).click();
+  await expect(page.getByLabel("Display name")).toHaveCount(0);
   await page.getByLabel("First name").fill("Grace");
   await page.getByLabel("Last name").fill("Hopper");
   await page.getByRole("textbox", { name: "Email addresses", exact: true }).fill("grace@example.com");
@@ -50,13 +49,11 @@ test("creates, imports, exports, and assigns canonical contacts", async ({ page 
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByText("Katherine Johnson", { exact: true })).toBeVisible();
   const importModal = page.getByRole("dialog", { name: "Import contacts" });
-  await importModal.getByRole("combobox", { name: "Project", exact: true }).selectOption({ label: "Logistikzentrum West" });
-  await importModal.getByRole("group", { name: "Project roles" }).getByLabel("Architect").check();
-  await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page.getByRole("heading", { name: "Confirm import" })).toBeVisible();
-  await page.getByRole("button", { name: "Import 1 contacts" }).click();
-  await expect(page.getByRole("heading", { name: "Import complete" })).toBeVisible();
-  await page.locator(".contact-import-modal .modal-footer").getByRole("button", { name: "Close" }).click();
+  await expect(importModal.getByLabel("Project", { exact: true })).toHaveCount(0);
+  await expect(importModal.getByRole("group", { name: "Project roles" })).toHaveCount(0);
+  await expect(importModal.getByText("Apply to all")).toHaveCount(0);
+  await importModal.getByRole("button", { name: "Import contact", exact: true }).click();
+  await expect(importModal).toHaveCount(0);
   await expect(page.getByText("Katherine Johnson", { exact: true }).first()).toBeVisible();
 
   const graceRow = page.locator(".contacts-table-row").filter({ hasText: "Grace Hopper" });
@@ -77,11 +74,20 @@ test("creates, imports, exports, and assigns canonical contacts", async ({ page 
 
   await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Projects" }).click();
   await page.getByRole("article").filter({ hasText: "Logistikzentrum West" }).getByRole("link", { name: "Open" }).click();
+  await page.getByRole("button", { name: "Add contact" }).click();
+  let assignmentDialog = page.getByRole("dialog", { name: "Add contact" });
+  await assignmentDialog.getByRole("combobox", { name: "Add person" }).fill("Katherine Johnson");
+  await assignmentDialog.getByRole("option", { name: /Katherine Johnson/ }).click();
+  await assignmentDialog.getByRole("button", { name: "Manage roles" }).click();
+  await assignmentDialog.getByRole("checkbox", { name: "Architect", exact: true }).check();
+  await assignmentDialog.getByRole("button", { name: "Done" }).click();
+  await assignmentDialog.getByRole("button", { name: "Add", exact: true }).click();
   const importedAssignment = page.locator(".project-contact-list article").filter({ hasText: "Katherine Johnson" });
   await expect(importedAssignment).not.toContainText("Contractor");
   await expect(importedAssignment).toContainText("Architect");
+
   await page.getByRole("button", { name: "Add contact" }).click();
-  const assignmentDialog = page.getByRole("dialog", { name: "Add contact" });
+  assignmentDialog = page.getByRole("dialog", { name: "Add contact" });
   await assignmentDialog.getByRole("combobox", { name: "Add person" }).fill("Grace Hopper");
   await assignmentDialog.getByRole("option", { name: /Grace Hopper/ }).click();
   await expect(assignmentDialog.locator(".project-contact-picker-selection")).toContainText("Grace Hopper");
@@ -92,6 +98,51 @@ test("creates, imports, exports, and assigns canonical contacts", async ({ page 
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await expect(page.locator(".project-contact-list").getByText("Grace Hopper", { exact: true })).toBeVisible();
   await expect(page.locator(".project-contact-list article").filter({ hasText: "Grace Hopper" }).getByText("Architect", { exact: true })).toBeVisible();
+});
+
+test("asks only email duplicates how to resolve the import and merges fields inline", async ({ page }) => {
+  await page.getByRole("button", { name: "Import", exact: true }).click();
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "anna.vcf",
+    mimeType: "text/vcard",
+    buffer: Buffer.from([
+      "BEGIN:VCARD",
+      "VERSION:4.0",
+      "FN:Anneliese Richter",
+      "N:Richter;Anneliese;;;",
+      "EMAIL;TYPE=work;PREF=1:ANNA.RICHTER@example.test",
+      "TEL;TYPE=work:+49 30 555 0199",
+      "END:VCARD",
+    ].join("\r\n")),
+  });
+
+  const importModal = page.getByRole("dialog", { name: "Import contacts" });
+  await expect(importModal.getByText("A contact with the same email address already exists.")).toBeVisible();
+  await expect(importModal.getByRole("button", { name: "Import contact", exact: true })).toBeDisabled();
+  await importModal.getByRole("button", { name: "Merge", exact: true }).click();
+  await expect(importModal.getByRole("group", { name: "Last name" })).toHaveCount(0);
+  await expect(importModal.getByRole("group", { name: "Email" })).toHaveCount(0);
+  await importModal.getByRole("group", { name: "First name" }).getByRole("radio", { name: /Imported Anneliese/ }).check();
+  await importModal.getByRole("button", { name: "Import contact", exact: true }).click();
+
+  await expect(importModal).toHaveCount(0);
+  await expect(page.getByText("Dr. Anneliese Richter", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Confirm import" })).toHaveCount(0);
+});
+
+test("derives the visible name from title, first name, last name, and suffix", async ({ page }) => {
+  const row = page.locator(".contacts-table-row").filter({ hasText: "Dr. Anna Richter" });
+  await row.locator(".contact-row-open").click();
+  await page.locator(".contact-preview").getByRole("button", { name: "Edit", exact: true }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Edit contact" });
+  await expect(dialog.getByLabel("Display name")).toHaveCount(0);
+  await dialog.getByLabel("Last name").fill("Schmidt");
+  await dialog.getByLabel("Suffix").fill("PhD");
+  await dialog.getByRole("button", { name: "Save" }).click();
+
+  await expect(page.getByText("Dr. Anna Schmidt PhD", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Dr. Anna Richter", { exact: true })).toHaveCount(0);
 });
 
 test("keeps Contacts and project assignments read-only for viewers", async ({ page }) => {
@@ -337,7 +388,6 @@ test("bounds the Contacts index to 100 rendered rows with a 10,000-contact works
       givenName: "Load",
       familyName: `Person ${String(index).padStart(5, "0")}`,
       suffix: "",
-      displayName: "",
       emails: [],
       phones: [],
       addresses: [],
@@ -381,7 +431,9 @@ test("keeps long German contact content usable across supported viewport classes
   await page.evaluate(() => {
     const storageKey = "quicksige.database.v3";
     const database = JSON.parse(window.localStorage.getItem(storageKey) ?? "null");
-    database.contacts[0].displayName = "Dr. Maximilian Alexander von Beispielhausen-Schöneberg";
+    database.contacts[0].prefix = "Dr.";
+    database.contacts[0].givenName = "Maximilian Alexander";
+    database.contacts[0].familyName = "von Beispielhausen-Schöneberg";
     database.contacts[0].tags = ["Brandschutzkoordination und Ausführungsplanung"];
     database.companies[0].name = "Planungsgesellschaft für nachhaltige Infrastruktur und Gebäudetechnik mbH";
     window.localStorage.setItem(storageKey, JSON.stringify(database));

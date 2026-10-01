@@ -47,13 +47,30 @@ function ContactImportHarness() {
       decisions: [{
         action: "create",
         candidate: {
-          sourceKey: "provider-contact-1", prefix: "", givenName: "Grace", familyName: "Hopper", suffix: "", displayName: "Grace Hopper",
+          sourceKey: "provider-contact-1", prefix: "", givenName: "Grace", familyName: "Hopper", suffix: "", fullName: "Grace Hopper",
           companyName: "Navy", jobTitle: "Engineer", department: "Computing",
           emails: [{ value: "grace@example.com", type: "work", primary: true }], phones: [], addresses: [], notes: "", tags: ["provider-fixture"], warnings: [],
           externalIdentity: { provider: "microsoft", providerAccountId: "test-account", externalContactId: "provider-contact-1" },
         },
       }],
     })}>Import</button>
+    <button type="button" disabled={!database.contacts[0]?.emails[0]} onClick={() => {
+      const existing = database.contacts[0];
+      if (!existing?.emails[0]) return;
+      commitContactImport({
+        source: "vcard",
+        sourceLabel: "updated.vcf",
+        decisions: [{
+          action: "update",
+          existingContactId: existing.id,
+          candidate: {
+            sourceKey: "updated-contact", prefix: "", givenName: "Updated", familyName: "Contact", suffix: "", fullName: "Updated Contact",
+            companyName: "Replacement Company", jobTitle: "Replacement role", department: "Planning",
+            emails: [{ value: existing.emails[0].value, type: "work", primary: true }], phones: [], addresses: [], notes: "", tags: [], warnings: [],
+          },
+        }],
+      });
+    }}>Update existing import</button>
     <button type="button" disabled={!importedContact} onClick={() => importedContact && saveContact({ ...importedContact, notes: "Edited after import" } as Contact)}>Edit imported</button>
     <button type="button" disabled={!latestBatch} onClick={() => latestBatch && undoContactImportBatch(latestBatch.id)}>Undo import</button>
     <button type="button" disabled={!survivingCompany || !mergedCompany} onClick={() => survivingCompany && mergedCompany && mergeCompanies(survivingCompany.id, mergedCompany.id)}>Merge companies</button>
@@ -71,11 +88,11 @@ function ContactImportHarness() {
       const assignment = database.projectContactAssignments.find((candidate) => candidate.roles.length > 0);
       if (assignment) saveProjectContactAssignment({ ...assignment, roles: [] });
     }}>Clear project roles</button>
-    <button type="button" disabled={!assignedContact} onClick={() => assignedContact && saveContact({ ...assignedContact, displayName: "Updated project contact" })}>Edit project contact</button>
+    <button type="button" disabled={!assignedContact} onClick={() => assignedContact && saveContact({ ...assignedContact, givenName: "Updated project", familyName: "contact" })}>Edit project contact</button>
     <button type="button" onClick={() => assignContactsToProject(database.contacts.slice(0, 2).map((contact) => contact.id), database.projects[0].id, "planner")}>Bulk assign</button>
     <button type="button" disabled={!deletableContact} onClick={() => deletableContact && deleteContact(deletableContact.id)}>Delete contact</button>
     <button type="button" disabled={!deletableCompany} onClick={() => deletableCompany && deleteCompany(deletableCompany.id)}>Delete company</button>
-    <button type="button" disabled={!mergeSurvivor || !mergeSource} onClick={() => mergeSurvivor && mergeSource && mergeContacts(mergeSurvivor.id, mergeSource.id, { displayName: mergeSource.displayName, notes: mergeSurvivor.notes })}>Merge contacts</button>
+    <button type="button" disabled={!mergeSurvivor || !mergeSource} onClick={() => mergeSurvivor && mergeSource && mergeContacts(mergeSurvivor.id, mergeSource.id, { givenName: mergeSource.givenName, familyName: mergeSource.familyName, notes: mergeSurvivor.notes })}>Merge contacts</button>
     <output data-testid="contact-present">{String(Boolean(importedContact))}</output>
     <output data-testid="batch-status">{latestBatch?.status ?? "none"}</output>
   </>;
@@ -119,6 +136,25 @@ describe("Contacts application use cases", () => {
     expect(screen.getByTestId("contact-present")).toHaveTextContent("true");
     expect(screen.getByTestId("batch-status")).toHaveTextContent("partially_undone");
     expect(memory.current().contacts.find((contact) => contact.tags.includes("provider-fixture"))?.notes).toBe("Edited after import");
+  });
+
+  it("undoes an imported company change and restores the original primary affiliation", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-29T12:00:00.000Z"));
+    const database = createSeedDatabase();
+    const contactId = database.contacts[0].id;
+    const originalPrimaryAffiliation = structuredClone(database.contactAffiliations.find((affiliation) => affiliation.contactId === contactId && affiliation.primary));
+    const memory = renderHarness(database);
+
+    fireEvent.click(screen.getByRole("button", { name: "Update existing import" }));
+    let primaryAffiliation = memory.current().contactAffiliations.find((affiliation) => affiliation.contactId === contactId && affiliation.primary);
+    expect(memory.current().companies.find((company) => company.id === primaryAffiliation?.companyId)?.name).toBe("Replacement Company");
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo import" }));
+
+    primaryAffiliation = memory.current().contactAffiliations.find((affiliation) => affiliation.contactId === contactId && affiliation.primary);
+    expect(primaryAffiliation).toEqual(originalPrimaryAffiliation);
+    expect(memory.current().companies.some((company) => company.name === "Replacement Company")).toBe(false);
   });
 
   it("keeps viewers read-only at the use-case boundary", () => {
@@ -241,7 +277,7 @@ describe("Contacts application use cases", () => {
   it("hard-deletes only archived records without protected references", () => {
     const database = createSeedDatabase();
     const now = "2026-09-29T12:00:00.000Z";
-    const contact = { ...structuredClone(database.contacts[0]), id: "contact-delete-fixture", displayName: "Delete Fixture", tags: ["delete-fixture"], lifecycle: "archived" as const, createdAt: now, updatedAt: now };
+    const contact = { ...structuredClone(database.contacts[0]), id: "contact-delete-fixture", givenName: "Delete", familyName: "Fixture", tags: ["delete-fixture"], lifecycle: "archived" as const, createdAt: now, updatedAt: now };
     const company = { ...structuredClone(database.companies[0]), id: "company-delete-fixture", name: "Delete Fixture GmbH", tags: ["delete-fixture"], lifecycle: "archived" as const, createdAt: now, updatedAt: now };
     database.contacts.push(contact);
     database.companies.push(company);
@@ -259,14 +295,14 @@ describe("Contacts application use cases", () => {
     const database = createSeedDatabase();
     const now = "2026-09-29T12:00:00.000Z";
     database.contacts.push(
-      { ...structuredClone(database.contacts[0]), id: "contact-merge-survivor", displayName: "Kept Name", notes: "Kept notes", tags: ["contact-merge-survivor"], emails: [], phones: [], addresses: [], createdAt: now, updatedAt: now },
-      { ...structuredClone(database.contacts[0]), id: "contact-merge-source", displayName: "Chosen Name", notes: "Source notes", tags: ["contact-merge-source"], emails: [], phones: [], addresses: [], createdAt: now, updatedAt: now },
+      { ...structuredClone(database.contacts[0]), id: "contact-merge-survivor", givenName: "Kept", familyName: "Name", notes: "Kept notes", tags: ["contact-merge-survivor"], emails: [], phones: [], addresses: [], createdAt: now, updatedAt: now },
+      { ...structuredClone(database.contacts[0]), id: "contact-merge-source", givenName: "Chosen", familyName: "Name", notes: "Source notes", tags: ["contact-merge-source"], emails: [], phones: [], addresses: [], createdAt: now, updatedAt: now },
     );
     const memory = renderHarness(database);
 
     fireEvent.click(screen.getByRole("button", { name: "Merge contacts" }));
 
-    expect(memory.current().contacts.find((contact) => contact.id === "contact-merge-survivor")).toMatchObject({ displayName: "Chosen Name", notes: "Kept notes" });
+    expect(memory.current().contacts.find((contact) => contact.id === "contact-merge-survivor")).toMatchObject({ givenName: "Chosen", familyName: "Name", notes: "Kept notes" });
     expect(memory.current().contacts.find((contact) => contact.id === "contact-merge-source")).toMatchObject({ lifecycle: "archived", mergedIntoId: "contact-merge-survivor" });
   });
 });

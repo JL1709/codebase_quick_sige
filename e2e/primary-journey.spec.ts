@@ -543,7 +543,7 @@ test("Word documents action creates and downloads the A4 plan without leaving th
   await page.getByRole("button", { name: "Word documents" }).click();
   const download = await downloadPromise;
 
-  expect(download.suggestedFilename()).toMatch(/^qs-2026-014-a4-plan-\d{4}-\d{2}-\d{2}\.docx$/);
+  expect(download.suggestedFilename()).toMatch(/^logistikzentrum-west-a4-plan-\d{4}-\d{2}-\d{2}\.docx$/);
   await expect(page).toHaveURL(/\/projects\/project-logistics-center\/plan$/);
   await expect(page.locator(".editor-word-message")).toContainText("was created");
   await expect.poll(() => page.evaluate(() => {

@@ -11,13 +11,14 @@ import {
   projectContactRoleFromKey,
   projectRoleDefinitionsForProject,
   resolveProjectParticipants,
+  splitContactFullName,
 } from "./contacts";
 import type { Contact, Participant } from "./types";
 import { instantiateOverviewSection } from "./overviewTemplates";
 
 function contact(id: string, email: string, phone = ""): Contact {
   return {
-    id, organizationId: "organization-demo", prefix: "", givenName: "Ada", familyName: "Lovelace", suffix: "", displayName: "",
+    id, organizationId: "organization-demo", prefix: "", givenName: "Ada", familyName: "Lovelace", suffix: "",
     emails: email ? [{ id: `${id}-email`, type: "work", value: email, normalizedValue: normalizeEmail(email), primary: true }] : [],
     phones: phone ? [{ id: `${id}-phone`, type: "mobile", value: phone, normalizedValue: normalizePhone(phone), primary: true }] : [],
     addresses: [], notes: "", tags: [], lifecycle: "active", source: "manual", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
@@ -25,6 +26,11 @@ function contact(id: string, email: string, phone = ""): Contact {
 }
 
 describe("contacts", () => {
+  it("builds the visible contact name only from its structured parts", () => {
+    expect(contactDisplayName({ prefix: "Dr.", givenName: "Ada", familyName: "Lovelace", suffix: "PhD" })).toBe("Dr. Ada Lovelace PhD");
+    expect(splitContactFullName("Dr. Ada Lovelace PhD")).toEqual({ prefix: "Dr.", givenName: "Ada", familyName: "Lovelace", suffix: "PhD" });
+  });
+
   it("normalizes duplicate identities conservatively", () => {
     expect(normalizeEmail(" Ada@Example.COM ")).toBe("ada@example.com");
     expect(normalizePhone("+49 (170) 123-456")).toBe("+49170123456");

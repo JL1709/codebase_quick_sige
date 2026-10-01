@@ -42,7 +42,7 @@ describe("contact provider adapters", () => {
       personalNotes: "Project contact", categories: ["Safety"],
     }, "account-1");
 
-    expect(candidate).toMatchObject({ displayName: "Ada Lovelace", companyName: "Analytical Engines", jobTitle: "Engineer" });
+    expect(candidate).toMatchObject({ fullName: "Ada Lovelace", companyName: "Analytical Engines", jobTitle: "Engineer" });
     expect(candidate.phones.map((phone) => phone.type)).toEqual(["work", "mobile"]);
     expect(candidate.externalIdentity).toEqual({ provider: "microsoft", providerAccountId: "account-1", externalContactId: "graph-contact-1", sourceRevision: "revision-2" });
     expect(JSON.stringify(candidate)).not.toContain("access_token");
@@ -77,7 +77,7 @@ describe("contact provider adapters", () => {
       biographies: [{ value: "Project contact" }], memberships: [{ contactGroupMembership: { contactGroupResourceName: "contactGroups/safety" } }],
     }, "google-account-1", new Map([["contactGroups/safety", "Safety team"]]));
 
-    expect(candidate).toMatchObject({ displayName: "Lin Chen", companyName: "Example Construction", jobTitle: "Architect", tags: ["Safety team"], collectionIds: ["google:all", "contactGroups/safety"] });
+    expect(candidate).toMatchObject({ fullName: "Lin Chen", companyName: "Example Construction", jobTitle: "Architect", tags: ["Safety team"], collectionIds: ["google:all", "contactGroups/safety"] });
     expect(candidate.externalIdentity).toEqual({ provider: "google", providerAccountId: "google-account-1", externalContactId: "people/c123", sourceRevision: "etag-1" });
   });
 

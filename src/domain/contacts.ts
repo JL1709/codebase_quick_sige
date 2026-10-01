@@ -73,9 +73,32 @@ export function normalizeDomain(value: string): string {
   }
 }
 
-export function contactDisplayName(contact: Pick<Contact, "displayName" | "prefix" | "givenName" | "familyName" | "suffix">): string {
-  return contact.displayName.trim()
-    || [contact.prefix, contact.givenName, contact.familyName, contact.suffix].map((part) => part.trim()).filter(Boolean).join(" ");
+export function contactDisplayName(contact: Pick<Contact, "prefix" | "givenName" | "familyName" | "suffix">): string {
+  return [contact.prefix, contact.givenName, contact.familyName, contact.suffix]
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join(" ");
+}
+
+const CONTACT_PREFIXES = new Set(["dr.", "prof.", "professor", "mr.", "mrs.", "ms.", "herr", "frau", "dipl.-ing."]);
+const CONTACT_SUFFIXES = new Set(["jr.", "sr.", "ii", "iii", "iv", "phd", "ph.d.", "md", "m.d."]);
+
+export function splitContactGivenNamePrefix(givenName: string): Pick<Contact, "prefix" | "givenName"> {
+  const parts = givenName.trim().split(/\s+/).filter(Boolean);
+  const prefixParts: string[] = [];
+  while (parts.length > 0 && CONTACT_PREFIXES.has(parts[0].toLocaleLowerCase())) prefixParts.push(parts.shift()!);
+  return { prefix: prefixParts.join(" "), givenName: parts.join(" ") };
+}
+
+export function splitContactFullName(fullName: string): Pick<Contact, "prefix" | "givenName" | "familyName" | "suffix"> {
+  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  const prefixedGivenName = splitContactGivenNamePrefix(parts.join(" "));
+  const nameParts = prefixedGivenName.givenName.split(/\s+/).filter(Boolean);
+  const suffix = nameParts.length > 1 && CONTACT_SUFFIXES.has(nameParts.at(-1)?.toLocaleLowerCase() ?? "")
+    ? nameParts.pop() ?? ""
+    : "";
+  if (nameParts.length < 2) return { prefix: prefixedGivenName.prefix, givenName: nameParts[0] ?? "", familyName: "", suffix };
+  return { prefix: prefixedGivenName.prefix, givenName: nameParts.slice(0, -1).join(" "), familyName: nameParts.at(-1) ?? "", suffix };
 }
 
 export function primaryEmail(contact: Contact): ContactEmail | undefined {
@@ -368,15 +391,14 @@ export function migrateLegacyProjectContacts(
       let contact = contactByKey.get(key);
       if (!contact) {
         const now = project.updatedAt || project.createdAt;
-        const nameParts = participant.name.trim().split(/\s+/);
+        const name = splitContactFullName(participant.name);
         contact = {
           id: `contact-${safeIdentifier(key)}`,
           organizationId,
-          prefix: "",
-          givenName: nameParts.length > 1 ? nameParts.slice(0, -1).join(" ") : participant.name.trim(),
-          familyName: nameParts.length > 1 ? nameParts.at(-1) ?? "" : "",
-          suffix: "",
-          displayName: participant.name.trim(),
+          prefix: name.prefix,
+          givenName: name.givenName,
+          familyName: name.familyName,
+          suffix: name.suffix,
           emails: participant.email.trim() ? [{ id: `email-${safeIdentifier(key)}`, type: "work", value: participant.email.trim(), normalizedValue: normalizeEmail(participant.email), primary: true }] : [],
           phones: participant.phone.trim() ? [{ id: `phone-${safeIdentifier(key)}`, type: "work", value: participant.phone.trim(), normalizedValue: normalizePhone(participant.phone), primary: true }] : [],
           addresses: [],

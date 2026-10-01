@@ -18,7 +18,7 @@ import { copyTextToClipboard } from "../utils/clipboard";
 
 type ContactTab = "people" | "companies";
 type ContactColumn = "company" | "details" | "projects" | "source" | "updated";
-type ContactMergeField = "prefix" | "givenName" | "familyName" | "suffix" | "displayName" | "notes";
+type ContactMergeField = "prefix" | "givenName" | "familyName" | "suffix" | "notes";
 type CompanyMergeField = "website" | "domain" | "email" | "phone" | "address" | "notes";
 type ArchiveRequest = { kind: "contact" | "company"; ids: string[] };
 interface ContactWorkspacePreferences {
@@ -33,7 +33,7 @@ interface ContactWorkspacePreferences {
 const CONTACT_PAGE_SIZE = 100;
 const DEFAULT_CONTACT_COLUMNS: ContactColumn[] = ["company", "details", "projects"];
 const CONTACT_COLUMNS: ContactColumn[] = ["company", "details", "projects", "source", "updated"];
-const CONTACT_MERGE_FIELDS: ContactMergeField[] = ["prefix", "givenName", "familyName", "suffix", "displayName", "notes"];
+const CONTACT_MERGE_FIELDS: ContactMergeField[] = ["prefix", "givenName", "familyName", "suffix", "notes"];
 const COMPANY_MERGE_FIELDS: CompanyMergeField[] = ["website", "domain", "email", "phone", "address", "notes"];
 
 function projectAssignmentCountForCompany(database: AppDatabase, companyId: string): number {
@@ -71,7 +71,7 @@ function contactCandidate(contact: Contact, company?: Company, jobTitle = "", de
   return {
     sourceKey: contact.id,
     prefix: contact.prefix, givenName: contact.givenName, familyName: contact.familyName, suffix: contact.suffix,
-    displayName: contactDisplayName(contact), companyName: company?.name ?? "", jobTitle, department,
+    fullName: contactDisplayName(contact), companyName: company?.name ?? "", jobTitle, department,
     emails: contact.emails.map(({ value, type, primary }) => ({ value, type, primary })),
     phones: contact.phones.map(({ value, type, primary }) => ({ value, type, primary })),
     addresses: contact.addresses.map(({ type, street, postalCode, city, region, country, primary }) => ({ type, street, postalCode, city, region, country, primary })),

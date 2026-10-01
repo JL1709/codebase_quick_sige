@@ -99,11 +99,11 @@ The following are intentionally not implementation items in this iteration and t
 
 ### People, contact methods, and lifecycle
 
-- [x] Add an organization-owned `Contact` entity with stable ID, structured name, display name, notes, tags, lifecycle, audit timestamps, and organization ownership.
+- [x] Add an organization-owned `Contact` entity with stable ID, structured title/prefix, first name, last name, suffix, notes, tags, lifecycle, audit timestamps, and organization ownership; derive the visible name instead of storing a second editable name.
 - [x] Represent email addresses as typed contact methods with normalized value, display value, primary flag, and stable ID.
 - [x] Represent phone numbers as typed contact methods with normalized value, display value, primary flag, and stable ID.
 - [x] Represent postal addresses as typed structured values with primary flag and stable ID.
-- [x] Allow contacts with incomplete but useful business data while requiring a meaningful display identity before save.
+- [x] Allow contacts with incomplete but useful business data while requiring at least a first name or last name before save.
 - [x] Preserve multiple emails, phones, and addresses during standards-based imports instead of silently discarding secondary values.
 - [x] Normalize comparison values without destructively rewriting the user's preferred display formatting.
 - [x] Use archive/restore lifecycle behavior for normal removal; reserve hard deletion for records that are provably unreferenced and explicitly confirmed.
@@ -196,13 +196,13 @@ The following are intentionally not implementation items in this iteration and t
 
 - [x] Add People and Companies tabs under the single Contacts workspace.
 - [x] Make People the deliberate default view and preserve the selected tab in navigation history.
-- [x] Add debounced search across display name, company, job title, email, phone, tag, project name, and project role.
+- [x] Add debounced search across the derived structured name, company, job title, email, phone, tag, project name, and project role.
 - [x] Add filters for company, project, project role, tag, source/provider, lifecycle, and incomplete records where applicable.
 - [x] Add deterministic sorting for name, company, updated date, created date, and project count.
 - [x] Add configurable table columns with a sensible role-specific default set.
 - [x] Persist each user's tab, sort, filters, and visible-column preferences without mixing them into shared contact data.
 - [x] Add pagination or another tested bounded rendering strategy that remains responsive with at least 10,000 contacts.
-- [x] Display names, primary company, job title, primary email, primary phone, associated projects/roles, source, lifecycle, and updated date clearly.
+- [x] Display the derived structured name, primary company, job title, primary email, primary phone, associated projects/roles, source, lifecycle, and updated date clearly.
 - [x] Add row selection and focused bulk actions for add to project, export, archive, restore, and duplicate review.
 - [x] Add empty, no-results, loading, import-in-progress, and recoverable-error states.
 - [x] Provide an efficient mobile/card presentation without removing core actions or information.
@@ -461,7 +461,7 @@ The following are intentionally not implementation items in this iteration and t
 - [x] List accessible Outlook contact folders using Microsoft Graph and let the user choose one or more folders.
 - [x] Page through all selected contacts without silently truncating results.
 - [x] Request only the Graph fields mapped by QuickSiGe.
-- [x] Map structured names, display name, organizations, job title, email addresses, business/mobile/home phones as allowed by import policy, and business addresses.
+- [x] Map provider structured names and convert any provider-only full name into QuickSiGe's structured name, plus organizations, job title, email addresses, business/mobile/home phones as allowed by import policy, and business addresses.
 - [x] Ignore unrelated provider fields according to the data-minimization policy.
 - [x] Store the Graph contact ID, account identity, source revision/etag where available, and import timestamp as an external identity.
 - [x] Route imported Outlook contacts through the shared preview, mapping, validation, duplicate, and commit workflow.

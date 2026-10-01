@@ -6,7 +6,7 @@ describe("contacts privacy export", () => {
   it("exports a selected contact with related companies, assignments, and identities without unrelated records", () => {
     const database = createSeedDatabase();
     const selected = database.contacts[0];
-    database.contacts.push({ ...structuredClone(selected), id: "unrelated-contact", displayName: "Unrelated" });
+    database.contacts.push({ ...structuredClone(selected), id: "unrelated-contact", givenName: "Unrelated", familyName: "" });
     database.externalContactIdentities.push({
       id: "identity-export", organizationId: database.organization.id, contactId: selected.id,
       provider: "microsoft", providerAccountId: "account", externalContactId: "external", lastImportedAt: "2026-09-29T00:00:00.000Z",

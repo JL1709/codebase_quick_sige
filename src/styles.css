@@ -1140,7 +1140,7 @@ textarea.canvas-inline-editor { min-height: 34px; resize: none; }
 .contact-catalog-notice strong { font-size: 11px; }
 .contact-catalog-notice small { margin-top: 3px; color: var(--ink-muted); font-size: 9px; line-height: 1.45; }
 .contact-name-grid { grid-template-columns: 100px 1fr 1fr 100px; }
-.contact-name-grid .span-two { grid-column: 1 / -1; }
+.contact-name-error { grid-column: 1 / -1; }
 .contact-fieldset { min-width: 0; margin: 0; padding: 14px; border: 1px solid var(--line); border-radius: 11px; }
 .contact-fieldset legend { padding: 0 7px; color: var(--ink); font-size: 11px; font-weight: 800; }
 .role-checkbox-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; }
@@ -1183,33 +1183,33 @@ textarea.canvas-inline-editor { min-height: 34px; resize: none; }
 .mapping-list span { font-size: 10px; font-weight: 750; }
 .mapping-list select { min-width: 0; height: 34px; border: 1px solid var(--line-strong); border-radius: 7px; }
 .mapping-list small { overflow: hidden; color: var(--ink-muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-.import-summary { display: flex; gap: 6px; }
-.import-bulk-decisions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.import-bulk-decisions > span { margin-right: 4px; color: var(--ink-muted); font-size: 9px; font-weight: 750; }
 .import-review-list { display: grid; max-height: 430px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
-.import-review-list article { display: grid; grid-template-columns: minmax(170px, 1fr) 130px minmax(150px, .8fr); align-items: center; gap: 9px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.import-review-list article { padding: 13px 14px; border-bottom: 1px solid var(--line); }
 .import-review-list article:last-child { border-bottom: 0; }
-.import-review-list strong, .import-review-list small { display: block; }
-.import-review-list strong { font-size: 10px; }
-.import-review-list small { margin-top: 3px; color: var(--ink-muted); font-size: 8px; }
-.import-review-list select { min-width: 0; height: 34px; border: 1px solid var(--line-strong); border-radius: 7px; font-size: 9px; }
-.import-overwrite-fields { grid-column: 1 / -1; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: #f8faf9; }
-.import-overwrite-fields summary { color: var(--teal); font-size: 9px; font-weight: 800; cursor: pointer; }
-.import-overwrite-fields > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding-top: 8px; }
-.import-overwrite-fields label { min-width: 0; display: grid; grid-template-columns: auto minmax(70px, auto) minmax(0, 1fr); align-items: center; gap: 6px; font-size: 9px; }
-.import-overwrite-fields label small { overflow: hidden; color: var(--ink-muted); text-overflow: ellipsis; white-space: nowrap; }
+.import-review-identity { display: grid; gap: 3px; }
+.import-review-identity strong, .import-review-identity small { display: block; }
+.import-review-identity strong { font-size: 11px; }
+.import-review-identity small { margin-top: 3px; color: var(--ink-muted); font-size: 9px; line-height: 1.4; }
+.import-review-contact.has-duplicate { background: #fbfcfb; }
+.import-duplicate-review { display: grid; gap: 12px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.import-duplicate-review > p { margin: 0; color: var(--ink-soft); font-size: 10px; }
+.import-duplicate-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.import-duplicate-comparison > div { display: grid; gap: 3px; min-width: 0; padding: 11px; background: white; border: 1px solid var(--line); border-radius: 9px; }
+.import-duplicate-comparison small { color: var(--ink-muted); font-size: 8px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
+.import-duplicate-comparison strong { font-size: 10px; }
+.import-duplicate-comparison span { overflow-wrap: anywhere; color: var(--ink-soft); font-size: 9px; line-height: 1.4; }
+.import-resolution-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.import-resolution-actions button { min-height: 34px; padding: 0 12px; color: var(--ink); background: white; border: 1px solid var(--line-strong); border-radius: 8px; font-size: 9px; font-weight: 800; }
+.import-resolution-actions button:hover { border-color: var(--teal); }
+.import-resolution-actions button.is-selected { color: var(--teal); background: var(--mint); border-color: #a9cabe; }
+.import-merge-fields { display: grid; gap: 8px; }
+.import-merge-fields fieldset { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; min-width: 0; margin: 0; padding: 9px; background: white; border: 1px solid var(--line); border-radius: 9px; }
+.import-merge-fields legend { padding-inline: 5px; color: var(--ink-soft); font-size: 9px; font-weight: 800; }
+.import-merge-fields label { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: flex-start; gap: 7px; min-width: 0; padding: 8px; background: #f8faf9; border-radius: 7px; cursor: pointer; }
+.import-merge-fields label span, .import-merge-fields label strong, .import-merge-fields label small { display: block; min-width: 0; }
+.import-merge-fields label strong { color: var(--ink-muted); font-size: 8px; }
+.import-merge-fields label small { margin-top: 2px; overflow-wrap: anywhere; color: var(--ink); font-size: 9px; line-height: 1.35; }
 .import-warning { color: #8a5200 !important; font-weight: 700; }
-.import-result-step { padding: 54px 24px; text-align: center; }
-.import-confirm-step { display: grid; gap: 12px; }
-.import-confirm-step > h3, .import-confirm-step > p { margin: 0; }
-.import-confirm-step > p { color: var(--ink-soft); font-size: 11px; }
-.import-confirm-step dl { display: grid; gap: 7px; margin: 0; }
-.import-confirm-step dl > div { display: flex; justify-content: space-between; gap: 12px; padding: 10px 12px; background: var(--surface-soft); border-radius: 8px; }
-.import-confirm-step dt { color: var(--ink-soft); font-size: 10px; }
-.import-confirm-step dd { margin: 0; color: var(--ink); font-size: 10px; font-weight: 800; }
-.import-result-icon { width: 54px; height: 54px; display: grid; place-items: center; margin: 0 auto 14px; color: var(--teal); background: var(--lime-soft); border-radius: 15px; }
-.import-result-step h3 { margin-bottom: 7px; }
-.import-result-step p { margin: 0; color: var(--ink-soft); font-size: 11px; }
 .import-history-list { display: grid; gap: 8px; }
 .import-history-list > article { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 9px; padding: 11px; border: 1px solid var(--line); border-radius: 9px; }
 .import-history-list strong, .import-history-list small { display: block; }
@@ -1326,8 +1326,7 @@ textarea.canvas-inline-editor { min-height: 34px; resize: none; }
   .contact-method-row .primary-choice { grid-column: 2; }
   .provider-grid { grid-template-columns: 1fr; }
   .provider-collection-list { grid-template-columns: 1fr; }
-  .mapping-list > label, .import-review-list article { grid-template-columns: 1fr; }
-  .import-overwrite-fields > div { grid-template-columns: 1fr; }
+  .mapping-list > label, .import-duplicate-comparison, .import-merge-fields fieldset { grid-template-columns: 1fr; }
   .project-contact-list article { grid-template-columns: 38px minmax(0, 1fr) 36px; }
   .project-contact-list .project-role-picker { grid-column: 2 / 4; grid-row: 2; }
   .project-contact-list article > .row-actions { grid-column: 3; grid-row: 1; }

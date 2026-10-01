@@ -457,9 +457,24 @@ describe("local database migration", () => {
     const migrated = migrateDatabase(source);
 
     expect(migrated?.projects[0].participants).toEqual([]);
-    expect(migrated?.contacts).toEqual([expect.objectContaining({ displayName: "Ada Lovelace", source: "migration" })]);
+    expect(migrated?.contacts).toEqual([expect.objectContaining({ givenName: "Ada", familyName: "Lovelace", source: "migration" })]);
     expect(migrated?.companies).toEqual([expect.objectContaining({ name: "Safety GmbH" })]);
     expect(migrated?.projectContactAssignments).toEqual([expect.objectContaining({ projectId: project.id, roles: [expect.objectContaining({ role: "coordinator" })] })]);
+  });
+
+  it("migrates a legacy display name into the structured contact name and removes the duplicate field", () => {
+    const source = structuredClone(createSeedDatabase()) as unknown as Record<string, unknown>;
+    source.schemaVersion = 36;
+    const legacyContact = (source.contacts as Array<Record<string, unknown>>)[0];
+    legacyContact.givenName = "";
+    legacyContact.familyName = "";
+    legacyContact.displayName = "Ada Lovelace";
+
+    const migrated = migrateDatabase(source);
+    const contact = migrated?.contacts[0];
+
+    expect(contact).toMatchObject({ givenName: "Ada", familyName: "Lovelace" });
+    expect(contact).not.toHaveProperty("displayName");
   });
 
   it("creates reusable role definitions and a canonical project overview order", () => {
@@ -542,7 +557,7 @@ describe("local database migration", () => {
     repository.reset();
     const database = repository.load();
     const snapshot = repository.loadContacts();
-    snapshot.contacts[0] = { ...snapshot.contacts[0], displayName: "Repository replacement" };
+    snapshot.contacts[0] = { ...snapshot.contacts[0], givenName: "Repository", familyName: "replacement" };
     snapshot.auditEvents.push({
       id: "audit-contacts-repository", action: "contact.updated", actorName: database.user.name,
       createdAt: "2026-09-29T00:00:00.000Z", details: snapshot.contacts[0].id,
@@ -551,7 +566,7 @@ describe("local database migration", () => {
     repository.saveContacts(snapshot);
     const reloaded = repository.load();
 
-    expect(reloaded.contacts[0].displayName).toBe("Repository replacement");
+    expect(reloaded.contacts[0]).toMatchObject({ givenName: "Repository", familyName: "replacement" });
     expect(reloaded.auditEvents.at(-1)?.id).toBe("audit-contacts-repository");
     expect(reloaded.blocks).toEqual(database.blocks);
   });

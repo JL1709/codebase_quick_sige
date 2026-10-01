@@ -64,7 +64,9 @@ describe("revision snapshots", () => {
     const snapshot = buildRevisionSnapshot(database, project, plan);
     const capturedParticipant = snapshot.project.participants.find((participant) => participant.role === assignment.roles[0].role)!;
 
-    contact.displayName = "Changed live contact";
+    contact.prefix = "";
+    contact.givenName = "Changed live";
+    contact.familyName = "contact";
     contact.emails[0].value = "changed@example.com";
     const currentSnapshot = buildRevisionSnapshot(database, project, plan);
 

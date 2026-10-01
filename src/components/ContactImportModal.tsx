@@ -2,45 +2,102 @@ import { Cloud, FileSpreadsheet, FileUser, Upload } from "lucide-react";
 import { type DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   autoMapContactHeaders,
+  candidateDisplayName,
   candidatesFromDelimitedAsync,
   exportContactCsvTemplate,
   matchContactImportCandidate,
   parseDelimitedContactsAsync,
   readContactImportFile,
   sanitizeContactImportLabel,
+  structuredNameForCandidate,
   type ContactImportCandidate,
   type ContactImportField,
   type ContactTextEncoding,
   type DelimitedImportData,
 } from "../domain/contactImport";
 import {
-  candidateDisplayName,
   type ContactImportDecision,
   type ContactImportDecisionAction,
   type ContactImportOverwriteField,
 } from "../domain/contactImportCommit";
-import { contactDisplayName, projectContactRoleFromKey, projectRoleDefinitionForKey, STANDARD_PROJECT_ROLES } from "../domain/contacts";
-import type { Contact, ContactSource, ExternalContactIdentity } from "../domain/types";
+import { companyForContact, contactDisplayName, normalizeEmail, normalizePhone, primaryAffiliation } from "../domain/contacts";
+import type { AppDatabase, Contact, ContactSource } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
 import { importGoogleContacts, importMicrosoftContacts, type ContactProviderCollection } from "../integrations/contactProviders";
 import { useApp } from "../state/AppProvider";
-import { Badge, Button, Modal } from "./Ui";
+import { Button, Modal } from "./Ui";
 
 const FIELD_OPTIONS: ContactImportField[] = [
-  "ignore", "displayName", "givenName", "familyName", "prefix", "suffix", "companyName", "jobTitle", "department",
+  "ignore", "fullName", "givenName", "familyName", "prefix", "suffix", "companyName", "jobTitle", "department",
   "email", "phone", "street", "postalCode", "city", "region", "country", "notes", "tags",
 ];
 const SINGLETON_IMPORT_FIELDS = new Set<ContactImportField>(FIELD_OPTIONS.filter((field) => !["ignore", "email", "phone", "tags"].includes(field)));
-const OVERWRITABLE_IMPORT_FIELDS: ContactImportOverwriteField[] = ["prefix", "givenName", "familyName", "suffix", "displayName", "notes"];
+const MERGE_FIELDS: ContactImportOverwriteField[] = [
+  "prefix", "givenName", "familyName", "suffix", "companyName", "jobTitle", "department",
+  "emails", "phones", "addresses", "notes", "tags",
+];
 
-type ImportStep = "source" | "provider" | "mapping" | "review" | "confirm" | "result";
+type ImportStep = "source" | "provider" | "mapping" | "review";
+type ContactImportReviewAction = ContactImportDecisionAction | "resolve";
+interface ContactImportReviewDecision extends Omit<ContactImportDecision, "action"> {
+  action: ContactImportReviewAction;
+}
 
-function createDecisions(candidates: ContactImportCandidate[], contacts: Contact[], identities: ExternalContactIdentity[]): ContactImportDecision[] {
+function createDecisions(candidates: ContactImportCandidate[], contacts: Contact[]): ContactImportReviewDecision[] {
   return candidates.map((candidate) => {
-    const existing = matchContactImportCandidate(candidate, contacts, identities);
+    const existing = matchContactImportCandidate(candidate, contacts);
     const hasIdentity = Boolean(candidateDisplayName(candidate) || candidate.emails.length || candidate.phones.length);
-    return { candidate, action: !hasIdentity ? "skip" : existing ? "update" : "create", existingContactId: existing?.id };
+    return { candidate, action: !hasIdentity ? "skip" : existing ? "resolve" : "create", existingContactId: existing?.id };
   });
+}
+
+function joinedValues(values: Array<{ value: string }>): string {
+  return values.map((item) => item.value.trim()).filter(Boolean).join(" · ");
+}
+
+function addressValue(addresses: Array<{ street: string; postalCode: string; city: string; region: string; country: string }>): string {
+  return addresses.map((address) => [address.street, address.postalCode, address.city, address.region, address.country]
+    .map((part) => part.trim()).filter(Boolean).join(", ")).filter(Boolean).join(" · ");
+}
+
+function importedFieldValue(candidate: ContactImportCandidate, field: ContactImportOverwriteField): string {
+  if (field === "emails") return joinedValues(candidate.emails);
+  if (field === "phones") return joinedValues(candidate.phones);
+  if (field === "addresses") return addressValue(candidate.addresses);
+  if (field === "tags") return candidate.tags.join(" · ");
+  if (field === "prefix" || field === "givenName" || field === "familyName" || field === "suffix") return structuredNameForCandidate(candidate)[field];
+  return candidate[field];
+}
+
+function existingFieldValue(database: AppDatabase, contact: Contact, field: ContactImportOverwriteField): string {
+  const affiliation = primaryAffiliation(database, contact.id);
+  if (field === "companyName") return companyForContact(database, contact.id)?.name ?? "";
+  if (field === "jobTitle") return affiliation?.jobTitle ?? "";
+  if (field === "department") return affiliation?.department ?? "";
+  if (field === "emails") return joinedValues(contact.emails);
+  if (field === "phones") return joinedValues(contact.phones);
+  if (field === "addresses") return addressValue(contact.addresses);
+  if (field === "tags") return contact.tags.join(" · ");
+  return contact[field];
+}
+
+function mergeFieldTranslationKey(field: ContactImportOverwriteField): string {
+  if (field === "emails") return "email";
+  if (field === "phones") return "phone";
+  return field;
+}
+
+function normalizedMergeValue(field: ContactImportOverwriteField, value: string): string {
+  const parts = value.split(" · ").map((part) => part.trim()).filter(Boolean);
+  if (field === "emails") return parts.map(normalizeEmail).filter(Boolean).sort().join("|");
+  if (field === "phones") return parts.map(normalizePhone).filter(Boolean).sort().join("|");
+  if (field === "tags") return parts.map((part) => part.toLocaleLowerCase()).sort().join("|");
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function mergeFieldDiffers(field: ContactImportOverwriteField, existingValue: string, importedValue: string): boolean {
+  if (!importedValue.trim()) return false;
+  return normalizedMergeValue(field, existingValue) !== normalizedMergeValue(field, importedValue);
 }
 
 function providerErrorMessage(error: unknown, t: (key: string) => string): string {
@@ -65,8 +122,8 @@ function providerErrorMessage(error: unknown, t: (key: string) => string): strin
   return t("contacts.import.failed");
 }
 
-export function ContactImportModal({ open, onClose, onImported, defaultProjectId = "" }: { open: boolean; onClose: () => void; onImported?: (contactIds: string[]) => void; defaultProjectId?: string }) {
-  const { database, commitContactImport, createProjectRoleDefinition, undoContactImportBatch, recordContactProviderEvent } = useApp();
+export function ContactImportModal({ open, onClose, onImported }: { open: boolean; onClose: () => void; onImported?: (contactIds: string[]) => void }) {
+  const { database, commitContactImport, recordContactProviderEvent } = useApp();
   const { locale, t } = useI18n();
   const fileInput = useRef<HTMLInputElement>(null);
   const providerAbortController = useRef<AbortController | null>(null);
@@ -86,18 +143,15 @@ export function ContactImportModal({ open, onClose, onImported, defaultProjectId
     return { ...baseSheet, headers: baseSheet.sourceRows[headerRowIndex] ?? [], rows: baseSheet.sourceRows.slice(headerRowIndex + 1) };
   }, [baseSheet, headerRowIndex]);
   const [mapping, setMapping] = useState<ContactImportField[]>([]);
-  const [decisions, setDecisions] = useState<ContactImportDecision[]>([]);
+  const [decisions, setDecisions] = useState<ContactImportReviewDecision[]>([]);
   const [providerCandidates, setProviderCandidates] = useState<ContactImportCandidate[]>([]);
   const [providerCollections, setProviderCollections] = useState<ContactProviderCollection[]>([]);
   const [selectedProviderCollections, setSelectedProviderCollections] = useState<Set<string>>(new Set());
-  const [projectId, setProjectId] = useState(defaultProjectId);
-  const [roleKeys, setRoleKeys] = useState<Set<string>>(new Set());
-  const [newRoleName, setNewRoleName] = useState("");
-  const [importTag, setImportTag] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [result, setResult] = useState<{ batchId: string; contactIds: string[]; created: number; updated: number; merged: number; skipped: number; failed: number; undone?: boolean; reverted?: number; conflicts?: number }>();
-  const actionCounts = useMemo(() => decisions.reduce((counts, decision) => ({ ...counts, [decision.action]: counts[decision.action] + 1 }), { create: 0, update: 0, merge: 0, skip: 0 }), [decisions]);
+  const importCount = useMemo(() => decisions.filter((decision) => decision.action !== "skip" && decision.action !== "resolve").length, [decisions]);
+  const pendingImportCount = useMemo(() => decisions.filter((decision) => decision.action !== "skip").length, [decisions]);
+  const unresolvedCount = useMemo(() => decisions.filter((decision) => decision.action === "resolve").length, [decisions]);
   const mappingHasConflicts = useMemo(() => mapping.some((field, index) => SINGLETON_IMPORT_FIELDS.has(field) && mapping.indexOf(field) !== index), [mapping]);
   useEffect(() => () => providerAbortController.current?.abort(), []);
   const warningLabel = (warning: string) => {
@@ -110,7 +164,7 @@ export function ContactImportModal({ open, onClose, onImported, defaultProjectId
   const showReview = (candidates: ContactImportCandidate[], selectedSource: ContactSource, label: string) => {
     setSource(selectedSource);
     setSourceLabel(label);
-    setDecisions(createDecisions(candidates, database.contacts.filter((contact) => contact.lifecycle === "active"), database.externalContactIdentities));
+    setDecisions(createDecisions(candidates, database.contacts.filter((contact) => contact.lifecycle === "active")));
     setStep("review");
   };
 
@@ -201,60 +255,37 @@ export function ContactImportModal({ open, onClose, onImported, defaultProjectId
     } finally { setBusy(false); }
   };
 
-  const updateDecision = (index: number, action: ContactImportDecisionAction) => setDecisions((current) => current.map((decision, decisionIndex) => decisionIndex === index ? {
-    ...decision,
-    action,
-    existingContactId: action === "update" || action === "merge" ? decision.existingContactId ?? matchContactImportCandidate(decision.candidate, database.contacts, database.externalContactIdentities)?.id ?? database.contacts[0]?.id : undefined,
-  } : decision));
+  const updateDecision = (index: number, action: Extract<ContactImportDecisionAction, "update" | "merge" | "skip">) => setDecisions((current) => current.map((decision, decisionIndex) => {
+    if (decisionIndex !== index) return decision;
+    const existingContact = database.contacts.find((contact) => contact.id === decision.existingContactId);
+    const overwriteFields = action === "merge" && existingContact
+      ? MERGE_FIELDS.filter((field) => importedFieldValue(decision.candidate, field) && !existingFieldValue(database, existingContact, field))
+      : undefined;
+    return { ...decision, action, overwriteFields };
+  }));
 
-  const toggleOverwriteField = (decisionIndex: number, field: ContactImportOverwriteField) => setDecisions((current) => current.map((decision, index) => {
+  const chooseMergeField = (decisionIndex: number, field: ContactImportOverwriteField, useImportedValue: boolean) => setDecisions((current) => current.map((decision, index) => {
     if (index !== decisionIndex) return decision;
     const selected = new Set(decision.overwriteFields ?? []);
-    if (selected.has(field)) selected.delete(field); else selected.add(field);
+    if (useImportedValue) selected.add(field); else selected.delete(field);
     return { ...decision, overwriteFields: [...selected] };
   }));
 
   const finishImport = () => {
-    const taggedDecisions = decisions.map((decision) => importTag.trim() ? {
-      ...decision,
-      candidate: { ...decision.candidate, tags: [...new Set([...decision.candidate.tags, importTag.trim().slice(0, 80)])] },
-    } : decision);
+    if (unresolvedCount > 0) return;
+    const resolvedDecisions = decisions.map<ContactImportDecision>((decision) => {
+      if (decision.action === "resolve") throw new Error("unresolved_contact_import");
+      return { ...decision, action: decision.action };
+    });
     const batch = commitContactImport({
       source,
       sourceLabel,
-      decisions: taggedDecisions,
-      projectAssignment: projectId ? {
-        projectId,
-        roles: [...roleKeys].flatMap((roleKey, index) => {
-          const role = projectContactRoleFromKey(database, roleKey, `import-role-${index}`, projectId);
-          return role ? [{ role: role.role, roleDefinitionId: role.roleDefinitionId, customLabel: role.customLabel }] : [];
-        }),
-      } : undefined,
+      decisions: resolvedDecisions,
     });
-    setResult({
-      batchId: batch.id,
-      contactIds: batch.items.flatMap((item) => item.contactId && (item.action === "created" || item.action === "updated" || item.action === "merged") ? [item.contactId] : []),
-      created: batch.items.filter((item) => item.action === "created").length,
-      updated: batch.items.filter((item) => item.action === "updated").length,
-      merged: batch.items.filter((item) => item.action === "merged").length,
-      skipped: batch.items.filter((item) => item.action === "skipped").length,
-      failed: batch.items.filter((item) => item.action === "failed").length,
-    });
-    setStep("result");
+    const contactIds = batch.items.flatMap((item) => item.contactId && (item.action === "created" || item.action === "updated" || item.action === "merged") ? [item.contactId] : []);
+    onImported?.([...new Set(contactIds)]);
+    onClose();
   };
-  const toggleRole = (roleKey: string) => setRoleKeys((current) => {
-    const selected = new Set(current);
-    if (selected.has(roleKey)) selected.delete(roleKey); else selected.add(roleKey);
-    return selected;
-  });
-  const activeCustomRoles = database.projectRoleDefinitions
-    .filter((definition) => definition.lifecycle === "active" && (!definition.projectId || definition.projectId === projectId))
-    .sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name));
-  const selectedRoleLabels = [...roleKeys].flatMap((roleKey) => {
-    if (roleKey.startsWith("system:")) return [t(`contacts.role.${roleKey.slice("system:".length)}`)];
-    const definition = projectRoleDefinitionForKey(database, roleKey, projectId);
-    return definition ? [definition.name] : [];
-  });
   const downloadCsvTemplate = () => {
     const url = URL.createObjectURL(new Blob([exportContactCsvTemplate(locale)], { type: "text/csv;charset=utf-8" }));
     const anchor = document.createElement("a");
@@ -263,24 +294,8 @@ export function ContactImportModal({ open, onClose, onImported, defaultProjectId
     anchor.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
   };
-  const downloadErrorReport = () => {
-    const csvCell = (value: string) => `"${(/^[=+\-@\t\r]/.test(value) ? `'${value}` : value).replace(/"/g, '""')}"`;
-    const rows = decisions.filter((decision) => decision.action === "skip" || decision.candidate.warnings.length > 0).map((decision) => [
-      decision.candidate.sourceKey,
-      decision.action,
-      decision.candidate.warnings.join(";"),
-    ].map(csvCell).join(","));
-    const content = [["Source row", "Decision", "Issue codes"].map(csvCell).join(","), ...rows].join("\r\n");
-    const url = URL.createObjectURL(new Blob([content], { type: "text/csv;charset=utf-8" }));
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = "quicksige-contact-import-report.csv";
-    anchor.click();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
-  };
   const closeImport = () => {
     providerAbortController.current?.abort();
-    if (result && !result.undone) onImported?.([...new Set(result.contactIds)]);
     onClose();
   };
 
@@ -320,25 +335,48 @@ export function ContactImportModal({ open, onClose, onImported, defaultProjectId
     </div><div className="modal-footer"><Button variant="secondary" onClick={() => setStep("source")}>{t("common.back")}</Button><Button disabled={mappingHasConflicts || busy} onClick={() => void continueFromMapping()}>{t("common.continue")}</Button></div></>}
 
     {step === "review" && <><div className="modal-body import-review-step">
-      <div className="import-summary"><Badge tone="success">{actionCounts.create} {t("contacts.import.new")}</Badge><Badge tone="info">{actionCounts.update} {t("contacts.import.updates")}</Badge><Badge tone="warning">{actionCounts.merge} {t("contacts.import.merged")}</Badge><Badge>{actionCounts.skip} {t("contacts.import.skipped")}</Badge></div>
-      <p>{t("contacts.import.reviewHelp")}</p>
-      <div className="import-bulk-decisions"><span>{t("contacts.import.applyToAll")}</span><Button size="small" variant="secondary" onClick={() => setDecisions((current) => current.map((decision) => ({ ...decision, action: "create", existingContactId: undefined })))}>{t("contacts.import.create")}</Button><Button size="small" variant="secondary" disabled={database.contacts.length === 0} onClick={() => setDecisions((current) => current.map((decision) => ({ ...decision, action: "update", existingContactId: decision.existingContactId ?? matchContactImportCandidate(decision.candidate, database.contacts, database.externalContactIdentities)?.id ?? database.contacts[0]?.id })))}>{t("contacts.import.update")}</Button><Button size="small" variant="secondary" disabled={database.contacts.length === 0} onClick={() => setDecisions((current) => current.map((decision) => ({ ...decision, action: "merge", existingContactId: decision.existingContactId ?? matchContactImportCandidate(decision.candidate, database.contacts, database.externalContactIdentities)?.id ?? database.contacts[0]?.id })))}>{t("contacts.import.merge")}</Button><Button size="small" variant="secondary" onClick={() => setDecisions((current) => current.map((decision) => ({ ...decision, action: "skip", existingContactId: undefined })))}>{t("contacts.import.skip")}</Button></div>
-      <div className="import-review-list">{decisions.slice(0, 300).map((decision, index) => <article key={`${decision.candidate.sourceKey}-${index}`}>
-        <span><strong>{candidateDisplayName(decision.candidate) || t("contacts.import.unnamed")}</strong><small>{decision.candidate.emails[0]?.value || decision.candidate.phones[0]?.value || decision.candidate.companyName || "—"}</small>{decision.candidate.warnings.map((warning) => <small className="import-warning" key={warning}>{warningLabel(warning)}</small>)}</span>
-        <select aria-label={t("contacts.import.action")} value={decision.action} onChange={(event) => updateDecision(index, event.target.value as ContactImportDecisionAction)}><option value="create">{t("contacts.import.create")}</option><option value="update">{t("contacts.import.update")}</option><option value="merge">{t("contacts.import.merge")}</option><option value="skip">{t("contacts.import.skip")}</option></select>
-        {(decision.action === "update" || decision.action === "merge") && <select aria-label={t("contacts.import.match")} value={decision.existingContactId ?? ""} onChange={(event) => setDecisions((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, existingContactId: event.target.value } : item))}>{database.contacts.filter((contact) => contact.lifecycle === "active").map((contact) => <option key={contact.id} value={contact.id}>{contactDisplayName(contact)}</option>)}</select>}
-        {(decision.action === "update" || decision.action === "merge") && <details className="import-overwrite-fields"><summary>{t("contacts.import.overwriteFields")}</summary><div>{OVERWRITABLE_IMPORT_FIELDS.filter((field) => decision.candidate[field].trim()).map((field) => <label key={field}><input type="checkbox" checked={decision.overwriteFields?.includes(field) ?? false} onChange={() => toggleOverwriteField(index, field)} /><span>{t(`contacts.import.field.${field}`)}</span><small>{decision.candidate[field]}</small></label>)}</div></details>}
-      </article>)}</div>
+      <div className="import-review-list">{decisions.slice(0, 300).map((decision, index) => {
+        const existingContact = database.contacts.find((contact) => contact.id === decision.existingContactId);
+        const importedDetails = [decision.candidate.companyName, joinedValues(decision.candidate.emails), joinedValues(decision.candidate.phones)].filter(Boolean).join(" · ");
+        const existingDetails = existingContact
+          ? [companyForContact(database, existingContact.id)?.name, joinedValues(existingContact.emails), joinedValues(existingContact.phones)].filter(Boolean).join(" · ")
+          : "";
+        return <article className={existingContact ? "import-review-contact has-duplicate" : "import-review-contact"} key={`${decision.candidate.sourceKey}-${index}`}>
+          <div className="import-review-identity">
+            <span><strong>{candidateDisplayName(decision.candidate) || t("contacts.import.unnamed")}</strong><small>{importedDetails || "—"}</small></span>
+            {decision.candidate.warnings.map((warning) => <small className="import-warning" key={warning}>{warningLabel(warning)}</small>)}
+          </div>
+          {existingContact && <div className="import-duplicate-review">
+            <p>{t("contacts.import.duplicateFound")}</p>
+            <div className="import-duplicate-comparison">
+              <div><small>{t("contacts.import.existingContact")}</small><strong>{contactDisplayName(existingContact) || t("contacts.import.unnamed")}</strong><span>{existingDetails || "—"}</span></div>
+              <div><small>{t("contacts.import.importedContact")}</small><strong>{candidateDisplayName(decision.candidate) || t("contacts.import.unnamed")}</strong><span>{importedDetails || "—"}</span></div>
+            </div>
+            <div className="import-resolution-actions" role="group" aria-label={t("contacts.import.duplicateAction", { name: candidateDisplayName(decision.candidate) || t("contacts.import.unnamed") })}>
+              <button type="button" className={decision.action === "update" ? "is-selected" : ""} aria-pressed={decision.action === "update"} onClick={() => updateDecision(index, "update")}>{t("contacts.import.update")}</button>
+              <button type="button" className={decision.action === "merge" ? "is-selected" : ""} aria-pressed={decision.action === "merge"} onClick={() => updateDecision(index, "merge")}>{t("contacts.import.merge")}</button>
+              <button type="button" className={decision.action === "skip" ? "is-selected" : ""} aria-pressed={decision.action === "skip"} onClick={() => updateDecision(index, "skip")}>{t("contacts.import.doNotImport")}</button>
+            </div>
+            {decision.action === "merge" && <div className="import-merge-fields">
+              {MERGE_FIELDS.filter((field) => mergeFieldDiffers(
+                field,
+                existingFieldValue(database, existingContact, field),
+                importedFieldValue(decision.candidate, field),
+              )).map((field) => {
+                const existingValue = existingFieldValue(database, existingContact, field);
+                const importedValue = importedFieldValue(decision.candidate, field);
+                const useImportedValue = decision.overwriteFields?.includes(field) ?? false;
+                return <fieldset key={field}>
+                  <legend>{t(`contacts.import.field.${mergeFieldTranslationKey(field)}`)}</legend>
+                  <label><input type="radio" name={`import-merge-${index}-${field}`} checked={!useImportedValue} onChange={() => chooseMergeField(index, field, false)} /><span><strong>{t("contacts.import.existingValue")}</strong><small>{existingValue || "—"}</small></span></label>
+                  <label><input type="radio" name={`import-merge-${index}-${field}`} checked={useImportedValue} onChange={() => chooseMergeField(index, field, true)} /><span><strong>{t("contacts.import.importedValue")}</strong><small>{importedValue}</small></span></label>
+                </fieldset>;
+              })}
+            </div>}
+          </div>}
+        </article>;
+      })}</div>
       {decisions.length > 300 && <p className="field-help">{t("contacts.import.previewLimited", { count: decisions.length })}</p>}
-      <fieldset className="contact-fieldset"><legend>{t("contacts.import.importOptions")}</legend><div className="form-grid">
-        <label className="field span-two"><span>{t("contacts.import.addTag")}</span><input value={importTag} maxLength={80} onChange={(event) => setImportTag(event.target.value)} placeholder={t("contacts.import.addTagPlaceholder")} /></label>
-        <label className="field"><span>{t("contacts.import.project")}</span><select value={projectId} onChange={(event) => setProjectId(event.target.value)}><option value="">{t("contacts.import.noProject")}</option>{database.projects.filter((project) => project.status !== "archived").map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
-        <fieldset className="contact-fieldset span-two" disabled={!projectId}><legend>{t("contacts.roles")}</legend><div className="role-checkbox-grid">{STANDARD_PROJECT_ROLES.map((value) => { const roleKey = `system:${value}`; return <label key={value}><input type="checkbox" checked={roleKeys.has(roleKey)} onChange={() => toggleRole(roleKey)} /><span>{t(`contacts.role.${value}`)}</span></label>; })}{activeCustomRoles.map((definition) => { const roleKey = `custom:${definition.id}`; return <label key={definition.id}><input type="checkbox" checked={roleKeys.has(roleKey)} onChange={() => toggleRole(roleKey)} /><span>{definition.name}</span></label>; })}</div><div className="role-create-inline"><input aria-label={t("projectRoles.name")} value={newRoleName} onChange={(event) => setNewRoleName(event.target.value)} /><Button type="button" size="small" variant="secondary" disabled={!newRoleName.trim()} onClick={() => { const definition = createProjectRoleDefinition(newRoleName); if (definition) setRoleKeys((current) => new Set([...current, `custom:${definition.id}`])); setNewRoleName(""); }}>{t("projectRoles.add")}</Button></div></fieldset>
-      </div></fieldset>
-    </div><div className="modal-footer"><Button variant="secondary" onClick={() => setStep(providerCandidates.length ? "provider" : sheets.length ? "mapping" : "source")}>{t("common.back")}</Button><Button onClick={() => setStep("confirm")}>{t("common.continue")}</Button></div></>}
-
-    {step === "confirm" && <><div className="modal-body import-confirm-step"><h3>{t("contacts.import.confirmTitle")}</h3><p>{t("contacts.import.confirmHelp")}</p><dl><div><dt>{t("contacts.import.create")}</dt><dd>{actionCounts.create}</dd></div><div><dt>{t("contacts.import.update")}</dt><dd>{actionCounts.update}</dd></div><div><dt>{t("contacts.import.merge")}</dt><dd>{actionCounts.merge}</dd></div><div><dt>{t("contacts.import.skip")}</dt><dd>{actionCounts.skip}</dd></div>{importTag.trim() && <div><dt>{t("contacts.tag")}</dt><dd>{importTag.trim()}</dd></div>}{projectId && <><div><dt>{t("contacts.project")}</dt><dd>{database.projects.find((project) => project.id === projectId)?.name}</dd></div><div><dt>{t("contacts.roles")}</dt><dd>{selectedRoleLabels.join(", ") || t("projectRoles.noSelectedRoles")}</dd></div></>}</dl></div><div className="modal-footer"><Button variant="secondary" onClick={() => setStep("review")}>{t("common.back")}</Button><Button onClick={finishImport}>{t("contacts.import.importAction", { count: actionCounts.create + actionCounts.update + actionCounts.merge })}</Button></div></>}
-
-    {step === "result" && result && <><div className="modal-body import-result-step"><span className="import-result-icon"><Upload /></span><h3>{t("contacts.import.complete")}</h3><p>{t("contacts.import.completeTextDetailed", { created: result.created, updated: result.updated, merged: result.merged, skipped: result.skipped, failed: result.failed })}</p>{result.undone && <p className="import-status" role="status">{t("contacts.undoResult", { reverted: result.reverted ?? 0, conflicts: result.conflicts ?? 0 })}</p>}</div><div className="modal-footer">{result.skipped + result.failed > 0 && <Button variant="ghost" onClick={downloadErrorReport}>{t("contacts.import.downloadReport")}</Button>}<Button variant="secondary" disabled={result.undone} onClick={() => { const undo = undoContactImportBatch(result.batchId); setResult((current) => current ? { ...current, undone: true, reverted: undo.reverted, conflicts: undo.conflicts } : current); }}>{t("contacts.undoImport")}</Button><Button onClick={closeImport}>{t("common.close")}</Button></div></>}
+    </div><div className="modal-footer"><Button variant="secondary" onClick={() => setStep(providerCandidates.length ? "provider" : sheets.length ? "mapping" : "source")}>{t("common.back")}</Button><Button disabled={unresolvedCount > 0 || importCount === 0} onClick={finishImport}>{pendingImportCount === 1 ? t("contacts.import.importOneAction") : t("contacts.import.importAction", { count: pendingImportCount })}</Button></div></>}
   </Modal>;
 }

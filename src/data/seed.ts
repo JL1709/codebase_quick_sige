@@ -636,7 +636,7 @@ export function createSeedDatabase(): AppDatabase {
     updatedAt: createdAt,
   }));
   return {
-    schemaVersion: 36,
+    schemaVersion: 37,
     organization: {
       id: "organization-demo",
       name: "Sicher Planen Ingenieure",

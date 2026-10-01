@@ -23,7 +23,6 @@ export function ContactFormModal({ open, contact, projectParticipantContext = fa
   const [givenName, setGivenName] = useState(contact?.givenName ?? "");
   const [familyName, setFamilyName] = useState(contact?.familyName ?? "");
   const [suffix, setSuffix] = useState(contact?.suffix ?? "");
-  const [displayName, setDisplayName] = useState(contact?.displayName ?? "");
   const [emails, setEmails] = useState<Array<Pick<ContactEmail, "id" | "type" | "value" | "primary">>>(
     contact?.emails.map(({ id, type, value, primary }) => ({ id, type, value, primary })) ?? [{ id: newId("email"), type: "work", value: "", primary: true }],
   );
@@ -42,7 +41,7 @@ export function ContactFormModal({ open, contact, projectParticipantContext = fa
 
   const updateEmail = (id: string, patch: Partial<(typeof emails)[number]>) => setEmails((current) => current.map((email) => email.id === id ? { ...email, ...patch } : email));
   const updatePhone = (id: string, patch: Partial<(typeof phones)[number]>) => setPhones((current) => current.map((phone) => phone.id === id ? { ...phone, ...patch } : phone));
-  const validName = Boolean(displayName.trim() || givenName.trim() || familyName.trim());
+  const validName = Boolean(givenName.trim() || familyName.trim());
   const emailInvalid = emails.some((email) => email.value.trim() && !/^[^\s@]+@[^\s@]+$/.test(email.value.trim()));
 
   const handleSubmit = (event: FormEvent) => {
@@ -54,7 +53,7 @@ export function ContactFormModal({ open, contact, projectParticipantContext = fa
     const savedContact: Contact = {
       id: contactId,
       organizationId: database.organization.id,
-      prefix: prefix.trim(), givenName: givenName.trim(), familyName: familyName.trim(), suffix: suffix.trim(), displayName: displayName.trim(),
+      prefix: prefix.trim(), givenName: givenName.trim(), familyName: familyName.trim(), suffix: suffix.trim(),
       emails: emails.filter((email) => email.value.trim()).map((email, index) => ({ ...email, value: email.value.trim(), normalizedValue: normalizeEmail(email.value), primary: emails.some((candidate) => candidate.primary && candidate.value.trim()) ? email.primary : index === 0 })),
       phones: phones.filter((phone) => phone.value.trim()).map((phone, index) => ({ ...phone, value: phone.value.trim(), normalizedValue: normalizePhone(phone.value), primary: phones.some((candidate) => candidate.primary && candidate.value.trim()) ? phone.primary : index === 0 })),
       addresses: ensureAddressPrimary(addresses.filter((candidate) => [candidate.street, candidate.postalCode, candidate.city, candidate.region, candidate.country].some((value) => value.trim()))),
@@ -86,10 +85,10 @@ export function ContactFormModal({ open, contact, projectParticipantContext = fa
       <div className="modal-body contact-form-body">
         <div className="form-grid contact-name-grid">
           <label className="field"><span>{t("contacts.prefix")}</span><input value={prefix} onChange={(event) => setPrefix(event.target.value)} /></label>
-          <label className="field"><span>{t("contacts.givenName")}</span><input autoFocus value={givenName} onChange={(event) => setGivenName(event.target.value)} /></label>
-          <label className="field"><span>{t("contacts.familyName")}</span><input value={familyName} onChange={(event) => setFamilyName(event.target.value)} /></label>
+          <label className="field"><span>{t("contacts.givenName")}</span><input autoFocus aria-invalid={submitted && !validName} value={givenName} onChange={(event) => setGivenName(event.target.value)} /></label>
+          <label className="field"><span>{t("contacts.familyName")}</span><input aria-invalid={submitted && !validName} value={familyName} onChange={(event) => setFamilyName(event.target.value)} /></label>
           <label className="field"><span>{t("contacts.suffix")}</span><input value={suffix} onChange={(event) => setSuffix(event.target.value)} /></label>
-          <label className="field span-two"><span>{t("contacts.displayName")}</span><input aria-invalid={submitted && !validName} value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder={[givenName, familyName].filter(Boolean).join(" ")} />{submitted && !validName && <small className="field-error">{t("contacts.nameRequired")}</small>}</label>
+          {submitted && !validName && <small className="field-error contact-name-error">{t("contacts.nameRequired")}</small>}
         </div>
 
         <MethodEditor title={t("contacts.emails")} primaryLabel={t("contacts.primary")} removeLabel={t("common.remove")} values={emails} invalid={emailInvalid} addLabel={t("contacts.addEmail")} onAdd={() => setEmails((current) => [...current, { id: newId("email"), type: "work", value: "", primary: current.length === 0 }])} onUpdate={updateEmail} onRemove={(id) => setEmails((current) => current.filter((value) => value.id !== id))} onPrimary={(id) => setEmails((current) => current.map((value) => ({ ...value, primary: value.id === id })))} typeOptions={methodTypeOptions(t)} />
