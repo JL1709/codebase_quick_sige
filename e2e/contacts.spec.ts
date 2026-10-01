@@ -41,6 +41,10 @@ test("creates, imports, exports, and assigns canonical contacts", async ({ page 
   await expect(page).toHaveURL(/\/contacts$/);
 
   await page.getByRole("button", { name: "Import", exact: true }).click();
+  const importModal = page.getByRole("dialog", { name: "Import contacts" });
+  await expect(importModal.getByRole("button", { name: /Microsoft Outlook/ })).toBeDisabled();
+  await expect(importModal.getByRole("button", { name: /Google Contacts/ })).toBeDisabled();
+  await expect(importModal.getByText("Available in the live system.", { exact: true })).toBeVisible();
   await page.locator('input[type="file"]').setInputFiles({
     name: "contacts.csv",
     mimeType: "text/csv",
@@ -48,7 +52,6 @@ test("creates, imports, exports, and assigns canonical contacts", async ({ page 
   });
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByText("Katherine Johnson", { exact: true })).toBeVisible();
-  const importModal = page.getByRole("dialog", { name: "Import contacts" });
   await expect(importModal.getByLabel("Project", { exact: true })).toHaveCount(0);
   await expect(importModal.getByRole("group", { name: "Project roles" })).toHaveCount(0);
   await expect(importModal.getByText("Apply to all")).toHaveCount(0);

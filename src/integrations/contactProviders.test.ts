@@ -7,6 +7,7 @@ import {
   googlePersonCandidate,
   importGoogleContacts,
   importMicrosoftContacts,
+  isContactProviderConfigured,
   MICROSOFT_CONTACT_SCOPES,
   microsoftContactCandidate,
   providerAuthorizationError,
@@ -24,6 +25,14 @@ describe("contact provider adapters", () => {
 
     await expect(importMicrosoftContacts()).rejects.toThrow("provider_not_configured:microsoft");
     await expect(importGoogleContacts()).rejects.toThrow("provider_not_configured:google");
+  });
+
+  it("exposes connector availability from the configured public OAuth client IDs", () => {
+    vi.stubEnv("VITE_MICROSOFT_CLIENT_ID", "");
+    vi.stubEnv("VITE_GOOGLE_CLIENT_ID", " google-client-id ");
+
+    expect(isContactProviderConfigured("microsoft")).toBe(false);
+    expect(isContactProviderConfigured("google")).toBe(true);
   });
 
   it("declares only the reviewed delegated read-only scopes", () => {

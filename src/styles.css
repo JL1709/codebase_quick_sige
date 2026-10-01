@@ -959,7 +959,9 @@ textarea.canvas-inline-editor { min-height: 34px; resize: none; }
   .block-layout-mode-select { max-width: 120px; }
 }
 
-@container plan-workspace (max-width: 1450px) {
+/* The maximum contextual selection toolbar fits above this width, so changing
+   selection never needs to resize or move the canvas. */
+@container plan-workspace (max-width: 1240px) {
   .editor-page { --editor-toolbar-height: 100px; }
   .editor-toolbar {
     grid-template-areas:
@@ -970,6 +972,7 @@ textarea.canvas-inline-editor { min-height: 34px; resize: none; }
     align-content: center;
     row-gap: 4px;
   }
+  .editor-toolbar-primary { justify-content: center; }
 }
 
 @container plan-workspace (max-width: 900px) {
@@ -1161,7 +1164,10 @@ textarea.canvas-inline-editor { min-height: 34px; resize: none; }
 .provider-grid button > svg { grid-row: span 2; color: var(--teal); }
 .provider-grid button strong { font-size: 12px; }
 .provider-grid button span { margin-top: 3px; color: var(--ink-muted); font-size: 9px; }
-.provider-grid button:hover { border-color: var(--teal); background: #f8fbf9; }
+.provider-grid button:not(:disabled):hover { border-color: var(--teal); background: #f8fbf9; }
+.provider-grid button:disabled { cursor: not-allowed; color: var(--ink-muted); background: #f3f5f4; border-color: var(--line); opacity: .62; }
+.provider-grid button:disabled > svg { color: var(--ink-muted); }
+.provider-availability-note { margin-top: -8px !important; color: var(--ink-muted) !important; font-size: 10px !important; }
 .provider-collection-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .provider-collection-list > label { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 9px; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #fbfcfb; }
 .provider-collection-list strong, .provider-collection-list small { display: block; }

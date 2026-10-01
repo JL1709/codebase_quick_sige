@@ -5,6 +5,7 @@ const GOOGLE_PEOPLE_BASE_URL = "https://people.googleapis.com/v1";
 const GOOGLE_IDENTITY_SCRIPT_URL = "https://accounts.google.com/gsi/client";
 export const MICROSOFT_CONTACT_SCOPES = ["User.Read", "Contacts.Read"] as const;
 export const GOOGLE_CONTACT_SCOPES = ["openid", "email", "https://www.googleapis.com/auth/contacts.readonly"] as const;
+export type ContactProvider = "microsoft" | "google";
 const MAX_PROVIDER_PAGES = 100;
 const MAX_PROVIDER_REQUEST_ATTEMPTS = 3;
 const MAX_PROVIDER_RETRY_DELAY_MS = 5_000;
@@ -94,6 +95,16 @@ declare global {
   interface Window {
     google?: { accounts: { oauth2: GoogleAccountsOAuth2 } };
   }
+}
+
+function contactProviderClientId(provider: ContactProvider): string {
+  return (provider === "microsoft"
+    ? import.meta.env.VITE_MICROSOFT_CLIENT_ID
+    : import.meta.env.VITE_GOOGLE_CLIENT_ID)?.trim() ?? "";
+}
+
+export function isContactProviderConfigured(provider: ContactProvider): boolean {
+  return Boolean(contactProviderClientId(provider));
 }
 
 function providerMethodType(value = ""):
@@ -255,7 +266,7 @@ function providerCollections(
 }
 
 export async function importMicrosoftContacts(options: ProviderRequestOptions = {}): Promise<ContactProviderImportData> {
-  const clientId = import.meta.env.VITE_MICROSOFT_CLIENT_ID?.trim();
+  const clientId = contactProviderClientId("microsoft");
   if (!clientId) throw new Error("provider_not_configured:microsoft");
   const { PublicClientApplication } = await import("@azure/msal-browser");
   const application = new PublicClientApplication({
@@ -388,7 +399,7 @@ export function googlePersonCandidate(person: GooglePerson, providerAccountId: s
 }
 
 export async function importGoogleContacts(options: ProviderRequestOptions = {}): Promise<ContactProviderImportData> {
-  const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim();
+  const clientId = contactProviderClientId("google");
   if (!clientId) throw new Error("provider_not_configured:google");
   const oauth2 = await loadGoogleIdentity();
   const accessToken = await requestGoogleAccessToken(oauth2, clientId);

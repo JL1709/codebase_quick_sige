@@ -23,7 +23,12 @@ import {
 import { companyForContact, contactDisplayName, normalizeEmail, normalizePhone, primaryAffiliation } from "../domain/contacts";
 import type { AppDatabase, Contact, ContactSource } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
-import { importGoogleContacts, importMicrosoftContacts, type ContactProviderCollection } from "../integrations/contactProviders";
+import {
+  importGoogleContacts,
+  importMicrosoftContacts,
+  isContactProviderConfigured,
+  type ContactProviderCollection,
+} from "../integrations/contactProviders";
 import { useApp } from "../state/AppProvider";
 import { Button, Modal } from "./Ui";
 
@@ -149,6 +154,9 @@ export function ContactImportModal({ open, onClose, onImported }: { open: boolea
   const [selectedProviderCollections, setSelectedProviderCollections] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const microsoftConnectorConfigured = isContactProviderConfigured("microsoft");
+  const googleConnectorConfigured = isContactProviderConfigured("google");
+  const connectorUnavailable = !microsoftConnectorConfigured || !googleConnectorConfigured;
   const importCount = useMemo(() => decisions.filter((decision) => decision.action !== "skip" && decision.action !== "resolve").length, [decisions]);
   const pendingImportCount = useMemo(() => decisions.filter((decision) => decision.action !== "skip").length, [decisions]);
   const unresolvedCount = useMemo(() => decisions.filter((decision) => decision.action === "resolve").length, [decisions]);
@@ -303,9 +311,10 @@ export function ContactImportModal({ open, onClose, onImported }: { open: boolea
     {step === "source" && <div className="modal-body import-source-step">
       <p>{t("contacts.import.intro")}</p>
       <div className="provider-grid">
-        <button type="button" onClick={() => void handleProvider("microsoft")} disabled={busy}><Cloud /><strong>Microsoft Outlook</strong><span>{t("contacts.import.microsoftHelp")}</span></button>
-        <button type="button" onClick={() => void handleProvider("google")} disabled={busy}><Cloud /><strong>Google Contacts</strong><span>{t("contacts.import.googleHelp")}</span></button>
+        <button type="button" onClick={() => void handleProvider("microsoft")} disabled={busy || !microsoftConnectorConfigured}><Cloud /><strong>Microsoft Outlook</strong><span>{t("contacts.import.microsoftHelp")}</span></button>
+        <button type="button" onClick={() => void handleProvider("google")} disabled={busy || !googleConnectorConfigured}><Cloud /><strong>Google Contacts</strong><span>{t("contacts.import.googleHelp")}</span></button>
       </div>
+      {connectorUnavailable && <p className="provider-availability-note">{t("contacts.import.providerAvailability")}</p>}
       <div className="import-divider"><span>{t("contacts.import.orFile")}</span></div>
       <label className="field"><span>{t("contacts.import.encoding")}</span><select value={textEncoding} onChange={(event) => { const encoding = event.target.value as ContactTextEncoding; setTextEncoding(encoding); if (selectedFile) void readFile(selectedFile, encoding); }}><option value="utf-8">UTF-8</option><option value="windows-1252">Windows-1252</option><option value="iso-8859-1">ISO-8859-1</option></select><small>{t("contacts.import.encodingHelp")}</small></label>
       <div className="file-drop-zone" onDragOver={(event) => event.preventDefault()} onDrop={handleDrop} onClick={() => fileInput.current?.click()} role="button" tabIndex={0} onKeyDown={(event) => (event.key === "Enter" || event.key === " ") && fileInput.current?.click()}>

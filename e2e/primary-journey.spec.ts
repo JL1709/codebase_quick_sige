@@ -1457,6 +1457,39 @@ test("responsive plan toolbar stays contained and selection keeps the canvas sta
     }
   }
 
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto("/projects/project-logistics-center/plan");
+  const desktopToolbar = page.locator(".editor-toolbar");
+  await expect(desktopToolbar).toHaveCSS("height", "58px");
+  const desktopGroupCenters = await Promise.all([
+    ".editor-toolbar-leading",
+    ".editor-toolbar-primary",
+    ".editor-toolbar-trailing",
+  ].map(async (selector) => {
+    const bounds = await page.locator(selector).boundingBox();
+    expect(bounds).not.toBeNull();
+    return bounds!.y + bounds!.height / 2;
+  }));
+  expect(Math.max(...desktopGroupCenters) - Math.min(...desktopGroupCenters)).toBeLessThan(2);
+
+  await page.locator(".canvas-block").first().click({ force: true });
+  await expect(page.locator(".selection-tools")).toBeVisible();
+  await expect(desktopToolbar).toHaveCSS("height", "58px");
+  expect(await desktopToolbar.evaluate((toolbar) => toolbar.scrollWidth - toolbar.clientWidth)).toBeLessThanOrEqual(1);
+
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await page.goto("/projects/project-logistics-center/plan");
+  const compactToolbar = page.locator(".editor-toolbar");
+  await expect(compactToolbar).toHaveCSS("height", "100px");
+  const compactToolbarBounds = await compactToolbar.boundingBox();
+  const compactPrimaryBounds = await page.locator(".editor-toolbar-primary").boundingBox();
+  expect(compactToolbarBounds).not.toBeNull();
+  expect(compactPrimaryBounds).not.toBeNull();
+  expect(Math.abs(
+    compactPrimaryBounds!.x + compactPrimaryBounds!.width / 2
+    - (compactToolbarBounds!.x + compactToolbarBounds!.width / 2),
+  )).toBeLessThan(2);
+
   await page.setViewportSize({ width: 1728, height: 1117 });
   await page.goto("/projects/project-logistics-center/plan");
   const primaryToolbar = page.locator(".editor-toolbar-primary");
