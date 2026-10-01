@@ -16,6 +16,7 @@ import { instantiateRepeatingItem, normalizeOverviewKey, type OverviewDropPositi
 import { moveProjectOverviewEntry, moveProjectOverviewRecord } from "../domain/projectOverview";
 import type { OverviewEntryType, ProjectOverviewEntry } from "../domain/types";
 import { newId } from "../state/AppProvider";
+import { FieldTypeHeading } from "./FieldTypeHeading";
 import { Button } from "./Ui";
 
 type Translate = (key: string, params?: Record<string, string | number>) => string;
@@ -219,7 +220,7 @@ function ProjectOverviewEditor({ entries, invalidEntryIds, onChange, t, formatDa
   };
 
   return <div className="project-overview-editor">
-    <div className="project-overview-editor-labels"><span /><span>{t("templates.entryLabel")}</span><span>{t("templates.entryType")}</span><span>{t("project.valueOptional")}</span><span /></div>
+    <div className="project-overview-editor-labels"><span /><span>{t("templates.entryLabel")}</span><FieldTypeHeading t={t} /><span>{t("project.valueOptional")}</span><span /></div>
     <DndContext sensors={sensors} collisionDetection={pointerWithin} onDragOver={previewMove} onDragEnd={performMove} onDragCancel={() => setDropIndicator(null)}>
       <div className="project-overview-entry-tree">
         {entries.length === 0 && <p className="template-empty">{t("templates.noEntries")}</p>}

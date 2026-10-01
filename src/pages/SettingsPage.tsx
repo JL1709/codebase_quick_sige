@@ -1,9 +1,9 @@
 import { DndContext, PointerSensor, pointerWithin, type DragEndEvent, type DragOverEvent, useDraggable, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
-import { ArchiveRestore, Check, CircleAlert, CircleHelp, Copy, Database, Download, FilePlus2, GripVertical, Languages, MoreVertical, Pencil, Plus, RotateCcw, Search, ShieldCheck, Trash2 } from "lucide-react";
+import { ArchiveRestore, Check, CircleAlert, Copy, Database, Download, FilePlus2, GripVertical, Languages, MoreVertical, Pencil, Plus, RotateCcw, Search, ShieldCheck, Trash2 } from "lucide-react";
 import { type ChangeEvent, type CSSProperties, type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Modal, PageHeader } from "../components/Ui";
-import { FieldTypeHelpModal } from "../components/FieldTypeHelpModal";
+import { FieldTypeHeading } from "../components/FieldTypeHeading";
 import { ProjectRolesTemplateSection } from "../components/ProjectRolesTemplateSection";
 import { getBlob, saveBlob } from "../data/blobRepository";
 import {
@@ -173,7 +173,6 @@ function deleteOverviewEntry(entries: OverviewTemplateEntry[], entryId: string):
 function OverviewTemplateModal({ open, template, templates, organizationId, locale, onClose, onSave, t }: { open: boolean; template: OverviewTemplate | null; templates: OverviewTemplate[]; organizationId: string; locale: Locale; onClose: () => void; onSave: (template: OverviewTemplate) => void; t: Translate }) {
   const [draft, setDraft] = useState(() => template ? localizeOverviewTemplate(template, locale) : blankOverviewTemplate(organizationId, locale));
   const [entryType, setEntryType] = useState<OverviewEntryType>("text");
-  const [fieldTypeHelpOpen, setFieldTypeHelpOpen] = useState(false);
   const [copiedEntryId, setCopiedEntryId] = useState<string | null>(null);
   const [dropIndicator, setDropIndicator] = useState<{ entryId: string; position: OverviewDropPosition } | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
@@ -250,7 +249,7 @@ function OverviewTemplateModal({ open, template, templates, organizationId, loca
       <form className="overview-template-form" onSubmit={handleSubmit}>
         <div className="modal-body template-form">
           <label className="field"><span>{t("templates.name")}</span><input required aria-invalid={Boolean(templateNameError)} aria-describedby={templateNameError ? "template-name-error" : undefined} value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} />{templateNameError && <small id="template-name-error" className="field-error" role="alert">{templateNameError}</small>}</label>
-          <div className="template-builder-labels"><span /><span>{t("templates.entryLabel")}</span><span className="template-entry-type-heading">{t("templates.entryType")}<button type="button" className="template-help-button" aria-label={t("templates.fieldTypeHelp")} onClick={() => setFieldTypeHelpOpen(true)}><CircleHelp size={14} /></button></span><span>{t("templates.defaultValue")}</span><span /></div>
+          <div className="template-builder-labels"><span /><span>{t("templates.entryLabel")}</span><FieldTypeHeading t={t} /><span>{t("templates.defaultValue")}</span><span /></div>
         <DndContext sensors={sensors} collisionDetection={pointerWithin} onDragOver={previewMove} onDragEnd={performMove} onDragCancel={() => setDropIndicator(null)}>
           <div className="template-entry-tree">
             {draft.entries.length === 0 && <p className="template-empty">{t("templates.noEntries")}</p>}
@@ -262,7 +261,6 @@ function OverviewTemplateModal({ open, template, templates, organizationId, loca
         <div className="modal-footer"><Button type="button" variant="secondary" onClick={onClose}>{t("common.cancel")}</Button><Button type="submit" disabled={!validation.valid}>{t("common.save")}</Button></div>
       </form>
     </Modal>
-    <FieldTypeHelpModal open={fieldTypeHelpOpen} onClose={() => setFieldTypeHelpOpen(false)} t={t} />
   </>;
 }
 

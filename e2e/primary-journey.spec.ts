@@ -204,6 +204,10 @@ test("project creation applies templates and guided assessment creates a plan", 
   await page.getByLabel("Project name").fill("Minimal project");
   await page.locator(".project-section-library").getByRole("button", { name: /Custom section/ }).click();
   const customSection = page.locator(".project-included-section").first();
+  await customSection.getByRole("button", { name: "Explain field types" }).click();
+  const customSectionFieldTypeHelp = page.getByRole("dialog", { name: "Understanding field types" });
+  await expect(customSectionFieldTypeHelp.getByText("Address", { exact: true })).toBeVisible();
+  await customSectionFieldTypeHelp.locator(".modal-footer").getByRole("button", { name: "Close", exact: true }).click();
   await customSection.getByLabel("Section title").fill("Internal project data");
   await customSection.getByRole("button", { name: "Add entry" }).click();
   await customSection.getByPlaceholder("Label").fill("Internal reference");
@@ -249,6 +253,10 @@ test("project creation applies templates and guided assessment creates a plan", 
   await expect(generalPreview.getByText("Client", { exact: true })).toBeVisible();
   await generalPreview.getByRole("button", { name: "Add to project" }).click();
   const includedGeneral = page.locator(".project-included-section").last();
+  await includedGeneral.getByRole("button", { name: "Explain field types" }).click();
+  const templateSectionFieldTypeHelp = page.getByRole("dialog", { name: "Understanding field types" });
+  await expect(templateSectionFieldTypeHelp.getByText("Project participants", { exact: true })).toBeVisible();
+  await templateSectionFieldTypeHelp.locator(".modal-footer").getByRole("button", { name: "Close", exact: true }).click();
   await includedGeneral.getByLabel("Section title").fill("Project basics");
   await includedGeneral.getByPlaceholder("Label").first().fill("Customer");
   await includedGeneral.locator('input[aria-label="Customer"]').fill("Template Client GmbH");

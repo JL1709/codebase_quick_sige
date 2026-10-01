@@ -1,11 +1,11 @@
 import { DndContext, PointerSensor, pointerWithin, type DragEndEvent, type DragOverEvent, useDraggable, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
-import { CircleHelp, GripVertical, Plus, Trash2 } from "lucide-react";
+import { GripVertical, Plus, Trash2 } from "lucide-react";
 import { type CSSProperties, useState } from "react";
 import { moveOverviewEntry, normalizeOverviewKey, type OverviewDropPosition } from "../domain/overviewTemplates";
 import type { OverviewEntryType, OverviewTemplateEntry } from "../domain/types";
 import { newId } from "../state/AppProvider";
-import { FieldTypeHelpModal } from "./FieldTypeHelpModal";
+import { FieldTypeHeading } from "./FieldTypeHeading";
 import { Button } from "./Ui";
 
 const overviewEntryTypes: OverviewEntryType[] = ["text", "date", "group", "repeating_group"];
@@ -35,7 +35,6 @@ export function OverviewEntryBuilder({ entries, invalidEntryIds, onChange, t, va
   valueLabelKey?: string;
 }) {
   const [entryType, setEntryType] = useState<OverviewEntryType>("text");
-  const [helpOpen, setHelpOpen] = useState(false);
   const [dropIndicator, setDropIndicator] = useState<{ entryId: string; position: OverviewDropPosition } | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
@@ -74,7 +73,7 @@ export function OverviewEntryBuilder({ entries, invalidEntryIds, onChange, t, va
   };
 
   return <>
-    <div className="template-builder-labels"><span /><span>{t("templates.entryLabel")}</span><span className="template-entry-type-heading">{t("templates.entryType")}<button type="button" className="template-help-button" aria-label={t("templates.fieldTypeHelp")} onClick={() => setHelpOpen(true)}><CircleHelp size={14} /></button></span><span>{t(valueLabelKey)}</span><span /></div>
+    <div className="template-builder-labels"><span /><span>{t("templates.entryLabel")}</span><FieldTypeHeading t={t} /><span>{t(valueLabelKey)}</span><span /></div>
     <DndContext sensors={sensors} collisionDetection={pointerWithin} onDragOver={previewMove} onDragEnd={performMove} onDragCancel={() => setDropIndicator(null)}>
       <div className="template-entry-tree">
         {entries.length === 0 && <p className="template-empty">{t("templates.noEntries")}</p>}
@@ -82,7 +81,6 @@ export function OverviewEntryBuilder({ entries, invalidEntryIds, onChange, t, va
       </div>
     </DndContext>
     <div className="template-add-entry"><select aria-label={t("templates.entryType")} value={entryType} onChange={(event) => setEntryType(event.target.value as OverviewEntryType)}>{overviewEntryTypes.map((type) => <option key={type} value={type}>{t(`templates.entryType.${type}`)}</option>)}</select><Button type="button" variant="secondary" onClick={() => addEntry(entryType)}><Plus size={14} />{t("templates.addEntry")}</Button></div>
-    <FieldTypeHelpModal open={helpOpen} onClose={() => setHelpOpen(false)} t={t} />
   </>;
 }
 
