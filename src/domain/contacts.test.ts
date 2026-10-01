@@ -3,6 +3,7 @@ import { createSeedDatabase } from "../data/seed";
 import {
   contactDisplayName,
   contactDuplicateScore,
+  isListedInContactsCatalog,
   migrateLegacyProjectContacts,
   migrateProjectRoleCatalog,
   normalizeEmail,
@@ -36,6 +37,14 @@ describe("contacts", () => {
     expect(normalizePhone("+49 (170) 123-456")).toBe("+49170123456");
     expect(contactDuplicateScore(contact("one", "ada@example.com"), contact("two", "ADA@example.com"))).toBe(100);
     expect(contactDuplicateScore(contact("one", "", "+49 170 123456"), contact("two", "", "+49 (170) 123456"))).toBe(80);
+  });
+
+  it("keeps legacy contacts listed while hiding project-only contacts from the catalog", () => {
+    const legacyContact = contact("legacy", "legacy@example.com");
+    const projectOnlyContact = { ...contact("project-only", "project@example.com"), catalogVisibility: "project_only" as const };
+
+    expect(isListedInContactsCatalog(legacyContact)).toBe(true);
+    expect(isListedInContactsCatalog(projectOnlyContact)).toBe(false);
   });
 
   it("migrates embedded participants once and derives project participants from assignments", () => {

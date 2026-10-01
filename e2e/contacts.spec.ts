@@ -203,12 +203,75 @@ test("confirms participant removal and can immediately re-add the first contact 
   await expect(danielRow).toContainText("Site manager");
 
   await participantsPanel.getByRole("button", { name: "New contact" }).click();
-  await expect(page.getByText("Saved in Contacts", { exact: true })).toBeVisible();
+  const newContactDialog = page.getByRole("dialog", { name: "New contact" });
+  const saveInContacts = newContactDialog.getByRole("switch", { name: "Save in Contacts" });
+  await expect(saveInContacts).toHaveAttribute("aria-checked", "true");
+  await expect(newContactDialog.getByText("This contact will be available in Contacts and added to this project.", { exact: true })).toBeVisible();
+  await saveInContacts.click();
+  await expect(saveInContacts).toHaveAttribute("aria-checked", "false");
+  await expect(newContactDialog.getByText("This contact will only be available in this project.", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Cancel" }).click();
 
   await page.goto("/projects/new");
   const newProjectParticipants = page.locator(".project-create-contacts");
   await expect(newProjectParticipants.getByRole("button", { name: "Import", exact: true })).toHaveCount(0);
+});
+
+test("keeps an on-the-fly project contact out of the central Contacts catalog when requested", async ({ page }) => {
+  await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Projects" }).click();
+  await page.getByRole("article").filter({ hasText: "Logistikzentrum West" }).getByRole("link", { name: "Open" }).click();
+
+  const participantsPanel = page.locator(".project-contacts-panel");
+  await participantsPanel.getByRole("button", { name: "New contact" }).click();
+  const newContactDialog = page.getByRole("dialog", { name: "New contact" });
+  await newContactDialog.getByLabel("First name").fill("Project");
+  await newContactDialog.getByLabel("Last name").fill("Only");
+  await newContactDialog.getByRole("textbox", { name: "Email addresses", exact: true }).fill("project-only@example.test");
+  await newContactDialog.getByRole("switch", { name: "Save in Contacts" }).click();
+  await newContactDialog.getByRole("button", { name: "Save" }).click();
+
+  const assignmentDialog = page.getByRole("dialog", { name: "Add contact" });
+  await expect(assignmentDialog.locator(".project-contact-picker-selection")).toContainText("Project Only");
+  await assignmentDialog.getByRole("button", { name: "Add", exact: true }).click();
+  await expect(participantsPanel.locator(".project-contact-list article").filter({ hasText: "Project Only" })).toBeVisible();
+
+  await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Contacts" }).click();
+  await expect(page.getByText("Project Only", { exact: true })).toHaveCount(0);
+  await page.getByPlaceholder("Search name, email, phone, company, or project").fill("project-only@example.test");
+  await expect(page.getByText("No contacts found", { exact: true })).toBeVisible();
+});
+
+test("keeps a project-only contact attached when it is created during project creation", async ({ page }) => {
+  await page.goto("/projects/new");
+  await page.getByLabel("Project name").fill("Project-only contact test");
+  await page.locator(".project-section-library").getByRole("button", { name: /Project participants/ }).click();
+
+  const participantsSection = page.locator(".project-create-contacts");
+  await participantsSection.getByRole("button", { name: "New contact" }).click();
+  const newContactDialog = page.getByRole("dialog", { name: "New contact" });
+  await newContactDialog.getByLabel("First name").fill("Draft");
+  await newContactDialog.getByLabel("Last name").fill("Participant");
+  await newContactDialog.getByRole("textbox", { name: "Email addresses", exact: true }).fill("draft-participant@example.test");
+  await newContactDialog.getByRole("switch", { name: "Save in Contacts" }).click();
+  await newContactDialog.getByRole("button", { name: "Save" }).click();
+
+  await expect(participantsSection.locator(".project-create-contact-list")).toContainText("Draft Participant");
+  await page.getByRole("button", { name: "Create project", exact: true }).click();
+  await expect(page).toHaveURL(/\/projects\/project-.*\/plan$/);
+
+  const persistedState = await page.evaluate(() => {
+    const database = JSON.parse(window.localStorage.getItem("quicksige.database.v3") ?? "null");
+    const contact = database.contacts.find((candidate: { emails: Array<{ normalizedValue: string }> }) => candidate.emails.some((email) => email.normalizedValue === "draft-participant@example.test"));
+    return {
+      catalogVisibility: contact?.catalogVisibility,
+      assigned: database.projectContactAssignments.some((assignment: { contactId: string }) => assignment.contactId === contact?.id),
+    };
+  });
+  expect(persistedState).toEqual({ catalogVisibility: "project_only", assigned: true });
+
+  await page.goto("/contacts");
+  await page.getByPlaceholder("Search name, email, phone, company, or project").fill("draft-participant@example.test");
+  await expect(page.getByText("No contacts found", { exact: true })).toBeVisible();
 });
 
 test("reuses organization roles and persists participant placement in the project overview", async ({ page }) => {

@@ -85,6 +85,7 @@ function createContact(
     tags: [...new Set(candidate.tags.map((tag) => tag.trim()).filter(Boolean))],
     lifecycle: "active",
     source,
+    catalogVisibility: "listed",
     createdAt: now,
     updatedAt: now,
   };
@@ -121,6 +122,7 @@ function updateContact(
       ? [...new Set(candidate.tags.map((tag) => tag.trim()).filter(Boolean))]
       : existing.tags,
     lifecycle: "active",
+    catalogVisibility: "listed",
     updatedAt: now,
   };
 }
@@ -182,11 +184,12 @@ export function commitContactImport(
           id: id("company"), organizationId: database.organization.id, name: companyName,
           website: "", domain: "",
           email: "", phone: "", notes: "", tags: [], lifecycle: "active", source: input.source,
+          catalogVisibility: "listed",
           createdAt: now, updatedAt: now,
         };
         database.companies.unshift(company);
-      } else if (company.lifecycle === "archived") {
-        company = { ...company, lifecycle: "active", updatedAt: now };
+      } else if (company.lifecycle === "archived" || company.catalogVisibility === "project_only") {
+        company = { ...company, lifecycle: "active", catalogVisibility: "listed", updatedAt: now };
         database.companies = database.companies.map((candidate) => candidate.id === company!.id ? company! : candidate);
       }
     }

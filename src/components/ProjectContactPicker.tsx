@@ -1,6 +1,6 @@
 import { Plus, Search } from "lucide-react";
 import { type KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from "react";
-import { companyForContact, contactDisplayName, primaryAffiliation, primaryEmail, primaryPhone } from "../domain/contacts";
+import { companyForContact, contactDisplayName, isListedInContactsCatalog, primaryAffiliation, primaryEmail, primaryPhone } from "../domain/contacts";
 import type { AppDatabase, Contact } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
 import { useApp } from "../state/AppProvider";
@@ -25,7 +25,7 @@ export function ProjectContactPicker({ excludedContactIds, onSelect, onCreateCon
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const excludedIds = useMemo(() => new Set(excludedContactIds), [excludedContactIds]);
   const availableContacts = useMemo(() => database.contacts
-    .filter((contact) => contact.lifecycle === "active" && !excludedIds.has(contact.id))
+    .filter((contact) => contact.lifecycle === "active" && isListedInContactsCatalog(contact) && !excludedIds.has(contact.id))
     .sort((left, right) => contactDisplayName(left).localeCompare(contactDisplayName(right))), [database.contacts, excludedIds]);
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const results = useMemo(() => availableContacts.filter((contact) => (

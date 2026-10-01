@@ -9,7 +9,7 @@ import { CREATE_PROJECT_ROLE_VALUE, ProjectRoleSelect } from "../components/Proj
 import { Badge, Button, EmptyState, Modal, PageHeader } from "../components/Ui";
 import { exportCandidatesCsv, exportCandidatesVCard, type ContactImportCandidate } from "../domain/contactImport";
 import { buildContactsDataExport } from "../domain/contactPrivacyExport";
-import { companyForContact, contactDisplayName, normalizedContactSearchText, primaryEmail, primaryPhone, projectContactRoleFromKey, projectContactRoleLabel, STANDARD_PROJECT_ROLES } from "../domain/contacts";
+import { companyForContact, contactDisplayName, isListedInContactsCatalog, normalizedContactSearchText, primaryEmail, primaryPhone, projectContactRoleFromKey, projectContactRoleLabel, STANDARD_PROJECT_ROLES } from "../domain/contacts";
 import type { AppDatabase, Company, Contact, ProjectParticipantRole, RecordLifecycle } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
 import { newId, useApp, type CompanyMergeResolution, type ContactMergeResolution } from "../state/AppProvider";
@@ -37,8 +37,9 @@ const CONTACT_MERGE_FIELDS: ContactMergeField[] = ["prefix", "givenName", "famil
 const COMPANY_MERGE_FIELDS: CompanyMergeField[] = ["website", "domain", "email", "phone", "address", "notes"];
 
 function projectAssignmentCountForCompany(database: AppDatabase, companyId: string): number {
+  const listedContactIds = new Set(database.contacts.filter(isListedInContactsCatalog).map((contact) => contact.id));
   const contactIds = new Set(database.contactAffiliations
-    .filter((affiliation) => affiliation.companyId === companyId)
+    .filter((affiliation) => affiliation.companyId === companyId && listedContactIds.has(affiliation.contactId))
     .map((affiliation) => affiliation.contactId));
   return database.projectContactAssignments.filter((assignment) => contactIds.has(assignment.contactId)).length;
 }
@@ -155,11 +156,15 @@ export function ContactsPage() {
   useEffect(() => setVisibleCount(CONTACT_PAGE_SIZE), [companyId, lifecycle, projectId, query, role, tab, tag]);
 
   const availableTags = useMemo(() => [...new Set([
-    ...database.contacts.flatMap((contact) => contact.tags),
-    ...database.companies.flatMap((company) => company.tags),
+    ...database.contacts.filter(isListedInContactsCatalog).flatMap((contact) => contact.tags),
+    ...database.companies.filter(isListedInContactsCatalog).flatMap((company) => company.tags),
   ])].sort((left, right) => left.localeCompare(right)), [database.companies, database.contacts]);
+  const listedContactIds = useMemo(() => new Set(database.contacts
+    .filter(isListedInContactsCatalog)
+    .map((contact) => contact.id)), [database.contacts]);
 
   const filteredContacts = useMemo(() => database.contacts.filter((contact) => {
+    if (!isListedInContactsCatalog(contact)) return false;
     if (lifecycle !== "all" && contact.lifecycle !== lifecycle) return false;
     const assignments = database.projectContactAssignments.filter((assignment) => assignment.contactId === contact.id && assignment.lifecycle === "active");
     if (companyId && companyForContact(database, contact.id)?.id !== companyId) return false;
@@ -170,13 +175,14 @@ export function ContactsPage() {
   }).sort((left, right) => contactDisplayName(left).localeCompare(contactDisplayName(right))), [companyId, database, deferredQuery, lifecycle, projectId, role, tag]);
 
   const filteredCompanies = useMemo(() => database.companies.filter((company) => (
-    (lifecycle === "all" || company.lifecycle === lifecycle)
+    isListedInContactsCatalog(company)
+    && (lifecycle === "all" || company.lifecycle === lifecycle)
     && (!tag || company.tags.includes(tag))
     && (!deferredQuery || [company.name, company.domain, company.email, company.phone, ...company.tags].join(" ").toLocaleLowerCase().includes(deferredQuery))
   )).sort((left, right) => left.name.localeCompare(right.name)), [database.companies, deferredQuery, lifecycle, tag]);
 
-  const previewContact = database.contacts.find((contact) => contact.id === previewContactId) ?? filteredContacts[0];
-  const previewCompany = database.companies.find((company) => company.id === routeCompanyId) ?? filteredCompanies[0];
+  const previewContact = database.contacts.find((contact) => contact.id === previewContactId && isListedInContactsCatalog(contact)) ?? filteredContacts[0];
+  const previewCompany = database.companies.find((company) => company.id === routeCompanyId && isListedInContactsCatalog(company)) ?? filteredCompanies[0];
   const visibleContacts = filteredContacts.slice(0, visibleCount);
   const visibleCompanies = filteredCompanies.slice(0, visibleCount);
   const selectedContacts = filteredContacts.filter((contact) => selectedIds.has(contact.id));
@@ -191,8 +197,8 @@ export function ContactsPage() {
     visibleColumns.has("updated") && "100px",
   ].filter(Boolean).join(" ");
 
-  if ((routeContactId && !database.contacts.some((contact) => contact.id === routeContactId))
-    || (routeCompanyId && !database.companies.some((company) => company.id === routeCompanyId))) return <NotFoundPage />;
+  if ((routeContactId && !database.contacts.some((contact) => contact.id === routeContactId && isListedInContactsCatalog(contact)))
+    || (routeCompanyId && !database.companies.some((company) => company.id === routeCompanyId && isListedInContactsCatalog(company)))) return <NotFoundPage />;
 
   const toggleSelection = (contactId: string) => setSelectedIds((current) => {
     const next = new Set(current);
@@ -303,14 +309,14 @@ export function ContactsPage() {
     </>} />
 
     <div className="contacts-tabs" role="tablist">
-      <button role="tab" aria-selected={tab === "people"} className={tab === "people" ? "is-active" : ""} onClick={() => { setTab("people"); setSelectedIds(new Set()); navigate("/contacts"); }}><Users size={17} />{t("contacts.people")}<Badge>{database.contacts.filter((contact) => contact.lifecycle === "active").length}</Badge></button>
-      <button role="tab" aria-selected={tab === "companies"} className={tab === "companies" ? "is-active" : ""} onClick={() => { setTab("companies"); setSelectedIds(new Set()); navigate("/contacts/companies"); }}><Building2 size={17} />{t("contacts.companies")}<Badge>{database.companies.filter((company) => company.lifecycle === "active").length}</Badge></button>
+      <button role="tab" aria-selected={tab === "people"} className={tab === "people" ? "is-active" : ""} onClick={() => { setTab("people"); setSelectedIds(new Set()); navigate("/contacts"); }}><Users size={17} />{t("contacts.people")}<Badge>{database.contacts.filter((contact) => contact.lifecycle === "active" && isListedInContactsCatalog(contact)).length}</Badge></button>
+      <button role="tab" aria-selected={tab === "companies"} className={tab === "companies" ? "is-active" : ""} onClick={() => { setTab("companies"); setSelectedIds(new Set()); navigate("/contacts/companies"); }}><Building2 size={17} />{t("contacts.companies")}<Badge>{database.companies.filter((company) => company.lifecycle === "active" && isListedInContactsCatalog(company)).length}</Badge></button>
     </div>
 
     <section className="panel contacts-toolbar">
       <div className="search-shell"><Search size={16} /><input className="search-input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("contacts.searchPlaceholder")} /></div>
       <select aria-label={t("contacts.lifecycle")} value={lifecycle} onChange={(event) => setLifecycle(event.target.value as RecordLifecycle | "all")}><option value="active">{t("contacts.active")}</option><option value="archived">{t("common.archived")}</option><option value="all">{t("contacts.all")}</option></select>
-      {tab === "people" && <><select aria-label={t("contacts.company")} value={companyId} onChange={(event) => setCompanyId(event.target.value)}><option value="">{t("contacts.allCompanies")}</option>{database.companies.filter((company) => company.lifecycle === "active").map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select><select aria-label={t("contacts.project")} value={projectId} onChange={(event) => setProjectId(event.target.value)}><option value="">{t("contacts.allProjects")}</option>{database.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select><select aria-label={t("contacts.role")} value={role} onChange={(event) => setRole(event.target.value as ProjectParticipantRole | "all")}><option value="all">{t("contacts.allRoles")}</option>{[...STANDARD_PROJECT_ROLES, "custom" as const].map((value) => <option key={value} value={value}>{t(`contacts.role.${value}`)}</option>)}</select></>}
+      {tab === "people" && <><select aria-label={t("contacts.company")} value={companyId} onChange={(event) => setCompanyId(event.target.value)}><option value="">{t("contacts.allCompanies")}</option>{database.companies.filter((company) => company.lifecycle === "active" && isListedInContactsCatalog(company)).map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select><select aria-label={t("contacts.project")} value={projectId} onChange={(event) => setProjectId(event.target.value)}><option value="">{t("contacts.allProjects")}</option>{database.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select><select aria-label={t("contacts.role")} value={role} onChange={(event) => setRole(event.target.value as ProjectParticipantRole | "all")}><option value="all">{t("contacts.allRoles")}</option>{[...STANDARD_PROJECT_ROLES, "custom" as const].map((value) => <option key={value} value={value}>{t(`contacts.role.${value}`)}</option>)}</select></>}
       <select aria-label={t("contacts.tags")} value={tag} onChange={(event) => setTag(event.target.value)}><option value="">{t("contacts.allTags")}</option>{availableTags.map((value) => <option key={value} value={value}>{value}</option>)}</select>
     </section>
 
@@ -342,7 +348,7 @@ export function ContactsPage() {
       {previewContact && <ContactPreview contact={previewContact} canManage={canManageContacts} onEdit={() => { setEditingContact(previewContact); setContactFormOpen(true); }} onAddToProject={() => { setSelectedIds(new Set([previewContact.id])); openBulkProjectAssignment(); }} onExport={() => exportContactRecords([previewContact], "vcf")} onToggleLifecycle={() => setArchiveRequest({ kind: "contact", ids: [previewContact.id] })} onDelete={() => { setDeleteError(""); setDeleteContactId(previewContact.id); }} />}
     </div> : <div className="contacts-layout"><section className="panel contacts-table-panel">
       {filteredCompanies.length === 0 ? <EmptyState icon={<Building2 />} title={t("contacts.noCompanies")} text={t("contacts.noCompaniesText")} action={<Button onClick={openNew}><Plus size={15} />{t("contacts.newCompany")}</Button>} /> : <><div className="company-grid">{visibleCompanies.map((company) => {
-        const contactCount = database.contactAffiliations.filter((affiliation) => affiliation.companyId === company.id && affiliation.lifecycle === "active").length;
+        const contactCount = database.contactAffiliations.filter((affiliation) => affiliation.companyId === company.id && affiliation.lifecycle === "active" && listedContactIds.has(affiliation.contactId)).length;
         return <article className={previewCompany?.id === company.id ? "is-active" : ""} key={company.id}><label className="company-select"><input type="checkbox" aria-label={t("contacts.selectCompany", { name: company.name })} checked={selectedIds.has(company.id)} onChange={() => toggleSelection(company.id)} /></label><span className="company-icon"><Building2 /></span><button type="button" className="company-open" onClick={() => navigate(`/contacts/companies/${company.id}`)}><strong>{company.name}</strong><small>{company.domain || company.website || "—"}</small></button><Badge tone="info">{t("contacts.peopleCount", { count: contactCount })}</Badge><p>{company.email || company.phone || t(`contacts.source.${company.source}`)}</p><div className="row-actions"><Button size="small" variant="secondary" disabled={!canManageContacts} onClick={() => { setEditingCompany(company); setCompanyFormOpen(true); }}>{t("common.edit")}</Button><Button size="small" variant="ghost" disabled={!canManageContacts} onClick={() => setArchiveRequest({ kind: "company", ids: [company.id] })}>{company.lifecycle === "active" ? t("common.archive") : t("common.restore")}</Button></div></article>;
       })}</div>{visibleCount < filteredCompanies.length && <div className="contacts-load-more"><Button variant="secondary" size="small" onClick={() => setVisibleCount((current) => current + CONTACT_PAGE_SIZE)}>{t("contacts.showMore", { remaining: filteredCompanies.length - visibleCount })}</Button></div>}</>}
     </section>{previewCompany && <CompanyPreview company={previewCompany} canManage={canManageContacts} onEdit={() => { setEditingCompany(previewCompany); setCompanyFormOpen(true); }} onToggleLifecycle={() => setArchiveRequest({ kind: "company", ids: [previewCompany.id] })} onDelete={() => { setDeleteError(""); setDeleteCompanyId(previewCompany.id); }} />}</div>}

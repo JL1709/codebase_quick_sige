@@ -1,5 +1,6 @@
 import { CircleHelp } from "lucide-react";
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { FieldTypeHelpModal } from "./FieldTypeHelpModal";
 
 type Translate = (key: string, params?: Record<string, string | number>) => string;
@@ -19,6 +20,9 @@ export function FieldTypeHeading({ t }: { t: Translate }) {
         <CircleHelp size={14} />
       </button>
     </span>
-    <FieldTypeHelpModal open={helpOpen} onClose={() => setHelpOpen(false)} t={t} />
+    {helpOpen && createPortal(
+      <FieldTypeHelpModal open onClose={() => setHelpOpen(false)} t={t} />,
+      document.body,
+    )}
   </>;
 }

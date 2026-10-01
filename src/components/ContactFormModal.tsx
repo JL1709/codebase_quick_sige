@@ -1,10 +1,10 @@
-import { CircleCheck, Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import { type FormEvent, useMemo, useState } from "react";
-import { companyForContact, contactDisplayName, normalizeDomain, normalizeEmail, normalizePhone } from "../domain/contacts";
+import { companyForContact, contactDisplayName, isListedInContactsCatalog, normalizeDomain, normalizeEmail, normalizePhone } from "../domain/contacts";
 import type { Company, Contact, ContactAddress, ContactEmail, ContactMethodType, ContactPhone } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
 import { newId, useApp } from "../state/AppProvider";
-import { Button, Modal } from "./Ui";
+import { Button, Modal, Toggle } from "./Ui";
 
 const EMPTY_ADDRESS: Omit<ContactAddress, "id"> = {
   type: "work", street: "", postalCode: "", city: "", region: "", country: "", primary: true,
@@ -37,6 +37,7 @@ export function ContactFormModal({ open, contact, projectParticipantContext = fa
   const [department, setDepartment] = useState(affiliation?.department ?? "");
   const [tags, setTags] = useState(contact?.tags.join(", ") ?? "");
   const [notes, setNotes] = useState(contact?.notes ?? "");
+  const [saveInContacts, setSaveInContacts] = useState(true);
   const [submitted, setSubmitted] = useState(false);
 
   const updateEmail = (id: string, patch: Partial<(typeof emails)[number]>) => setEmails((current) => current.map((email) => email.id === id ? { ...email, ...patch } : email));
@@ -59,17 +60,21 @@ export function ContactFormModal({ open, contact, projectParticipantContext = fa
       addresses: ensureAddressPrimary(addresses.filter((candidate) => [candidate.street, candidate.postalCode, candidate.city, candidate.region, candidate.country].some((value) => value.trim()))),
       notes: notes.trim(), tags: [...new Set(tags.split(",").map((tag) => tag.trim()).filter(Boolean))],
       lifecycle: contact?.lifecycle ?? "active", source: contact?.source ?? "manual",
+      catalogVisibility: contact?.catalogVisibility ?? (saveInContacts ? "listed" : "project_only"),
       createdAt: contact?.createdAt ?? now, updatedAt: now,
     };
     saveContact(savedContact);
 
     if (companyName.trim()) {
       const existingCompany = database.companies.find((candidate) => candidate.name.trim().toLocaleLowerCase() === companyName.trim().toLocaleLowerCase());
-      const savedCompany: Company = existingCompany ?? {
+      let savedCompany: Company = existingCompany ?? {
         id: newId("company"), organizationId: database.organization.id, name: companyName.trim(), website: "", domain: normalizeDomain(""), email: "", phone: "",
-        notes: "", tags: [], lifecycle: "active", source: "manual", createdAt: now, updatedAt: now,
+        notes: "", tags: [], lifecycle: "active", source: "manual", catalogVisibility: saveInContacts ? "listed" : "project_only", createdAt: now, updatedAt: now,
       };
-      if (!existingCompany) saveCompany(savedCompany);
+      if (existingCompany && saveInContacts && !isListedInContactsCatalog(existingCompany)) {
+        savedCompany = { ...existingCompany, catalogVisibility: "listed", updatedAt: now };
+      }
+      if (!existingCompany || savedCompany !== existingCompany) saveCompany(savedCompany);
       saveContactAffiliation({
         id: affiliation?.id ?? newId("affiliation"), organizationId: database.organization.id,
         contactId, companyId: savedCompany.id, jobTitle: jobTitle.trim(), department: department.trim(),
@@ -95,7 +100,7 @@ export function ContactFormModal({ open, contact, projectParticipantContext = fa
         <MethodEditor title={t("contacts.phones")} primaryLabel={t("contacts.primary")} removeLabel={t("common.remove")} values={phones} addLabel={t("contacts.addPhone")} onAdd={() => setPhones((current) => [...current, { id: newId("phone"), type: "work", value: "", primary: current.length === 0 }])} onUpdate={updatePhone} onRemove={(id) => setPhones((current) => current.filter((value) => value.id !== id))} onPrimary={(id) => setPhones((current) => current.map((value) => ({ ...value, primary: value.id === id })))} typeOptions={methodTypeOptions(t)} />
 
         <fieldset className="contact-fieldset"><legend>{t("contacts.company")}</legend><div className="form-grid">
-          <label className="field"><span>{t("contacts.companyName")}</span><input list="contact-companies" value={companyName} onChange={(event) => setCompanyName(event.target.value)} /><datalist id="contact-companies">{database.companies.filter((candidate) => candidate.lifecycle === "active").map((candidate) => <option key={candidate.id} value={candidate.name} />)}</datalist></label>
+          <label className="field"><span>{t("contacts.companyName")}</span><input list="contact-companies" value={companyName} onChange={(event) => setCompanyName(event.target.value)} /><datalist id="contact-companies">{database.companies.filter((candidate) => candidate.lifecycle === "active" && isListedInContactsCatalog(candidate)).map((candidate) => <option key={candidate.id} value={candidate.name} />)}</datalist></label>
           <label className="field"><span>{t("contacts.jobTitle")}</span><input value={jobTitle} onChange={(event) => setJobTitle(event.target.value)} /></label>
           <label className="field span-two"><span>{t("contacts.department")}</span><input value={department} onChange={(event) => setDepartment(event.target.value)} /></label>
         </div></fieldset>
@@ -123,7 +128,7 @@ export function ContactFormModal({ open, contact, projectParticipantContext = fa
         <label className="field"><span>{t("contacts.tags")}</span><input value={tags} onChange={(event) => setTags(event.target.value)} placeholder={t("contacts.tagsPlaceholder")} /></label>
         <label className="field"><span>{t("contacts.notes")}</span><textarea value={notes} onChange={(event) => setNotes(event.target.value)} /></label>
         {contact && <p className="field-help">{t("contacts.editing", { name: contactDisplayName(contact) })}</p>}
-        {projectParticipantContext && !contact && <div className="contact-catalog-notice"><CircleCheck size={18} aria-hidden="true" /><span><strong>{t("contacts.savedToContacts")}</strong><small>{t("contacts.savedToContactsHelp")}</small></span></div>}
+        {projectParticipantContext && !contact && <div className="contact-catalog-toggle"><Toggle checked={saveInContacts} onChange={setSaveInContacts} label={t("contacts.savedToContacts")} /><small>{t(saveInContacts ? "contacts.savedToContactsHelp" : "contacts.projectOnlyContactHelp")}</small></div>}
       </div>
       <div className="modal-footer"><Button type="button" variant="secondary" onClick={onClose}>{t("common.cancel")}</Button><Button type="submit">{t("common.save")}</Button></div>
     </form>

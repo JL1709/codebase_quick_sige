@@ -24,6 +24,10 @@ export const STANDARD_PROJECT_ROLES: Exclude<ProjectParticipantRole, "custom">[]
   "contractor",
 ];
 
+export function isListedInContactsCatalog(record: Contact | Company): boolean {
+  return record.catalogVisibility !== "project_only";
+}
+
 const ROLE_ALIASES: Record<string, ProjectParticipantRole> = {
   client: "client",
   auftraggeber: "client",

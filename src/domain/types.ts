@@ -8,6 +8,7 @@ export type RecordLifecycle = "active" | "archived";
 export type ContactMethodType = "work" | "mobile" | "home" | "other";
 export type ProjectParticipantRole = "client" | "owner" | "responsible_third_party" | "coordinator" | "architect" | "planner" | "site_manager" | "contractor" | "custom";
 export type ContactSource = "manual" | "migration" | "vcard" | "csv" | "xlsx" | "microsoft" | "google";
+export type ContactsCatalogVisibility = "listed" | "project_only";
 
 export interface Organization { id: string; name: string; accentColor: string }
 export interface AppUser { id: string; organizationId: string; name: string; email: string; role: "owner" | "admin" | "editor" | "viewer"; preferredLocale: Locale }
@@ -63,6 +64,7 @@ export interface Contact {
   tags: string[];
   lifecycle: RecordLifecycle;
   source: ContactSource;
+  catalogVisibility?: ContactsCatalogVisibility;
   mergedIntoId?: string;
   createdAt: string;
   updatedAt: string;
@@ -81,6 +83,7 @@ export interface Company {
   tags: string[];
   lifecycle: RecordLifecycle;
   source: ContactSource;
+  catalogVisibility?: ContactsCatalogVisibility;
   mergedIntoId?: string;
   createdAt: string;
   updatedAt: string;

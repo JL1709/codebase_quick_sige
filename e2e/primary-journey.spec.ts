@@ -206,6 +206,7 @@ test("project creation applies templates and guided assessment creates a plan", 
   const customSection = page.locator(".project-included-section").first();
   await customSection.getByRole("button", { name: "Explain field types" }).click();
   const customSectionFieldTypeHelp = page.getByRole("dialog", { name: "Understanding field types" });
+  await expect(customSectionFieldTypeHelp).toHaveCSS("text-transform", "none");
   await expect(customSectionFieldTypeHelp.getByText("Address", { exact: true })).toBeVisible();
   await customSectionFieldTypeHelp.locator(".modal-footer").getByRole("button", { name: "Close", exact: true }).click();
   await customSection.getByLabel("Section title").fill("Internal project data");
@@ -839,6 +840,7 @@ test("Templates is separate from Settings and retains complete template manageme
   await expect(page.getByText("Enter a template name.")).toBeVisible();
   await page.getByRole("button", { name: "Explain field types" }).click();
   const fieldTypeHelp = page.getByRole("dialog").filter({ hasText: "Understanding field types" });
+  await expect(fieldTypeHelp).toHaveCSS("text-transform", "none");
   await expect(fieldTypeHelp.getByText("Address", { exact: true })).toBeVisible();
   await expect(fieldTypeHelp.getByText("Project participants", { exact: true })).toBeVisible();
   await expect(fieldTypeHelp.getByText("+ Add another participant", { exact: true })).toBeVisible();

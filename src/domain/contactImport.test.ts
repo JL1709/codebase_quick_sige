@@ -305,6 +305,7 @@ describe("contact import", () => {
     existing.givenName = "Existing";
     existing.familyName = "Person";
     existing.notes = "Keep this note";
+    existing.catalogVisibility = "project_only";
     let sequence = 0;
     const result = commitContactImport(database, {
       source: "csv",
@@ -324,6 +325,7 @@ describe("contact import", () => {
       givenName: "Imported",
       familyName: "Person",
       notes: "Keep this note",
+      catalogVisibility: "listed",
     });
     expect(result.batch.items[0].action).toBe("merged");
   });
@@ -334,6 +336,7 @@ describe("contact import", () => {
     existing.givenName = "Existing";
     existing.familyName = "Person";
     existing.notes = "Keep this note";
+    existing.catalogVisibility = "project_only";
     let sequence = 0;
     const result = commitContactImport(database, {
       source: "vcard",
@@ -352,7 +355,7 @@ describe("contact import", () => {
 
     const updated = result.database.contacts.find((contact) => contact.id === existing.id)!;
     const primaryAffiliation = result.database.contactAffiliations.find((affiliation) => affiliation.contactId === existing.id && affiliation.primary)!;
-    expect(updated).toMatchObject({ givenName: "Imported", familyName: "Person", notes: "Keep this note" });
+    expect(updated).toMatchObject({ givenName: "Imported", familyName: "Person", notes: "Keep this note", catalogVisibility: "listed" });
     expect(updated).not.toHaveProperty("displayName");
     expect(updated.phones.map((phone) => phone.value)).toEqual(["+49 30 123456"]);
     expect(result.database.companies.find((company) => company.id === primaryAffiliation.companyId)?.name).toBe("New Company");
