@@ -1481,13 +1481,13 @@ test("responsive plan toolbar stays contained and selection keeps the canvas sta
   await page.goto("/projects/project-logistics-center/plan");
   const compactToolbar = page.locator(".editor-toolbar");
   await expect(compactToolbar).toHaveCSS("height", "100px");
-  const compactToolbarBounds = await compactToolbar.boundingBox();
-  const compactPrimaryBounds = await page.locator(".editor-toolbar-primary").boundingBox();
-  expect(compactToolbarBounds).not.toBeNull();
-  expect(compactPrimaryBounds).not.toBeNull();
+  const compactPrimaryEndBounds = await page.locator(".editor-toolbar-primary > :last-child").boundingBox();
+  const compactTrailingEndBounds = await page.locator(".editor-toolbar-trailing > :last-child").boundingBox();
+  expect(compactPrimaryEndBounds).not.toBeNull();
+  expect(compactTrailingEndBounds).not.toBeNull();
   expect(Math.abs(
-    compactPrimaryBounds!.x + compactPrimaryBounds!.width / 2
-    - (compactToolbarBounds!.x + compactToolbarBounds!.width / 2),
+    compactPrimaryEndBounds!.x + compactPrimaryEndBounds!.width
+    - (compactTrailingEndBounds!.x + compactTrailingEndBounds!.width),
   )).toBeLessThan(2);
 
   await page.setViewportSize({ width: 1728, height: 1117 });

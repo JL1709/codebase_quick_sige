@@ -972,7 +972,6 @@ textarea.canvas-inline-editor { min-height: 34px; resize: none; }
     align-content: center;
     row-gap: 4px;
   }
-  .editor-toolbar-primary { justify-content: center; }
 }
 
 @container plan-workspace (max-width: 900px) {
