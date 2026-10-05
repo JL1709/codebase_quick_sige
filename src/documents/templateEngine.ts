@@ -5,11 +5,15 @@ import {
 } from "docx";
 import JSZip from "jszip";
 import type {
-  BuildingBlock, BuildingBlockCategory, ConstructionType, DocumentType, Locale, Plan, Project,
-  ProjectDocumentConfiguration,
+  BuildingBlock, BuildingBlockCategory, DocumentType, Locale, Plan, Project,
+  Organization, ProjectOverviewEntry,
 } from "../domain/types";
 import { categoryHierarchyColor, categoryIdsInHierarchyOrder, categoryTrail } from "../domain/categoryTree";
 import { overviewSectionTemplateData } from "../domain/overviewTemplates";
+import { normalizeOverviewKey } from "../domain/placeholderNames";
+import { PROJECT_PARTICIPANTS_SECTION_ID } from "../domain/projectOverviewOrder";
+import { emptyOrganizationProfile, organizationAddressLines } from "../domain/organizationProfile";
+import type { OrganizationDocumentProfile } from "./organizationData";
 
 const COMMAND_DELIMITER: [string, string] = ["{{", "}}"];
 const SAFE_PATH = /^(qs(?:\.[A-Za-z_][A-Za-z0-9_]*)+|\$[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*|\$idx)$/;
@@ -26,6 +30,9 @@ const EXTERNAL_RELATIONSHIP = /TargetMode\s*=\s*["']External["']/i;
 const XML_TEXT = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g;
 const XML_ENTITY_MAP: Record<string, string> = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&apos;": "'" };
 const FRIENDLY_PLACEHOLDER = /\{\{\s*([#/])?\s*(qs(?:\.[A-Za-z_][A-Za-z0-9_]*)+)\s*\}\}/g;
+// User fields may also be named Image or Color, so formatting is restricted to built-in paths.
+const IMAGE_PLACEHOLDER_PATH = /^qs\.(?:organization\.(?:logo|logo_images)|project\.(?:files|plan\.(?:blocks|category_tree\.blocks)))\.image$/;
+const PLAN_STYLE_PLACEHOLDER_PATH = /^qs\.project\.plan\.(?:blocks|category_tree(?:\.blocks)?)\.(color|cell_fill)$/;
 const LEGACY_AUTHOR_COMMAND = /\{\{\s*(?:FOR|END-FOR|INS|IMAGE)\b[^{}]*\}\}/gi;
 const DYNAMIC_CELL_FILL = /\[\[QS_CELL_FILL:([0-9A-F]{6})\]\]/gi;
 const DYNAMIC_TEXT_COLOR = /\[\[QS_TEXT_COLOR:([0-9A-F]{6})\]\]/gi;
@@ -39,13 +46,8 @@ const BLOCK_IMAGE_COLUMN_WIDTH_DXA = 3_500;
 const BLOCK_DESCRIPTION_COLUMN_WIDTH_DXA = A4_CONTENT_WIDTH_DXA - BLOCK_ACCENT_COLUMN_WIDTH_DXA - BLOCK_IMAGE_COLUMN_WIDTH_DXA;
 const BLOCK_IMAGE_WIDTH_CM = 5.3;
 const BLOCK_IMAGE_HEIGHT_CM = 3.6;
-const FRIENDLY_LOOP_VARIABLES: Record<string, string> = {
-  "qs.emergency_contacts": "contact",
-  "qs.participants": "participant",
-  "qs.plan.category_tree": "category",
-  "qs.category.blocks": "block",
-  "qs.plan.blocks": "block",
-};
+const ORGANIZATION_LOGO_MAX_WIDTH_CM = 4;
+const ORGANIZATION_LOGO_MAX_HEIGHT_CM = 1.5;
 
 export interface TemplateInspection {
   placeholders: string[];
@@ -62,7 +64,9 @@ export interface TemplateFileValidation extends TemplateInspection {
   uncompressedBytes: number;
 }
 
-type TemplateData = Record<string, unknown>;
+export type TemplateData = Record<string, unknown> & {
+  collectionExamples?: Record<string, Record<string, unknown>>;
+};
 
 interface FriendlyLoopScope {
   path: string;
@@ -143,25 +147,16 @@ function rewriteXmlTextMatches(
 }
 
 function scopedTemplatePath(path: string, scopes: FriendlyLoopScope[]): string {
-  const segments = path.split(".");
-  const contextualVariable = segments[1];
-  if (scopes.some((scope) => scope.variable === contextualVariable)) {
-    return `$${contextualVariable}${segments.length > 2 ? `.${segments.slice(2).join(".")}` : ""}`;
-  }
+  const scope = [...scopes].reverse().find((candidate) => path === candidate.path || path.startsWith(`${candidate.path}.`));
+  if (scope) return `$${scope.variable}${path.slice(scope.path.length)}`;
   return path;
-}
-
-function loopVariable(path: string): string {
-  const knownVariable = FRIENDLY_LOOP_VARIABLES[path];
-  if (knownVariable) return knownVariable;
-  return path.split(".").at(-1) ?? "item";
 }
 
 function friendlyCommand(match: RegExpMatchArray, scopes: FriendlyLoopScope[]): string {
   const marker = match[1];
   const path = match[2];
   if (marker === "#") {
-    const variable = loopVariable(path);
+    const variable = `loop${scopes.length}`;
     const collectionPath = scopedTemplatePath(path, scopes);
     scopes.push({ path, variable });
     return `{{FOR ${variable} IN ${collectionPath}}}`;
@@ -174,9 +169,8 @@ function friendlyCommand(match: RegExpMatchArray, scopes: FriendlyLoopScope[]): 
   }
 
   let valuePath = scopedTemplatePath(path, scopes);
-  const lastSegment = path.split(".").at(-1);
-  if (lastSegment === "color" && valuePath.startsWith("$")) valuePath = `${valuePath.slice(0, -"color".length)}cell_fill`;
-  return `{{${lastSegment === "image" ? "IMAGE" : "INS"} ${valuePath}}}`;
+  if (path.endsWith(".color") && PLAN_STYLE_PLACEHOLDER_PATH.test(path) && valuePath.startsWith("$")) valuePath = `${valuePath.slice(0, -"color".length)}cell_fill`;
+  return `{{${IMAGE_PLACEHOLDER_PATH.test(path) ? "IMAGE" : "INS"} ${valuePath}}}`;
 }
 
 async function normalizeTemplateSyntax(template: ArrayBuffer): Promise<ArrayBuffer> {
@@ -354,19 +348,14 @@ function stableStringify(value: unknown): string {
   return JSON.stringify(value);
 }
 
-export function documentDependencyFingerprint(project: Project, locale: Locale, plan?: Plan): string {
-  const payload = stableStringify({ locale, project, plan });
+export function documentDependencyFingerprint(project: Project, locale: Locale, plan?: Plan, organization?: Organization): string {
+  const payload = stableStringify({ locale, project, plan, organization });
   let hash = 2_166_136_261;
   for (let index = 0; index < payload.length; index += 1) {
     hash ^= payload.charCodeAt(index);
     hash = Math.imul(hash, 16_777_619);
   }
   return (hash >>> 0).toString(16).padStart(8, "0");
-}
-
-export function normalizePlaceholderKey(value: string, fallback: string): string {
-  const normalized = value.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
-  return normalized || fallback;
 }
 
 function dataUrlImage(
@@ -384,8 +373,6 @@ interface A4TemplateBlock {
   title: string;
   a0_description: string;
   a4_description: string;
-  short_description: string;
-  long_description: string;
   regulations: string;
   image: ReturnType<typeof dataUrlImage>;
   color: string;
@@ -467,8 +454,6 @@ function buildA4CategoryTree(
           title: item.customTitle?.[locale] ?? content.title,
           a0_description: item.customShortDescription?.[locale] ?? content.shortDescription,
           a4_description: content.longDescription,
-          short_description: item.customShortDescription?.[locale] ?? content.shortDescription,
-          long_description: content.longDescription,
           regulations: block.regulations.join(", "),
           image: dataUrlImage(item.imageDataUrl ?? block.imageDataUrl, { width: BLOCK_IMAGE_WIDTH_CM, height: BLOCK_IMAGE_HEIGHT_CM }),
           color: blockColor,
@@ -490,51 +475,86 @@ function buildA4CategoryTree(
 }
 
 export function buildTemplateData(
-  project: Project,
+  project: Project | undefined,
   plan: Plan | undefined,
   locale: Locale,
   blocks: BuildingBlock[],
   categories: BuildingBlockCategory[] = [],
-  documentConfigurations: ProjectDocumentConfiguration[] = [],
+  organization?: OrganizationDocumentProfile,
 ): TemplateData {
-  const constructionTypeLabels: Record<Locale, Record<ConstructionType, string>> = {
-    de: { new_build: "Neubau", renovation: "Sanierung / Umbau", demolition: "Abbruch" },
-    en: { new_build: "New build", renovation: "Renovation", demolition: "Demolition" },
-  };
   const participantRoleLabels: Record<Locale, Record<Project["participants"][number]["role"], string>> = {
     de: { client: "Auftraggeber", owner: "Bauherr", responsible_third_party: "Beauftragter Dritter", coordinator: "SiGe-Koordination", architect: "Architektur", planner: "Fachplanung", site_manager: "Bauleitung", contractor: "Auftragnehmer", custom: "Weitere Rolle" },
     en: { client: "Client", owner: "Owner", responsible_third_party: "Responsible third party", coordinator: "Safety coordination", architect: "Architecture", planner: "Specialist planning", site_manager: "Site management", contractor: "Contractor", custom: "Other role" },
   };
   const projectFields: Record<string, unknown> = {
-    number: project.projectNumber ?? "", name: project.name, description: project.description ?? "", address: project.address ?? "",
-    city: project.city ?? "", construction_type: project.constructionType ?? "", start_date: project.startDate ?? "", end_date: project.endDate ?? "",
-    construction_type_label: project.constructionType ? constructionTypeLabels[locale][project.constructionType] : "", language: locale,
+    name: project?.name ?? "", number: project?.projectNumber ?? "", language: locale,
+    ...Object.fromEntries((project?.overviewSections ?? []).map((section) => [normalizeOverviewKey(section.name), overviewSectionTemplateData(section, locale)])),
   };
-  project.customFields.forEach((field, index) => { projectFields[field.placeholderKey || normalizePlaceholderKey(field.key, `field_${index + 1}`)] = field.value; });
-  const customSections: Record<string, unknown> = {};
-  project.customSections.forEach((section, sectionIndex) => {
-    const values: Record<string, string> = {};
-    section.fields.forEach((field, fieldIndex) => { values[field.placeholderKey || normalizePlaceholderKey(field.key, `field_${fieldIndex + 1}`)] = field.value; });
-    customSections[section.placeholderKey || normalizePlaceholderKey(section.title, `section_${sectionIndex + 1}`)] = values;
-  });
-  project.overviewSections.forEach((section) => {
-    customSections[section.placeholderKey] = overviewSectionTemplateData(section, locale);
-  });
+  const collectionExamples: Record<string, Record<string, unknown>> = {};
+  const entryExample = (entry: ProjectOverviewEntry, parentPath: string): unknown => {
+    const path = `${parentPath}.${normalizeOverviewKey(entry.label)}`;
+    if (entry.type === "text" || entry.type === "date") return "";
+    const example = Object.fromEntries(entry.children.map((child) => [normalizeOverviewKey(child.label), entryExample(child, path)]));
+    if (entry.type === "repeating_group") { collectionExamples[path] = example; return []; }
+    return example;
+  };
+  project?.overviewSections.forEach((section) => section.entries.forEach((entry) => entryExample(entry, `qs.project.${normalizeOverviewKey(section.name)}`)));
+  if (project?.overviewSectionOrder.includes(PROJECT_PARTICIPANTS_SECTION_ID)) {
+    const fields = locale === "de" ? ["Name", "Unternehmen", "Rolle", "E-Mail", "Telefon"] : ["Name", "Company", "Role", "Email", "Phone"];
+    const keys = fields.map((label) => normalizeOverviewKey(label));
+    const participantPath = `qs.project.${normalizeOverviewKey(project.participantsSectionName)}`;
+    collectionExamples[participantPath] = Object.fromEntries(keys.map((key) => [key, ""]));
+    const participantsByAssignment = new Map<string, { participant: Project["participants"][number]; roles: string[] }>();
+    project.participants.forEach((participant) => {
+      const assignmentId = participant.id.split(":")[0];
+      const current = participantsByAssignment.get(assignmentId) ?? { participant, roles: [] };
+      const roleLabel = participant.role === "custom" ? participant.customRole ?? "" : participantRoleLabels[locale][participant.role];
+      if (roleLabel) current.roles.push(roleLabel);
+      participantsByAssignment.set(assignmentId, current);
+    });
+    projectFields[normalizeOverviewKey(project.participantsSectionName)] = [...participantsByAssignment.values()].map(({ participant, roles }) => (
+      Object.fromEntries([participant.name, participant.company, roles.join(", "), participant.email, participant.phone].map((value, index) => [keys[index], value]))
+    ));
+  }
   const categoryTree = buildA4CategoryTree(plan, locale, blocks, categories);
   const planBlocks = categoryTree.flatMap((category) => category.blocks);
+  const profile = organization ?? emptyOrganizationProfile();
+  const logo = organization?.logo;
+  const logoScale = logo ? Math.min(ORGANIZATION_LOGO_MAX_WIDTH_CM / logo.width, ORGANIZATION_LOGO_MAX_HEIGHT_CM / logo.height) : 1;
+  const logoImage = dataUrlImage(organization?.logoDataUrl, logo ? { width: logo.width * logoScale, height: logo.height * logoScale } : undefined);
+  const addressLines = organizationAddressLines(organization);
+  const contactLine = [profile.phone && `${profile.phone}${profile.phoneExtension ? ` ext. ${profile.phoneExtension}` : ""}`, profile.email, profile.website].filter(Boolean).join(" · ");
+  const blockExample = { category: "", title: "", a0_description: "", a4_description: "", regulations: "", image: undefined, color: "", cell_fill: "", expert_note: "" } satisfies A4TemplateBlock;
+  collectionExamples["qs.project.plan.blocks"] = blockExample;
+  collectionExamples["qs.project.plan.category_tree"] = { id: "", title: "", path: "", depth: 0, color: "", cell_fill: "", blocks: [] };
+  collectionExamples["qs.project.plan.category_tree.blocks"] = blockExample;
+  collectionExamples["qs.project.files"] = { filename: "", image: undefined };
+  collectionExamples["qs.organization.profiles"] = {};
+  collectionExamples["qs.organization.logo_images"] = { image: undefined };
   return {
+    collectionExamples,
     qs: {
-      project: projectFields,
-      overview: { ...projectFields, ...customSections },
-      emergency_contacts: project.emergencyContacts.map((contact) => ({ label: contact.label, name: contact.name, phone: contact.phone })),
-      participants: project.participants.map((participant) => ({ role: participant.role, role_label: participant.customRole || participantRoleLabels[locale][participant.role], company: participant.company, name: participant.name, email: participant.email, phone: participant.phone })),
-      plan: {
-        title: plan ? (locale === "de" ? "Sicherheits- und Gesundheitsschutzplan" : "Safety and Health Plan") : "",
-        category_tree: categoryTree,
-        blocks: planBlocks,
+      organization: {
+        profiles: organization ? [{}] : [],
+        name: profile.name,
+        address: { street: profile.address.street, house_number: profile.address.houseNumber, address_addition: profile.address.addressAddition, postal_code: profile.address.postalCode, city: profile.address.city, region: profile.address.region, country_code: profile.address.countryCode },
+        formatted_address: addressLines.join("\n"),
+        phone: profile.phone, phone_extension: profile.phoneExtension, mobile_phone: profile.mobilePhone,
+        fax: profile.fax, fax_extension: profile.faxExtension, email: profile.email, website: profile.website,
+        logo: { image: logoImage },
+        logo_images: logoImage ? [{ image: logoImage }] : [],
+        address_line: addressLines.join(" · "),
+        contact_line: contactLine,
       },
-      assets: project.assets.map((asset) => ({ filename: asset.filename, image: asset.mimeType.startsWith("image/") ? dataUrlImage(asset.dataUrl) : undefined })),
-      documents: documentConfigurations.map((configuration) => ({ type: configuration.documentType, template_id: configuration.templateId })),
+      project: {
+        ...projectFields,
+        plan: {
+          title: plan ? (locale === "de" ? "Sicherheits- und Gesundheitsschutzplan" : "Safety and Health Plan") : "",
+          category_tree: categoryTree,
+          blocks: planBlocks,
+        },
+        files: (project?.assets ?? []).map((asset) => ({ filename: asset.filename, image: asset.mimeType.startsWith("image/") ? dataUrlImage(asset.dataUrl) : undefined })),
+      },
     },
   };
 }
@@ -631,10 +651,29 @@ function resolvePath(data: TemplateData, path: string): { exists: boolean; value
   const segments = path.split(".");
   let current: unknown = data;
   for (const segment of segments) {
-    if (!current || typeof current !== "object" || !(segment in current)) return { exists: false, value: undefined };
+    if (!current || typeof current !== "object" || !Object.hasOwn(current, segment)) return { exists: false, value: undefined };
     current = (current as Record<string, unknown>)[segment];
   }
   return { exists: true, value: current };
+}
+
+export function templatePlaceholderReference(data: TemplateData): string[] {
+  const placeholders = new Set<string>();
+  const visit = (value: unknown, path: string) => {
+    if (path.endsWith(".cell_fill") && PLAN_STYLE_PLACEHOLDER_PATH.test(path)) return;
+    if (IMAGE_PLACEHOLDER_PATH.test(path)) { placeholders.add(`{{${path}}}`); return; }
+    if (Array.isArray(value)) {
+      placeholders.add(`{{#${path}}}`);
+      const example = data.collectionExamples?.[path];
+      if (example) visit(example, path);
+      value.forEach((entry) => visit(entry, path));
+      placeholders.add(`{{/${path}}}`);
+    } else if (value && typeof value === "object") {
+      Object.entries(value).forEach(([key, entry]) => visit(entry, `${path}.${key}`));
+    } else placeholders.add(`{{${path}}}`);
+  };
+  visit(data.qs, "qs");
+  return [...placeholders];
 }
 
 export async function inspectTemplate(template: ArrayBuffer, data: TemplateData): Promise<TemplateInspection> {
@@ -645,6 +684,12 @@ export async function inspectTemplate(template: ArrayBuffer, data: TemplateData)
   const missing = new Set<string>();
   const unsafe = new Set(legacyAuthorCommands);
   const loopStack: Array<{ path: string; variable: string; entries: unknown[] }> = [];
+  const sourcePath = (path: string): string => {
+    if (!path.startsWith("$")) return path;
+    const [variable, ...segments] = path.slice(1).split(".");
+    const scope = [...loopStack].reverse().find((candidate) => candidate.variable === variable);
+    return scope ? `${scope.path}${segments.length ? `.${segments.join(".")}` : ""}` : path;
+  };
   const resolveValues = (path: string): { exists: boolean; values: unknown[] } => {
     if (path.startsWith("qs.")) {
       const resolved = resolvePath(data, path);
@@ -654,16 +699,17 @@ export async function inspectTemplate(template: ArrayBuffer, data: TemplateData)
     const scope = [...loopStack].reverse().find((candidate) => candidate.variable === variable);
     if (!scope) return { exists: false, values: [] };
     if (!segments.length) return { exists: true, values: scope.entries };
-    if (!scope.entries.length) return { exists: true, values: [] };
-    const resolved = scope.entries.map((entry) => resolvePath(entry as TemplateData, segments.join(".")));
+    const entries = scope.entries.length ? scope.entries : data.collectionExamples?.[scope.path] ? [data.collectionExamples[scope.path]] : [];
+    const resolved = entries.map((entry) => resolvePath(entry as TemplateData, segments.join(".")));
+    if (!entries.length) return { exists: false, values: [] };
     return { exists: resolved.every((entry) => entry.exists), values: resolved.filter((entry) => entry.exists).map((entry) => entry.value) };
   };
   commands.forEach((command) => {
     const code = command.code.trim();
     if (["INS", "IMAGE"].includes(command.type)) {
       if (!SAFE_PATH.test(code)) { unsafe.add(command.raw); return; }
-      placeholders.add(code);
-      if (!resolveValues(code).exists) missing.add(code);
+      placeholders.add(sourcePath(code));
+      if (!resolveValues(code).exists) missing.add(sourcePath(code));
       return;
     }
     if (command.type === "FOR") {
@@ -671,10 +717,11 @@ export async function inspectTemplate(template: ArrayBuffer, data: TemplateData)
       if (!match) { unsafe.add(command.raw); return; }
       if (loopStack.length >= MAXIMUM_LOOP_NESTING) { unsafe.add(`${command.raw} (loop nesting is limited to ${MAXIMUM_LOOP_NESTING} levels)`); return; }
       if (loopStack.some((scope) => scope.variable === match[1])) { unsafe.add(`${command.raw} (duplicate loop variable)`); return; }
-      placeholders.add(match[2]);
+      const path = sourcePath(match[2]);
+      placeholders.add(path);
       const collection = resolveValues(match[2]);
-      if (!collection.exists) missing.add(match[2]);
-      loopStack.push({ path: match[2], variable: match[1], entries: collection.values.flatMap((value) => Array.isArray(value) ? value : []) });
+      if (!collection.exists) missing.add(path);
+      loopStack.push({ path, variable: match[1], entries: collection.values.flatMap((value) => Array.isArray(value) ? value : []) });
       return;
     }
     if (command.type === "END-FOR" && SAFE_LOOP_END.test(code)) {
@@ -692,11 +739,19 @@ export async function renderTemplate(template: ArrayBuffer, data: TemplateData):
   if (inspection.unsafeCommands.length) throw new Error(`Unsafe template commands: ${inspection.unsafeCommands.join(", ")}`);
   const friendlyTemplate = await normalizeTemplateSyntax(template);
   const normalizedTemplate = await applyControlledPageBreaks(friendlyTemplate);
+  const commands = await listCommands(normalizedTemplate, COMMAND_DELIMITER);
+  const collectionPaths = new Set(commands.filter((command) => command.type === "FOR")
+    .map((command) => SAFE_LOOP.exec(command.code.trim())?.[2]));
   const report = await createReport({
     template: new Uint8Array(normalizedTemplate), data, cmdDelimiter: COMMAND_DELIMITER, rejectNullish: false,
-    // Every command is restricted to a property path before execution, so the direct evaluator
-    // avoids the browser-only vm shim without exposing arbitrary template JavaScript.
-    failFast: false, processLineBreaks: true, noSandbox: true,
+    // Resolve property paths directly so absent parents render empty without evaluating template code.
+    runJs: ({ sandbox }) => {
+      const path = sandbox.__code__?.trim() ?? "";
+      if (!SAFE_PATH.test(path)) throw new Error(`Unsupported template path: ${path}`);
+      const { value } = resolvePath(sandbox, path);
+      return { modifiedSandbox: sandbox, result: collectionPaths.has(path) ? (Array.isArray(value) ? value : []) : value };
+    },
+    failFast: false, processLineBreaks: true,
   });
   const reportBuffer = report.buffer.slice(report.byteOffset, report.byteOffset + report.byteLength) as ArrayBuffer;
   const styledReport = await applyDynamicStyles(reportBuffer);
@@ -728,8 +783,8 @@ function standardA4Template(locale: Locale): Document {
         keepNext: true,
         spacing: { before: 0, after: 0 },
         children: [
-          placeholder("qs.category.color", { color: FALLBACK_CATEGORY_COLOR, size: 2 }),
-          placeholder("qs.category.title", { bold: true, color: "FFFFFF", size: 27 }),
+          placeholder("qs.project.plan.category_tree.color", { color: FALLBACK_CATEGORY_COLOR, size: 2 }),
+          placeholder("qs.project.plan.category_tree.title", { bold: true, color: "FFFFFF", size: 27 }),
         ],
       })],
     })] })],
@@ -744,22 +799,22 @@ function standardA4Template(locale: Locale): Document {
           width: { size: BLOCK_ACCENT_COLUMN_WIDTH_DXA, type: WidthType.DXA },
           shading: { fill: "D5FF3F", type: ShadingType.CLEAR },
           margins: { top: 0, bottom: 0, left: 0, right: 0 },
-          children: [new Paragraph({ spacing: { before: 0, after: 0 }, children: [placeholder("qs.block.color", { color: "D5FF3F", size: 2 })] })],
+          children: [new Paragraph({ spacing: { before: 0, after: 0 }, children: [placeholder("qs.project.plan.category_tree.blocks.color", { color: "D5FF3F", size: 2 })] })],
         }),
         new TableCell({
           width: { size: BLOCK_IMAGE_COLUMN_WIDTH_DXA, type: WidthType.DXA },
           margins: { top: 140, bottom: 140, left: 140, right: 140 },
           verticalAlign: VerticalAlign.CENTER,
-          children: [new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 0 }, children: [placeholder("qs.block.image", { size: 18 })] })],
+          children: [new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 0 }, children: [placeholder("qs.project.plan.category_tree.blocks.image", { size: 18 })] })],
         }),
         new TableCell({
           width: { size: BLOCK_DESCRIPTION_COLUMN_WIDTH_DXA, type: WidthType.DXA },
           margins: { top: 150, bottom: 150, left: 190, right: 190 },
           verticalAlign: VerticalAlign.CENTER,
           children: [
-            new Paragraph({ keepNext: true, spacing: { before: 0, after: 100 }, children: [placeholder("qs.block.title", { bold: true, color: "10251F", size: 22 })] }),
-            new Paragraph({ keepNext: true, spacing: { before: 0, after: 110, line: 276 }, children: [placeholder("qs.block.a4_description", { color: "263A34", size: 20 })] }),
-            new Paragraph({ spacing: { before: 0, after: 0 }, children: [placeholder("qs.block.regulations", { color: "5B6A65", size: 17 })] }),
+            new Paragraph({ keepNext: true, spacing: { before: 0, after: 100 }, children: [placeholder("qs.project.plan.category_tree.blocks.title", { bold: true, color: "10251F", size: 22 })] }),
+            new Paragraph({ keepNext: true, spacing: { before: 0, after: 110, line: 276 }, children: [placeholder("qs.project.plan.category_tree.blocks.a4_description", { color: "263A34", size: 20 })] }),
+            new Paragraph({ spacing: { before: 0, after: 0 }, children: [placeholder("qs.project.plan.category_tree.blocks.regulations", { color: "5B6A65", size: 17 })] }),
           ],
         }),
       ] })],
@@ -776,14 +831,22 @@ function standardA4Template(locale: Locale): Document {
         },
       },
       children: [
-        control("#qs.plan.category_tree"),
+        control("#qs.organization.profiles"),
+        control("#qs.organization.logo_images"),
+        new Paragraph({ alignment: AlignmentType.RIGHT, spacing: { after: 60 }, children: [placeholder("qs.organization.logo_images.image")] }),
+        control("/qs.organization.logo_images"),
+        new Paragraph({ spacing: { after: 40 }, children: [placeholder("qs.organization.name", { bold: true, size: 18 })] }),
+        new Paragraph({ spacing: { after: 40 }, children: [placeholder("qs.organization.address_line", { size: 14 })] }),
+        new Paragraph({ spacing: { after: 160 }, children: [placeholder("qs.organization.contact_line", { size: 14 })] }),
+        control("/qs.organization.profiles"),
+        control("#qs.project.plan.category_tree"),
         categoryHeader,
         new Paragraph({ keepNext: true, spacing: { before: 0, after: 55 } }),
-        control("#qs.category.blocks"),
+        control("#qs.project.plan.category_tree.blocks"),
         blockCard,
         new Paragraph({ spacing: { before: 0, after: 100 } }),
-        control("/qs.category.blocks"),
-        control("/qs.plan.category_tree"),
+        control("/qs.project.plan.category_tree.blocks"),
+        control("/qs.project.plan.category_tree"),
       ],
     }],
   });

@@ -8,7 +8,7 @@ import {
 } from "./projectOverviewOrder";
 
 function section(id: string): ProjectOverviewSection {
-  return { id, name: id, placeholderKey: id, entries: [] };
+  return { id, name: id, entries: [] };
 }
 
 describe("project overview order", () => {

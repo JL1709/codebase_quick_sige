@@ -84,9 +84,9 @@ describe("contacts", () => {
     const participantTemplate = database.overviewTemplates.find((template) => template.id === "overview-template-participants")!;
     const participantSection = instantiateOverviewSection(participantTemplate, (prefix) => `${prefix}-${idSequence += 1}`, "en");
     (participantSection as typeof participantSection & { templateId?: string }).templateId = "overview-template-participants";
-    participantSection.entries[0].items[0].find((entry) => entry.placeholderKey === "name")!.value = "Custom Person";
+    participantSection.entries[0].items[0].find((entry) => entry.label === "Name")!.value = "Custom Person";
     participantSection.entries[0].items[0].push({
-      id: "custom-license", label: "License", placeholderKey: "license", type: "text", value: "LIC-42", children: [], items: [],
+      id: "custom-license", label: "License", type: "text", value: "LIC-42", children: [], items: [],
     });
     firstProject.overviewSections.push(participantSection);
     const migrated = migrateLegacyProjectContacts(

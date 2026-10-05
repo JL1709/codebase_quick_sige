@@ -10,7 +10,35 @@ export type ProjectParticipantRole = "client" | "owner" | "responsible_third_par
 export type ContactSource = "manual" | "migration" | "vcard" | "csv" | "xlsx" | "microsoft" | "google";
 export type ContactsCatalogVisibility = "listed" | "project_only";
 
-export interface Organization { id: string; name: string; accentColor: string }
+export interface OrganizationAddress {
+  street: string;
+  houseNumber: string;
+  addressAddition: string;
+  postalCode: string;
+  city: string;
+  region: string;
+  countryCode: string;
+}
+export interface OrganizationLogo {
+  blobId: string;
+  filename: string;
+  mimeType: "image/png" | "image/jpeg";
+  width: number;
+  height: number;
+}
+export interface OrganizationProfile {
+  name: string;
+  address: OrganizationAddress;
+  phone: string;
+  phoneExtension: string;
+  mobilePhone: string;
+  fax: string;
+  faxExtension: string;
+  email: string;
+  website: string;
+  logo?: OrganizationLogo;
+}
+export interface Organization extends OrganizationProfile { id: string; accentColor: string }
 export interface AppUser { id: string; organizationId: string; name: string; email: string; role: "owner" | "admin" | "editor" | "viewer"; preferredLocale: Locale }
 
 export interface Participant {
@@ -176,8 +204,8 @@ export interface ContactImportBatch {
 }
 
 export interface EmergencyContact { id: string; label: string; name: string; phone: string }
-export interface CustomField { id: string; key: string; value: string; placeholderKey: string }
-export interface CustomSection { id: string; title: string; placeholderKey: string; fields: CustomField[] }
+export interface CustomField { id: string; key: string; value: string }
+export interface CustomSection { id: string; title: string; fields: CustomField[] }
 
 export type OverviewEntryType = "text" | "date" | "group" | "repeating_group";
 export interface LocalizedOverviewTemplateEntryContent {
@@ -197,7 +225,6 @@ export interface OverviewTemplateEntry {
 export interface ProjectOverviewEntry {
   id: string;
   label: string;
-  placeholderKey: string;
   type: OverviewEntryType;
   value: string;
   children: ProjectOverviewEntry[];
@@ -207,7 +234,6 @@ export interface ProjectOverviewEntry {
 export interface ProjectOverviewSection {
   id: string;
   name: string;
-  placeholderKey: string;
   entries: ProjectOverviewEntry[];
 }
 
@@ -457,7 +483,7 @@ export interface OverviewTemplate {
   updatedAt: string;
 }
 
-export type DocumentType = SupportingDocumentType | "a4_plan";
+export type DocumentType = SupportingDocumentType | "a4_plan" | "project_document";
 export interface DocumentTemplate {
   id: string; organizationId: string; name: string; documentType: DocumentType; locale: Locale;
   origin: "standard" | "custom"; blobId?: string; filename: string; description: string;
@@ -481,6 +507,7 @@ export interface GeneratedDocument {
   filename: string;
   blobId: string;
   projectSnapshot: Project;
+  organizationSnapshot?: Organization;
   planSnapshot?: Plan;
   language: Locale;
   generatedAt: string;
@@ -489,6 +516,7 @@ export interface GeneratedDocument {
 }
 
 export interface RevisionSnapshot {
+  organization?: Organization;
   project: Project;
   plan: Plan;
   blocks: BuildingBlock[];

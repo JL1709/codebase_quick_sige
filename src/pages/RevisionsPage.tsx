@@ -4,6 +4,7 @@ import { Link, useParams } from "react-router-dom";
 import { Button, EmptyState } from "../components/Ui";
 import { useI18n } from "../i18n/I18nProvider";
 import { useApp } from "../state/AppProvider";
+import { hydrateOrganizationLogo } from "../documents/organizationData";
 import { getBlob } from "../data/blobRepository";
 import { projectDocumentStem } from "../domain/projectMetadata";
 import { NotFoundPage } from "./NotFoundPage";
@@ -40,7 +41,7 @@ export function RevisionsPage() {
         locale,
         revision.snapshot.blocks,
         revision.snapshot.categories,
-        revision.snapshot.documentConfigurations,
+        await hydrateOrganizationLogo(revision.snapshot.organization),
       );
       const document = await renderTemplate(await blobToArrayBuffer(templateBlob), data);
       downloadBlob(document, `${projectDocumentStem(revision.snapshot.project)}-sige-plan-${revision.index}.docx`);

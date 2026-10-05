@@ -25,7 +25,7 @@ const emptyInvalidEntryIds = new Set<string>();
 
 function newProjectOverviewEntry(type: OverviewEntryType): ProjectOverviewEntry {
   const id = newId("project-entry");
-  return { id, label: "", placeholderKey: id, type, value: "", children: [], items: [] };
+  return { id, label: "", type, value: "", children: [], items: [] };
 }
 
 function synchronizeEntryWithStructure(structure: ProjectOverviewEntry, valueEntry?: ProjectOverviewEntry): ProjectOverviewEntry {
@@ -252,7 +252,7 @@ function ProjectOverviewBuilderEntry({ entry, depth, invalidEntryIds, dropIndica
   const missingLabel = !normalizeOverviewKey(entry.label, "");
   const errorId = `project-entry-error-${entry.id}`;
   const rowStyle = { "--project-entry-depth": depth, transform: CSS.Translate.toString(transform) } as CSSProperties;
-  const updateLabel = (label: string) => onUpdate(entry.id, (candidate) => ({ ...candidate, label, placeholderKey: normalizeOverviewKey(label, candidate.id) }));
+  const updateLabel = (label: string) => onUpdate(entry.id, (candidate) => ({ ...candidate, label }));
   return <div className={`project-overview-builder-node ${isContainer ? "is-container" : ""} ${isDragging ? "is-dragging" : ""}`} ref={setDragRef} style={rowStyle} data-project-entry-id={entry.id}>
     <div ref={before.setNodeRef} className={`project-overview-drop-zone drop-before ${dropIndicator?.entryId === entry.id && dropIndicator.position === "before" ? "is-active" : ""}`} />
     <div ref={inside.setNodeRef} className={`project-overview-builder-row ${dropIndicator?.entryId === entry.id && dropIndicator.position === "inside" ? "drop-inside-active" : ""}`}>

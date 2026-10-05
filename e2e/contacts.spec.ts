@@ -295,9 +295,14 @@ test("reuses organization roles and persists participant placement in the projec
   const participants = page.locator(".project-contacts-panel");
   await expect(participants.getByText("Daniel König", { exact: true })).toBeVisible();
   const danielAssignment = participants.locator(".project-contact-list article").filter({ hasText: "Daniel König" });
+  const selectFireSafetyRole = async () => {
+    const checkbox = danielAssignment.getByRole("checkbox", { name: "Fire safety lead", exact: true });
+    await checkbox.click();
+    await expect(checkbox).toBeChecked();
+  };
   await expect(page.getByRole("dialog", { name: "Edit assignment" })).toHaveCount(0);
   await danielAssignment.getByRole("button", { name: "Manage roles" }).click();
-  await danielAssignment.getByLabel("Fire safety lead").check();
+  await selectFireSafetyRole();
   await danielAssignment.getByRole("button", { name: "Done" }).click();
   await expect(danielAssignment).toContainText("Fire safety lead");
   await danielAssignment.getByRole("button", { name: "Remove: Fire safety lead" }).click();
@@ -311,7 +316,7 @@ test("reuses organization roles and persists participant placement in the projec
   await expect(danielAssignment.getByText("No role selected yet", { exact: true })).toBeVisible();
 
   await danielAssignment.getByRole("button", { name: "Manage roles" }).click();
-  await danielAssignment.getByLabel("Fire safety lead").check();
+  await selectFireSafetyRole();
   await danielAssignment.getByRole("button", { name: "Done" }).click();
   await expect(danielAssignment).toContainText("Fire safety lead");
 

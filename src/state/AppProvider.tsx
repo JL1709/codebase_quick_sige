@@ -6,13 +6,15 @@ import { createPlanFromAssessment } from "../domain/recommendationEngine";
 import { buildRevisionSnapshot } from "../domain/revisionSnapshot";
 import { activePlanForProject, createDraftFromCurrentPlan, createDraftFromRevision, normalizePlanReason, replaceActivePlan } from "../domain/planLifecycle";
 import { categoryPlacementIds, normalizeCategoryColorOwnership } from "../domain/categoryTree";
-import { instantiateOverviewSection, localizeOverviewTemplate, uniqueProjectOverviewSectionKey, validateOverviewTemplate } from "../domain/overviewTemplates";
+import { instantiateOverviewSection, localizeOverviewTemplate, uniqueProjectOverviewSectionName, validateOverviewTemplate } from "../domain/overviewTemplates";
 import { ensureSinglePrimary, projectContactRoleKey, projectWithResolvedParticipants } from "../domain/contacts";
 import { normalizeProjectOverviewSectionOrder, orderProjectOverviewSections } from "../domain/projectOverviewOrder";
 import { commitContactImport as applyContactImport, type ContactImportCommitInput } from "../domain/contactImportCommit";
+import { canManageOrganization, validateOrganizationProfile } from "../domain/organizationProfile";
+import { validateProjectForm } from "../domain/projectValidation";
 import type {
   AppDatabase, AssessmentAnswers, BuildingBlock, BuildingBlockCategory, Company, Contact, ContactCompanyAffiliation,
-  ContactImportBatch, DocumentTemplate, GeneratedDocument, Locale, OverviewTemplate, Plan, PlanRevision, Project,
+  ContactImportBatch, DocumentTemplate, GeneratedDocument, Locale, OrganizationProfile, OverviewTemplate, Plan, PlanRevision, Project,
   ProjectAssessmentRun, ProjectContactAssignment, ProjectDocumentConfiguration, ProjectFormValues, ProjectRoleDefinition, ProjectStatus, Recommendation,
 } from "../domain/types";
 
@@ -35,6 +37,7 @@ export type CreatePlanInput =
 interface AppContextValue {
   database: AppDatabase;
   setLocale: (locale: Locale) => void;
+  saveOrganizationProfile: (profile: OrganizationProfile) => void;
   createProject: (values: ProjectFormValues, contactSelections?: CreateProjectContactSelection[], projectRoleDefinitions?: CreateProjectRoleDefinitionInput[]) => Project;
   deleteProject: (projectId: string) => Promise<void>;
   updateProject: (project: Project) => void;
@@ -105,7 +108,7 @@ function applyProjectTemplates(project: Project, templateIds: string[], template
     const instantiatedSection = instantiateOverviewSection(template, newId, locale);
     const section = {
       ...instantiatedSection,
-      placeholderKey: uniqueProjectOverviewSectionKey(instantiatedSection.name, current.overviewSections),
+      name: uniqueProjectOverviewSectionName(instantiatedSection.name, current.overviewSections),
     };
     const overviewSections = [...current.overviewSections, section];
     return {
@@ -147,6 +150,20 @@ export function AppProvider({ children, repository: providedRepository }: { chil
     user: { ...current.user, preferredLocale: locale },
     generatedDocuments: current.generatedDocuments.map((document) => ({ ...document, stale: true })),
   })), [commit]);
+  const saveOrganizationProfile = useCallback((profile: OrganizationProfile) => {
+    if (!canManageOrganization(database.user) || database.user.organizationId !== database.organization.id) throw new Error("forbidden");
+    const validation = validateOrganizationProfile(profile);
+    if (!validation.valid) throw new Error("invalid_organization_profile");
+    const next: AppDatabase = {
+      ...database,
+      organization: { ...database.organization, ...validation.profile, logo: validation.profile.logo },
+      generatedDocuments: database.generatedDocuments.map((document) => ({ ...document, stale: true })),
+      auditEvents: [{ id: newId("audit"), action: "organization.updated", actorName: database.user.name, createdAt: new Date().toISOString(), details: database.organization.id }, ...database.auditEvents],
+    };
+    // Persist before acknowledging success so a failed browser write leaves the saved profile intact.
+    repository.current.save(next);
+    setDatabase(next);
+  }, [database]);
   const createProject = useCallback((
     values: ProjectFormValues,
     contactSelections: CreateProjectContactSelection[] = [],
@@ -265,12 +282,15 @@ export function AppProvider({ children, repository: providedRepository }: { chil
   }, [commit, database.generatedDocuments, database.projects, database.revisions]);
 
   const updateProject = useCallback((project: Project) => {
+    const validation = validateProjectForm(project);
+    if (!validation.success) return;
     const now = new Date().toISOString();
     const overviewSectionOrder = normalizeProjectOverviewSectionOrder(project.overviewSectionOrder, project.overviewSections);
     const canonicalProject = {
       ...project,
+      ...validation.data,
       participants: [],
-      overviewSections: orderProjectOverviewSections(project.overviewSections, overviewSectionOrder),
+      overviewSections: orderProjectOverviewSections(validation.data.overviewSections, overviewSectionOrder),
       overviewSectionOrder,
     };
     commit((current) => ({
@@ -1021,7 +1041,7 @@ export function AppProvider({ children, repository: providedRepository }: { chil
   }, []);
   const resetDemo = useCallback(() => setDatabase(repository.current.reset()), []);
   const value = useMemo<AppContextValue>(() => ({
-    database, setLocale, createProject, deleteProject, updateProject, updateProjectStatus, beginAssessment, saveAssessment, createPlan, updatePlan, publishPlan,
+    database, setLocale, saveOrganizationProfile, createProject, deleteProject, updateProject, updateProjectStatus, beginAssessment, saveAssessment, createPlan, updatePlan, publishPlan,
     saveContact, archiveContact, restoreContact, deleteContact, mergeContacts, assignContactsToProject,
     saveCompany, mergeCompanies, archiveCompany, restoreCompany, deleteCompany,
     saveContactAffiliation, saveProjectContactAssignment, removeProjectContactAssignment, createProjectRoleDefinition, saveProjectRoleDefinition, archiveProjectRoleDefinition, reorderProjectRoleDefinitions, addContactImportBatch, commitContactImport, undoContactImportBatch, recordContactExport,
@@ -1041,7 +1061,7 @@ export function AppProvider({ children, repository: providedRepository }: { chil
     getPlanForProject: (projectId) => activePlanForProject(database.plans, projectId),
     getAssessmentRun: (assessmentRunId) => database.assessmentRuns.find((run) => run.id === assessmentRunId),
     getLatestAssessmentRun: (projectId) => database.assessmentRuns.find((run) => run.projectId === projectId),
-  }), [database, setLocale, createProject, deleteProject, updateProject, updateProjectStatus, saveContact, archiveContact, restoreContact, deleteContact, mergeContacts, assignContactsToProject, saveCompany, mergeCompanies, archiveCompany, restoreCompany, deleteCompany, saveContactAffiliation, saveProjectContactAssignment, removeProjectContactAssignment, createProjectRoleDefinition, saveProjectRoleDefinition, archiveProjectRoleDefinition, reorderProjectRoleDefinitions, addContactImportBatch, commitContactImport, undoContactImportBatch, recordContactExport, recordContactProviderEvent, beginAssessment, saveAssessment, createPlan, updatePlan, publishPlan, saveBlock, archiveBlock, restoreBlock, saveCategory, reorderCategories, archiveCategory, restoreCategory, applyTemplatesToProject, saveOverviewTemplate, deleteOverviewTemplate, saveDocumentTemplate, deleteDocumentTemplate, setDocumentTemplate, addGeneratedDocument, restoreMigrationBackup, downloadMigrationBackup, resetDemo]);
+  }), [database, setLocale, saveOrganizationProfile, createProject, deleteProject, updateProject, updateProjectStatus, saveContact, archiveContact, restoreContact, deleteContact, mergeContacts, assignContactsToProject, saveCompany, mergeCompanies, archiveCompany, restoreCompany, deleteCompany, saveContactAffiliation, saveProjectContactAssignment, removeProjectContactAssignment, createProjectRoleDefinition, saveProjectRoleDefinition, archiveProjectRoleDefinition, reorderProjectRoleDefinitions, addContactImportBatch, commitContactImport, undoContactImportBatch, recordContactExport, recordContactProviderEvent, beginAssessment, saveAssessment, createPlan, updatePlan, publishPlan, saveBlock, archiveBlock, restoreBlock, saveCategory, reorderCategories, archiveCategory, restoreCategory, applyTemplatesToProject, saveOverviewTemplate, deleteOverviewTemplate, saveDocumentTemplate, deleteDocumentTemplate, setDocumentTemplate, addGeneratedDocument, restoreMigrationBackup, downloadMigrationBackup, resetDemo]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

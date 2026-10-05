@@ -25,6 +25,7 @@
     "docx-templates": "^4.15.0",
     "idb": "^8.0.3",
     "jspdf": "^4.2.1",
+    "libphonenumber-js": "^1.13.14",
     "lucide-react": "^0.544.0",
     "pdfjs-dist": "^6.3.289",
     "react": "^19.1.1",

@@ -15,10 +15,11 @@ import {
   countOverviewEntries,
   instantiateOverviewSection,
   localizeOverviewTemplate,
-  uniqueProjectOverviewSectionKey,
+  uniqueProjectOverviewSectionName,
 } from "../domain/overviewTemplates";
 import { moveProjectOverviewSection, normalizeProjectOverviewSectionOrder, PROJECT_PARTICIPANTS_SECTION_ID } from "../domain/projectOverviewOrder";
 import { validateProjectForm } from "../domain/projectValidation";
+import { invalidProjectSectionIds } from "../domain/projectOverview";
 import type { OverviewTemplate, OverviewTemplateEntry, ProjectOverviewSection, ProjectRoleDefinition } from "../domain/types";
 import { useI18n } from "../i18n/I18nProvider";
 import { newId, useApp } from "../state/AppProvider";
@@ -48,6 +49,8 @@ export function ProjectFormPage() {
   const invalidSectionIds = new Set(sections
     .filter((section) => !section.name.trim() || invalidProjectOverviewEntryIds(section.entries).size > 0)
     .map((section) => section.id));
+  const invalidSectionNameIds = invalidProjectSectionIds({ overviewSections: sections, overviewSectionOrder: sectionOrder, participantsSectionName });
+  invalidSectionNameIds.forEach((id) => invalidSectionIds.add(id));
   const formValid = Boolean(name.trim())
     && Boolean(participantsSectionName.trim())
     && invalidSectionIds.size === 0;
@@ -63,7 +66,7 @@ export function ProjectFormPage() {
   const appendFieldSection = (section: ProjectOverviewSection) => {
     setSections((current) => [...current, {
       ...section,
-      placeholderKey: uniqueProjectOverviewSectionKey(section.name, current),
+      name: uniqueProjectOverviewSectionName(section.name, participantsIncluded ? [...current, { id: PROJECT_PARTICIPANTS_SECTION_ID, name: participantsSectionName, entries: [] }] : current),
     }]);
     setSectionOrder((current) => [...current, section.id]);
   };
@@ -77,7 +80,6 @@ export function ProjectFormPage() {
     appendFieldSection({
       id: newId("overview-section"),
       name: t("project.customSection"),
-      placeholderKey: "custom_section",
       entries: [],
     });
   };
@@ -245,7 +247,7 @@ export function ProjectFormPage() {
               if (!section) return null;
               const invalidEntryIds = invalidProjectOverviewEntryIds(section.entries);
               return <OrderedOverviewSection key={sectionId} {...commonOrderProps}><section className="panel project-included-section">
-                <div className="panel-header"><div><input className="project-section-title-input" aria-label={t("project.sectionTitle")} aria-invalid={!section.name.trim()} value={section.name} onChange={(event) => updateSection(section.id, { name: event.target.value })} /><p>{t("project.projectOwnedSectionText")}</p></div><button type="button" className="icon-button danger-icon" aria-label={`${t("common.remove")}: ${section.name}`} onClick={() => removeSection(section.id)}><Trash2 size={14} /></button></div>
+                <div className="panel-header"><div><input className="project-section-title-input" aria-label={t("project.sectionTitle")} aria-invalid={invalidSectionNameIds.has(section.id)} value={section.name} onChange={(event) => updateSection(section.id, { name: event.target.value })} /><p>{t("project.projectOwnedSectionText")}</p>{invalidSectionNameIds.has(section.id) && <small className="field-error" role="alert">{t("project.sectionNameUnique")}</small>}</div><button type="button" className="icon-button danger-icon" aria-label={`${t("common.remove")}: ${section.name}`} onClick={() => removeSection(section.id)}><Trash2 size={14} /></button></div>
                 <div className="panel-body"><ProjectOverviewFields entries={section.entries} editing structureEditing invalidEntryIds={invalidEntryIds} onChange={(entries) => updateSection(section.id, { entries })} t={t} formatDate={formatDate} /></div>
               </section></OrderedOverviewSection>;
               })}</div>

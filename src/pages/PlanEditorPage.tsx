@@ -16,6 +16,7 @@ import { CanvasInlineText as InlineText } from "../components/CanvasInlineText";
 import { PlanCreationDialog } from "../components/PlanCreationDialog";
 import { Badge, Button, EmptyState, Modal } from "../components/Ui";
 import { getBlob, saveBlob } from "../data/blobRepository";
+import { hydrateOrganizationLogo } from "../documents/organizationData";
 import { hydrateBlockImages } from "../domain/blockImages";
 import { MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, stepCanvasZoom } from "../domain/canvasViewport";
 import { useCanvasViewport } from "../hooks/useCanvasViewport";
@@ -414,9 +415,11 @@ export function PlanEditorPage() {
   const finishWordPlanGeneration = async (template: DocumentTemplate, templateBuffer: ArrayBuffer) => {
     const { buildTemplateData, documentDependencyFingerprint, downloadBlob, renderTemplate } = await import("../documents/templateEngine");
     const blocksWithImages = await hydrateBlockImages(database.blocks);
+    const organization = structuredClone(database.organization);
+    const organizationWithLogo = await hydrateOrganizationLogo(organization);
     const generatedDocument = await renderTemplate(
       templateBuffer,
-      buildTemplateData(project, plan, locale, blocksWithImages, database.categories, projectDocumentConfigurations),
+      buildTemplateData(project, plan, locale, blocksWithImages, database.categories, organizationWithLogo),
     );
     const filename = `${projectDocumentStem(project)}-a4-plan-${new Date().toISOString().slice(0, 10)}.docx`;
     const generatedAt = new Date().toISOString();
@@ -431,10 +434,11 @@ export function PlanEditorPage() {
       filename,
       blobId,
       projectSnapshot: structuredClone(project),
+      organizationSnapshot: organization,
       planSnapshot: structuredClone(plan),
       language: locale,
       generatedAt,
-      dependencyFingerprint: documentDependencyFingerprint(project, locale, plan),
+      dependencyFingerprint: documentDependencyFingerprint(project, locale, plan, organization),
       stale: false,
     });
     downloadBlob(generatedDocument, filename);
@@ -451,7 +455,7 @@ export function PlanEditorPage() {
     try {
       const { buildTemplateData, inspectTemplate } = await import("../documents/templateEngine");
       const templateBuffer = await loadWordTemplate(template);
-      const templateData = buildTemplateData(project, plan, locale, database.blocks, database.categories, projectDocumentConfigurations);
+      const templateData = buildTemplateData(project, plan, locale, database.blocks, database.categories, database.organization);
       const inspection = await inspectTemplate(templateBuffer, templateData);
       if (inspection.unsafeCommands.length) {
         setWordPlanMessage({

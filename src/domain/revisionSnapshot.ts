@@ -17,6 +17,7 @@ export function buildRevisionSnapshot(
   const configuredTemplateIds = new Set(documentConfigurations.map((configuration) => configuration.templateId));
   const resolvedProject = projectWithResolvedParticipants(database, project);
   return structuredClone({
+    organization: database.organization,
     project: resolvedProject,
     plan,
     blocks: database.blocks.filter((block) => usedBlockIds.has(block.id)),

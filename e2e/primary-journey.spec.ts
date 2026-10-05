@@ -440,14 +440,12 @@ test("project sections are editable, repeatable, and detached from their source 
     return {
       participantsSectionName: project?.participantsSectionName,
       sectionNames: project?.overviewSections?.map((section) => section.name),
-      placeholderKeys: project?.overviewSections?.map((section) => section.placeholderKey),
       retainedTemplateReference: project?.overviewSections?.some((section) => Object.hasOwn(section, "templateId")),
     };
   }, projectId);
   expect(persistedComposition).toEqual({
     participantsSectionName: "Project team",
     sectionNames: ["Permits", "Handover", "Project profile revised"],
-    placeholderKeys: ["custom_section", "custom_section_2", "general"],
     retainedTemplateReference: false,
   });
 });
@@ -502,12 +500,12 @@ test("custom Word template reports missing data and generates with explicit cons
   await expect(wordTemplates.getByText(/QuickSiGe Standard · English · Standard/).first()).toBeVisible();
   await expect(wordTemplates.getByRole("button", { name: "Duplicate" })).toHaveCount(0);
   await expect(wordTemplates.getByRole("button", { name: "Show archived" })).toHaveCount(0);
-  const customTemplate = new Document({ sections: [{ children: [new Paragraph("Project: {{qs.project.name}}"), new Paragraph("Missing: {{qs.overview.intentionally_missing}}"), new Paragraph("{{PAGEBREAK}}"), new Paragraph("Second page")] }] });
+  const customTemplate = new Document({ sections: [{ children: [new Paragraph("Project: {{qs.project.name}}"), new Paragraph("Missing: {{qs.project.intentionally_missing}}"), new Paragraph("{{PAGEBREAK}}"), new Paragraph("Second page")] }] });
   const templateBuffer = await Packer.toBuffer(customTemplate);
 
   await page.getByRole("button", { name: "Add Word template" }).click();
   await expect(page.getByLabel("Document type")).toHaveCount(0);
-  await page.getByLabel("Name").fill("Missing field template");
+  await page.getByRole("dialog").getByLabel("Template name").fill("Missing field template");
   await page.getByLabel("DOCX file").setInputFiles({ name: "missing-template.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", buffer: templateBuffer });
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect.poll(() => page.evaluate(() => {
@@ -516,30 +514,16 @@ test("custom Word template reports missing data and generates with explicit cons
   })).toContain("Missing field template");
   await expect(page.getByText("Missing field template")).toBeVisible();
 
-  await page.evaluate(() => {
-    const storageKey = "quicksige.database.v3";
-    const stored = JSON.parse(window.localStorage.getItem(storageKey) ?? "{}") as {
-      documentTemplates: Array<{ id: string; name: string }>;
-      documentConfigurations: Array<{ id: string; projectId: string; documentType: string; templateId: string }>;
-    };
-    const templateId = stored.documentTemplates.find((template) => template.name === "Missing field template")?.id;
-    if (!templateId) throw new Error("Missing field template was not saved");
-    stored.documentConfigurations.push({
-      id: "e2e-custom-a4-configuration",
-      projectId: "project-logistics-center",
-      documentType: "a4_plan",
-      templateId,
-    });
-    window.localStorage.setItem(storageKey, JSON.stringify(stored));
-  });
-  await page.goto("/projects/project-logistics-center/plan");
-  await page.getByRole("button", { name: "Word documents" }).click();
-  await expect(page.getByRole("heading", { name: "Undefined placeholders" })).toBeVisible();
-  await expect(page.getByText("{{qs.overview.intentionally_missing}}", { exact: true })).toBeVisible();
+  const customTemplateRow = wordTemplates.getByRole("article").filter({ hasText: "Missing field template" });
+  await customTemplateRow.getByRole("button", { name: "Create document" }).click();
+  await page.getByRole("dialog").getByLabel("Project", { exact: true }).selectOption("project-logistics-center");
+  await page.getByRole("dialog").getByRole("button", { name: "Create document" }).click();
+  await expect(page.getByRole("heading", { name: "Unknown placeholders" })).toBeVisible();
+  await expect(page.getByText("{{qs.project.intentionally_missing}}", { exact: true })).toBeVisible();
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Continue with empty fields" }).click();
   const download = await downloadPromise;
-  expect(download.suggestedFilename()).toMatch(/a4-plan.*\.docx$/);
+  expect(download.suggestedFilename()).toBe("logistikzentrum-west-missing-field-template.docx");
   await expect(page.getByText(/was created/)).toBeVisible();
 });
 
@@ -834,7 +818,7 @@ test("Templates is separate from Settings and retains complete template manageme
   await page.getByRole("link", { name: "Templates" }).click();
   await expect(page.getByRole("heading", { name: "Templates", exact: true })).toBeVisible();
   await expect(page.getByText("Overview templates")).toBeVisible();
-  await expect(page.getByText("Word templates")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Word templates", exact: true })).toBeVisible();
   await expect(page.getByText("Placeholder reference")).toBeVisible();
   await page.getByRole("button", { name: "Add template" }).click();
   await expect(page.getByText("Enter a template name.")).toBeVisible();
@@ -851,16 +835,16 @@ test("Templates is separate from Settings and retains complete template manageme
   await page.getByPlaceholder("Label").first().fill("Permit number");
   await page.getByRole("button", { name: "Add entry" }).click();
   await page.getByPlaceholder("Label").last().fill("Permit number");
-  await expect(page.getByText("This label is already used in this template.")).toHaveCount(2);
+  await expect(page.getByText("This label is already used in the same group.")).toHaveCount(2);
   await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
   await page.getByPlaceholder("Label").last().fill("Site owner");
-  await expect(page.getByText("This label is already used in this template.")).toHaveCount(0);
+  await expect(page.getByText("This label is already used in the same group.")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
   await expect(page.getByText("Template type")).toHaveCount(0);
   await expect(page.locator(".form-error")).toHaveCount(0);
   const firstEntryMenu = page.locator(".template-entry-menu").first();
   await firstEntryMenu.locator("summary").click();
-  await expect(firstEntryMenu.getByText("{{qs.overview.e2e_project_details.permit_number}}", { exact: true })).toBeVisible();
+  await expect(firstEntryMenu.getByText("{{qs.project.e2e_project_details.permit_number}}", { exact: true })).toBeVisible();
   await page.getByLabel("Template name").click();
   await expect(firstEntryMenu.locator(".template-entry-menu-popover")).not.toBeVisible();
   await firstEntryMenu.locator("summary").click();
@@ -895,12 +879,11 @@ test("overview template builder supports hierarchy, drag placement, dates, and p
   await page.getByPlaceholder("Label").last().fill("Handover date");
   await page.getByLabel("Default value (optional)").last().fill("2026-09-27");
 
-  page.once("dialog", (dialog) => dialog.accept());
   await dragTemplateEntryInside(page, "Permit number", "Handover details");
   const nestedPermitRow = page.locator(".template-builder-children .template-builder-row").filter({ has: page.locator('input[value="Permit number"]') });
   await expect(nestedPermitRow).toBeVisible();
   await nestedPermitRow.locator(".template-entry-menu summary").click();
-  await expect(page.getByText("{{qs.overview.site_handover.handover_details.permit_number}}", { exact: true })).toBeVisible();
+  await expect(page.getByText("{{qs.project.site_handover.handover_details.permit_number}}", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Save", exact: true }).click();
 
   await page.goto("/projects/new");

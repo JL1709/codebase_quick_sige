@@ -1,78 +1,82 @@
-# QuickSiGe Word template contract
+# QuickSiGe Word templates
 
-QuickSiGe accepts normal `.docx` files. Templates are edited in Microsoft Word or another OOXML-compatible editor. The uploaded package remains the visual source of truth: page setup, fonts, headers, footers, tables, spacing, colors, and branding are preserved by the renderer.
+Create documents from **Templates → Create document → Select project**. A generated document is downloaded as DOCX; it is not saved to the project's Documents tab. Project-only reports work without a safety plan. The existing A4 action in the safety-plan toolbar remains available.
 
-## Placeholder syntax
+Upload any normal DOCX layout with supported placeholders. Edit the layout and placeholders in Word, then upload the file. Project edits never rewrite uploaded templates. All templates use the same data model; no document-specific field mapping is required.
 
-- Text: `{{qs.project.name}}`
-- Image: `{{qs.block.image}}`
-- Loop start: `{{#qs.plan.category_tree}}`
-- Loop end: `{{/qs.plan.category_tree}}`
-- Controlled page break: `{{PAGEBREAK}}`
+## Placeholder names
 
-The opening and closing paths of a loop must match. Inside a loop, use the singular context shown by the standard template, such as `qs.category` or `qs.block`. Image placeholders must be the only visible content in their paragraph or table cell.
+Organisation fields use `qs.organization.*`, such as `{{qs.organization.name}}`, `{{qs.organization.email}}`, and `{{qs.organization.address.city}}`. The reference in Templates lists all organisation fields, including the logo image.
 
-Only namespaced property paths and the commands documented here are accepted. JavaScript expressions, `EXEC`, `QUERY`, raw XML, HTML, macros, ActiveX, embedded executables, encrypted packages, and external package relationships are rejected.
-
-Text, loops, and page breaks work in the document body, headers, footers, paragraphs, and table cells. Loops may be nested to three levels. The A4 template uses a category-tree loop containing a block loop.
-
-## Project data
-
-- `{{qs.project.number}}`
-- `{{qs.project.name}}`
-- `{{qs.project.description}}`
-- `{{qs.project.address}}`
-- `{{qs.project.city}}`
-- `{{qs.project.construction_type}}`
-- `{{qs.project.construction_type_label}}`
-- `{{qs.project.start_date}}`
-- `{{qs.project.end_date}}`
-- `{{qs.project.language}}`
-
-Every custom project field is also available as `{{qs.overview.<stable_field_key>}}`. Custom-section fields use `{{qs.overview.<stable_section_key>.<stable_field_key>}}`. Display labels may change without changing these stable keys.
-
-## Contact and participant loops
-
-Use `{{#qs.emergency_contacts}}` with `{{qs.contact.label}}`, `{{qs.contact.name}}`, and `{{qs.contact.phone}}`, followed by `{{/qs.emergency_contacts}}`.
-
-Use `{{#qs.participants}}` with `{{qs.participant.role}}`, `{{qs.participant.role_label}}`, `{{qs.participant.company}}`, `{{qs.participant.name}}`, `{{qs.participant.email}}`, and `{{qs.participant.phone}}`, followed by `{{/qs.participants}}`.
-
-## Hierarchical A4 plan
-
-The standard A4 template preserves the catalog hierarchy:
+Built-in project properties are `{{qs.project.name}}`, `{{qs.project.number}}`, and `{{qs.project.language}}`. Overview fields follow their visible hierarchy:
 
 ```text
-{{#qs.plan.category_tree}}
-{{qs.category.color}}{{qs.category.title}}
-{{#qs.category.blocks}}
-{{qs.block.color}}{{qs.block.title}}
-{{qs.block.image}}
-{{qs.block.a4_description}}
-{{qs.block.regulations}}
-{{/qs.category.blocks}}
-{{/qs.plan.category_tree}}
+{{qs.project.allgemein.geplanter_beginn}}
+{{qs.project.allgemein.projektadresse.ort}}
 ```
 
-`qs.category.color` and `qs.block.color` are optional cell-formatting placeholders. When placed in a Word table cell, they apply the catalog color to that cell and disappear from the generated document.
+Names become lowercase, spaces and punctuation become underscores, and German characters are transliterated (`ü → ue`, `ß → ss`). Names starting with a digit get an initial underscore. Names must produce unique paths at the same level. Project section names cannot use the built-in keys `name`, `number`, `language`, `plan`, or `files`.
 
-`qs.plan.category_tree` is a depth-first view of the selected catalog hierarchy. QuickSiGe includes every ancestor of a selected block and flattens the recursive tree before Word rendering, so categories can be nested to any depth without requiring recursive template commands. Each category provides `title`, `path`, `depth`, `color`, and the blocks assigned directly to that category. A block provides:
+Renaming a section, group, or field changes its path. There are no stored placeholder keys or old-path aliases. Users are responsible for updating and reuploading their Word templates. Select a project in the placeholder reference to copy its current paths; template-editor copy actions also use the current labels.
 
-- `{{qs.block.category}}`
-- `{{qs.block.title}}`
-- `{{qs.block.a0_description}}`
-- `{{qs.block.a4_description}}`
-- `{{qs.block.short_description}}`
-- `{{qs.block.long_description}}`
-- `{{qs.block.regulations}}`
-- `{{qs.block.image}}`
-- `{{qs.block.expert_note}}`
+Dates in overview fields are formatted for the template language. Values come from the same overview fields users edit, without separate legacy date or address placeholders.
 
-The category tree is the source of truth for A4 output. There is no separate Word-template section layer.
+## Repeating content
 
-## Missing and empty data
+Loop markers repeat paragraphs or table rows. Use the full collection path for fields inside a loop:
 
-A key with an empty value is defined and renders as empty text. A key that does not exist is undefined. Before generation, QuickSiGe lists undefined keys and lets the user return to the Overview or explicitly generate that copy with those values empty.
+```text
+{{#qs.project.notfallkontakte.kontakte}}
+{{qs.project.notfallkontakte.kontakte.bezeichnung}}
+{{qs.project.notfallkontakte.kontakte.telefon}}
+{{/qs.project.notfallkontakte.kontakte}}
+```
 
-## Upload limits
+The project-participant section uses its visible title as the collection name. A German section named **Bauteam** exposes:
 
-Templates are limited to 10 MB compressed, 40 MB expanded, 400 package entries, and a maximum per-entry compression ratio of 40:1. MIME type, extension, ZIP structure, Word parts, relationships, commands, loop scopes, and image placement are validated before a replacement becomes active.
+```text
+{{#qs.project.bauteam}}
+{{qs.project.bauteam.name}}
+{{qs.project.bauteam.unternehmen}}
+{{qs.project.bauteam.rolle}}
+{{qs.project.bauteam.e_mail}}
+{{qs.project.bauteam.telefon}}
+{{/qs.project.bauteam}}
+```
+
+Participant fields follow the template language's labels. Each assigned person appears once, with their project roles joined in the role field. Contact values come from the canonical project-contact assignments.
+
+Loop paths must match at opening and closing. Nested collections use their complete paths, including each parent group. Up to three nested loops are supported. Declared fields remain discoverable and valid even when a collection has no records.
+
+## Safety-plan content
+
+The standard A4 template uses:
+
+```text
+{{#qs.project.plan.category_tree}}
+{{qs.project.plan.category_tree.color}}{{qs.project.plan.category_tree.title}}
+{{#qs.project.plan.category_tree.blocks}}
+{{qs.project.plan.category_tree.blocks.color}}
+{{qs.project.plan.category_tree.blocks.title}}
+{{qs.project.plan.category_tree.blocks.image}}
+{{qs.project.plan.category_tree.blocks.a4_description}}
+{{qs.project.plan.category_tree.blocks.regulations}}
+{{/qs.project.plan.category_tree.blocks}}
+{{/qs.project.plan.category_tree}}
+```
+
+The category tree includes selected blocks and their ancestors in depth-first order. Categories provide `title`, `path`, `depth`, and `color`. Blocks also provide `category`, `a0_description`, and `expert_note`. `qs.project.plan.blocks` offers a flat list of the same selected blocks. Colour placeholders inside these loops apply table-cell shading and disappear from the output.
+
+Project-file metadata is available through a loop over `qs.project.files`, with `filename` and an optional `image`.
+
+## Unknown placeholders
+
+Before creation, the application lists paths absent from the selected project's and organisation's data. Choose **Cancel** to edit and reupload the template, or **Continue with empty fields** to download with unknown values empty. Missing parent sections, nested fields, images, and collections are handled safely. A known field whose value is blank is not an unknown placeholder.
+
+## Word layout and validation
+
+Text, loops, and `{{PAGEBREAK}}` work in the body, headers, footers, and table cells. Image placeholders must be alone in their paragraph or cell. Word may split a placeholder across text runs; the engine preserves the layout while resolving it.
+
+Only property paths and supported loop/page-break markers are allowed. Executable code, queries, HTML, raw XML, macros, ActiveX, embedded executable objects, encrypted packages, and external relationships are rejected.
+
+Upload limits are 10 MB compressed, 40 MB expanded, 400 package entries, and a maximum per-entry compression ratio of 40:1.

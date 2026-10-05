@@ -1,3 +1,4 @@
+import { normalizeOverviewKey } from "./placeholderNames";
 import type {
   AppDatabase,
   Company,
@@ -289,7 +290,7 @@ export function roleFromLegacyValue(value: string): ProjectContactRole {
 
 function overviewParticipantRows(project: Project): Participant[] {
   const valueFor = (item: Project["overviewSections"][number]["entries"][number]["items"][number], aliases: string[]) => (
-    item.find((entry) => aliases.includes(entry.placeholderKey.toLocaleLowerCase()))?.value.trim() ?? ""
+    item.find((entry) => aliases.includes(normalizeOverviewKey(entry.label)))?.value.trim() ?? ""
   );
   return project.overviewSections
     .filter((section) => legacyOverviewTemplateId(section) === "overview-template-participants")
@@ -324,7 +325,7 @@ function participantSectionHasUnmigratedContent(project: Project, sectionId: str
   if (!section || legacyOverviewTemplateId(section) !== "overview-template-participants") return false;
   return section.entries.some((entry) => {
     if (entry.type !== "repeating_group") return Boolean(entry.value.trim() || entry.children.length || entry.items.length);
-    return entry.items.some((item) => item.some((field) => !PARTICIPANT_FIELD_KEYS.has(field.placeholderKey.toLocaleLowerCase()) && Boolean(field.value.trim())));
+    return entry.items.some((item) => item.some((field) => !PARTICIPANT_FIELD_KEYS.has(normalizeOverviewKey(field.label)) && Boolean(field.value.trim())));
   });
 }
 

@@ -5,6 +5,8 @@ import { type ChangeEvent, type CSSProperties, type FormEvent, useEffect, useMem
 import { Button, Modal, PageHeader } from "../components/Ui";
 import { FieldTypeHeading } from "../components/FieldTypeHeading";
 import { ProjectRolesTemplateSection } from "../components/ProjectRolesTemplateSection";
+import { OrganizationProfileSection } from "../components/OrganizationProfileSection";
+import { WordDocumentCreationDialog } from "../components/WordDocumentCreationDialog";
 import { getBlob, saveBlob } from "../data/blobRepository";
 import {
   countOverviewEntries,
@@ -24,12 +26,6 @@ import { copyTextToClipboard } from "../utils/clipboard";
 
 const overviewEntryTypes: OverviewEntryType[] = ["text", "date", "group", "repeating_group"];
 const COPY_FEEDBACK_DURATION_MS = 1800;
-const placeholderReference = [
-  "{{#qs.plan.category_tree}}", "{{qs.category.title}}", "{{qs.category.path}}", "{{qs.category.depth}}", "{{qs.category.color}}",
-  "{{#qs.category.blocks}}",
-  "{{qs.block.color}}", "{{qs.block.title}}", "{{qs.block.a4_description}}", "{{qs.block.regulations}}",
-  "{{qs.block.image}}", "{{/qs.category.blocks}}", "{{/qs.plan.category_tree}}",
-];
 
 export function SettingsPage() {
   const { database, resetDemo, migrationRecovery, restoreMigrationBackup, downloadMigrationBackup } = useApp();
@@ -39,8 +35,9 @@ export function SettingsPage() {
     <PageHeader title={t("settings.title")} description={t("settings.subtitle")} />
     <div className="settings-grid">
       <section className="panel settings-card"><span className="stat-icon"><Languages size={18} /></span><h2>{t("settings.uiLanguage")}</h2><p>{t("settings.languageText")}</p><div className="language-options"><button className={`language-option ${locale === "de" ? "is-selected" : ""}`} onClick={() => setLocale("de")}><strong>Deutsch</strong><span>DE · Deutschland</span></button><button className={`language-option ${locale === "en" ? "is-selected" : ""}`} onClick={() => setLocale("en")}><strong>English</strong><span>EN · International</span></button></div></section>
-      <section className="panel settings-card"><span className="stat-icon"><ShieldCheck size={18} /></span><h2>{t("settings.organization")}</h2><p><strong>{database.organization.name}</strong><br />{database.user.email}<br />{t("settings.role")}: {t(`user.role.${database.user.role}`)}</p></section>
+      <section className="panel settings-card"><span className="stat-icon"><ShieldCheck size={18} /></span><h2>{t("organization.account")}</h2><p><strong>{database.user.name}</strong><br />{database.user.email}<br />{t("settings.role")}: {t(`user.role.${database.user.role}`)}</p></section>
     </div>
+    <OrganizationProfileSection />
     <section className="panel settings-card settings-storage"><span className="stat-icon"><Database size={18} /></span><h2>{t("settings.storage")}</h2><p>{t("settings.storageText")}</p>{migrationRecovery.error && <div className="form-error">{migrationRecovery.error}</div>}<div className="row-actions">{migrationRecovery.available && <><Button variant="secondary" onClick={downloadMigrationBackup}><Download size={15} />{t("settings.downloadBackup")}</Button><Button variant="secondary" onClick={restoreMigrationBackup}><ArchiveRestore size={15} />{t("settings.restoreBackup")}</Button></>}<Button variant="danger" onClick={() => { if (window.confirm(t("settings.resetConfirm"))) resetDemo(); }}><RotateCcw size={15} />{t("common.resetWorkspace")}</Button></div></section>
   </div>;
 }
@@ -49,6 +46,7 @@ export function TemplatesPage() {
   const {
     database,
     saveOverviewTemplate, deleteOverviewTemplate, saveDocumentTemplate, deleteDocumentTemplate,
+    getProject, getPlanForProject,
   } = useApp();
   const { locale, t } = useI18n();
   const [overviewOpen, setOverviewOpen] = useState(false);
@@ -60,6 +58,11 @@ export function TemplatesPage() {
   const copyFeedbackTimer = useRef<number | null>(null);
   const [overviewToDelete, setOverviewToDelete] = useState<OverviewTemplate | null>(null);
   const [documentToDelete, setDocumentToDelete] = useState<DocumentTemplate | null>(null);
+  const [creatingDocument, setCreatingDocument] = useState<DocumentTemplate | null>(null);
+  const [createdFilename, setCreatedFilename] = useState("");
+  const [placeholderProjectId, setPlaceholderProjectId] = useState("");
+  const [placeholderReference, setPlaceholderReference] = useState<string[]>([]);
+  const [placeholderError, setPlaceholderError] = useState("");
   const openOverview = (template?: OverviewTemplate) => { setEditingOverview(template ?? null); setOverviewOpen(true); };
   const openDocument = (template?: DocumentTemplate) => { setEditingDocument(template ?? null); setDocumentOpen(true); };
   const visibleDocumentTemplates = database.documentTemplates.filter(
@@ -69,6 +72,16 @@ export function TemplatesPage() {
   useEffect(() => () => {
     if (copyFeedbackTimer.current !== null) window.clearTimeout(copyFeedbackTimer.current);
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    void import("../documents/templateEngine").then(({ buildTemplateData, templatePlaceholderReference }) => {
+      const project = getProject(placeholderProjectId);
+      const data = buildTemplateData(project, getPlanForProject(placeholderProjectId), locale, database.blocks, database.categories, database.organization);
+      if (active) { setPlaceholderReference(templatePlaceholderReference(data)); setPlaceholderError(""); }
+    }).catch(() => { if (active) setPlaceholderError(t("templates.referenceFailed")); });
+    return () => { active = false; };
+  }, [database, getPlanForProject, getProject, locale, placeholderProjectId, t]);
 
   const copyPlaceholder = async (token: string) => {
     const copied = await copyTextToClipboard(token);
@@ -90,6 +103,7 @@ export function TemplatesPage() {
 
   return <div className="page settings-page">
     <PageHeader title={t("templates.pageTitle")} description={t("templates.pageSubtitle")} />
+    {createdFilename && <p className="asset-message is-success" role="status">{t("documents.generated", { name: createdFilename })}</p>}
 
     <ProjectRolesTemplateSection />
 
@@ -124,6 +138,7 @@ export function TemplatesPage() {
               <span>{template.origin === "standard" ? `${template.name} · ` : ""}{t(`common.language.${template.locale}`)} · {template.origin === "standard" ? t("templates.standard") : template.filename} · v{template.revision ?? 1}</span>
             </div>
             <div className="row-actions">
+              <Button size="small" onClick={() => { setCreatedFilename(""); setCreatingDocument(template); }}>{t("templates.createDocument")}</Button>
               <Button size="small" variant="secondary" onClick={() => void downloadDocumentTemplate(template)}><Download size={14} />{t("common.download")}</Button>
               {template.origin === "custom" && <>
                 <Button size="small" variant="secondary" onClick={() => openDocument(template)}><Pencil size={14} />{t("common.edit")}</Button>
@@ -135,7 +150,7 @@ export function TemplatesPage() {
       </div>
     </section>
 
-    <section className="panel template-reference"><div><h2>{t("templates.placeholderTitle")}</h2><p>{t("templates.placeholderText")}</p><div className="search-shell"><Search size={15} /><input className="search-input" value={placeholderQuery} onChange={(event) => setPlaceholderQuery(event.target.value)} placeholder={t("templates.searchPlaceholders")} /></div></div><div className="placeholder-examples">{placeholderReference.filter((token) => token.toLowerCase().includes(placeholderQuery.toLowerCase())).map((token) => {
+    <section className="panel template-reference"><div><h2>{t("templates.placeholderTitle")}</h2><p>{t("templates.placeholderText")}</p><label className="field"><span>{t("templates.placeholderProject")}</span><select value={placeholderProjectId} onChange={(event) => setPlaceholderProjectId(event.target.value)}><option value="">{t("templates.commonPlaceholders")}</option>{database.projects.filter((project) => project.status !== "archived").map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><div className="search-shell"><Search size={15} /><input className="search-input" value={placeholderQuery} onChange={(event) => setPlaceholderQuery(event.target.value)} placeholder={t("templates.searchPlaceholders")} aria-label={t("templates.searchPlaceholders")} /></div>{placeholderError && <p role="alert">{placeholderError}</p>}</div><div className="placeholder-examples">{placeholderReference.filter((token) => token.toLowerCase().includes(placeholderQuery.toLowerCase())).map((token) => {
       const status = copyFeedback?.token === token ? copyFeedback.status : null;
       return <button type="button" className={`placeholder-copy ${status ? `is-${status}` : ""}`} key={token} aria-label={`${t("templates.copyPlaceholder")}: ${token}`} onClick={() => void copyPlaceholder(token)}><code>{token}</code><span className="placeholder-copy-action" aria-hidden="true">{status === "copied" ? <><Check size={13} />{t("templates.copied")}</> : status === "failed" ? <><CircleAlert size={13} />{t("templates.copyFailed")}</> : <Copy size={13} />}</span></button>;
     })}</div><span className="visually-hidden" role="status">{copyFeedback ? `${t(copyFeedback.status === "copied" ? "templates.copied" : "templates.copyFailed")}: ${copyFeedback.token}` : ""}</span><p className="field-help">{t("templates.placeholderLocations")}</p></section>
@@ -144,6 +159,7 @@ export function TemplatesPage() {
     <Modal open={Boolean(overviewToDelete)} title={t("templates.deleteTitle")} onClose={() => setOverviewToDelete(null)}><div className="modal-body"><p>{t("templates.deleteText", { name: overviewToDelete ? overviewTemplateName(overviewToDelete, locale) : "" })}</p></div><div className="modal-footer"><Button variant="secondary" onClick={() => setOverviewToDelete(null)}>{t("common.cancel")}</Button><Button variant="danger" onClick={() => { if (!overviewToDelete) return; deleteOverviewTemplate(overviewToDelete.id); setOverviewToDelete(null); }}>{t("common.delete")}</Button></div></Modal>
     <Modal open={Boolean(documentToDelete)} title={t("templates.deleteWordTitle")} onClose={() => setDocumentToDelete(null)}><div className="modal-body"><p>{t("templates.deleteWordText", { name: documentToDelete?.name ?? "" })}</p></div><div className="modal-footer"><Button variant="secondary" onClick={() => setDocumentToDelete(null)}>{t("common.cancel")}</Button><Button variant="danger" onClick={() => { if (!documentToDelete) return; deleteDocumentTemplate(documentToDelete.id); setDocumentToDelete(null); }}>{t("common.delete")}</Button></div></Modal>
     <DocumentTemplateModal key={`document-${editingDocument?.id ?? "new"}-${documentOpen}`} open={documentOpen} template={editingDocument} templates={database.documentTemplates} organizationId={database.organization.id} activeLocale={locale} onClose={() => setDocumentOpen(false)} onSave={(template) => { saveDocumentTemplate(template); setDocumentOpen(false); }} t={t} />
+    {creatingDocument && <WordDocumentCreationDialog template={creatingDocument} onClose={() => setCreatingDocument(null)} onCreated={(filename) => { setCreatedFilename(filename); setCreatingDocument(null); }} />}
   </div>;
 }
 
@@ -229,7 +245,6 @@ function OverviewTemplateModal({ open, template, templates, organizationId, loca
     if (!target?.entryId || !target.position) return;
     const result = moveOverviewEntry(draft.entries, String(event.active.id), target.entryId, target.position);
     if (!result.moved) return;
-    if (result.parentChanged && !window.confirm(t("templates.moveChangesPlaceholder"))) return;
     setDraft((current) => ({ ...current, entries: result.entries }));
   };
   const previewMove = (event: DragOverEvent) => {
@@ -316,7 +331,7 @@ function normalizeDocumentTemplateName(name: string): string {
 
 function DocumentTemplateModal({ open, template, templates, organizationId, activeLocale, onClose, onSave, t }: { open: boolean; template: DocumentTemplate | null; templates: DocumentTemplate[]; organizationId: string; activeLocale: Locale; onClose: () => void; onSave: (template: DocumentTemplate) => void; t: (key: string) => string }) {
   const now = new Date().toISOString();
-  const [draft, setDraft] = useState<DocumentTemplate>(() => template ? structuredClone(template) : { id: newId("document-template"), organizationId, name: "", documentType: "a4_plan", locale: activeLocale, origin: "custom", filename: "", description: "", createdAt: now, updatedAt: now });
+  const [draft, setDraft] = useState<DocumentTemplate>(() => template ? structuredClone(template) : { id: newId("document-template"), organizationId, name: "", documentType: "project_document", locale: activeLocale, origin: "custom", filename: "", description: "", createdAt: now, updatedAt: now });
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState("");
   const [validating, setValidating] = useState(false);

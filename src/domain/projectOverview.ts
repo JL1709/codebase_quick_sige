@@ -1,7 +1,16 @@
 import type { Locale, Project, ProjectOverviewEntry, ProjectOverviewSection } from "./types";
-import { normalizeOverviewKey, type OverviewDropPosition } from "./overviewTemplates";
+import { type OverviewDropPosition } from "./overviewTemplates";
+import { invalidSiblingNameIds, PROJECT_PLACEHOLDER_FIELDS } from "./placeholderNames";
+import { PROJECT_PARTICIPANTS_SECTION_ID } from "./projectOverviewOrder";
 
 type CreateId = (prefix: string) => string;
+
+export function invalidProjectSectionIds(project: Pick<Project, "overviewSections" | "overviewSectionOrder" | "participantsSectionName">): Set<string> {
+  const sections = project.overviewSectionOrder.includes(PROJECT_PARTICIPANTS_SECTION_ID)
+    ? [...project.overviewSections, { id: PROJECT_PARTICIPANTS_SECTION_ID, name: project.participantsSectionName }]
+    : project.overviewSections;
+  return invalidSiblingNameIds(sections, PROJECT_PLACEHOLDER_FIELDS);
+}
 
 interface ProjectOverviewEntryLocation {
   entry: ProjectOverviewEntry;
@@ -56,12 +65,12 @@ function synchronizeEntryOrder(structure: ProjectOverviewEntry, valueEntry?: Pro
     value: valueEntry?.value ?? "",
     children: structure.children.map((child) => synchronizeEntryOrder(
       child,
-      valueEntry?.children.find((candidate) => candidate.placeholderKey === child.placeholderKey),
+      valueEntry?.children.find((candidate) => candidate.label === child.label),
     )),
     items: structure.type === "repeating_group"
       ? structure.items.map((item) => structure.children.map((child) => synchronizeEntryOrder(
         child,
-        item.find((candidate) => candidate.placeholderKey === child.placeholderKey),
+        item.find((candidate) => candidate.label === child.label),
       )))
       : [],
   };
@@ -128,7 +137,7 @@ export function moveProjectOverviewRecord(
 }
 
 function textEntry(createId: CreateId, label: string, value = ""): ProjectOverviewEntry {
-  return { id: createId("overview-entry"), label, placeholderKey: normalizeOverviewKey(label), type: "text", value, children: [], items: [] };
+  return { id: createId("overview-entry"), label, type: "text", value, children: [], items: [] };
 }
 
 function dateEntry(createId: CreateId, label: string, value = ""): ProjectOverviewEntry {
@@ -136,7 +145,7 @@ function dateEntry(createId: CreateId, label: string, value = ""): ProjectOvervi
 }
 
 function groupEntry(createId: CreateId, label: string, children: ProjectOverviewEntry[]): ProjectOverviewEntry {
-  return { id: createId("overview-entry"), label, placeholderKey: normalizeOverviewKey(label), type: "group", value: "", children, items: [] };
+  return { id: createId("overview-entry"), label, type: "group", value: "", children, items: [] };
 }
 
 function repeatingEntry(createId: CreateId, label: string, itemLabels: string[], items: string[][]): ProjectOverviewEntry {
@@ -144,7 +153,6 @@ function repeatingEntry(createId: CreateId, label: string, itemLabels: string[],
   return {
     id: createId("overview-entry"),
     label,
-    placeholderKey: normalizeOverviewKey(label),
     type: "repeating_group",
     value: "",
     children,
@@ -169,13 +177,11 @@ export function legacyProjectOverviewSections(project: Project, createId: Create
   if (generalEntries.length) sections.push({
     id: createId("overview-section"),
     name: german ? "Allgemein" : "Project information",
-    placeholderKey: german ? "allgemein" : "project_information",
     entries: generalEntries,
   });
   if (project.emergencyContacts.length) sections.push({
     id: createId("overview-section"),
     name: german ? "Notfallkontakte" : "Emergency contacts",
-    placeholderKey: german ? "notfallkontakte" : "emergency_contacts",
     entries: [repeatingEntry(
       createId,
       german ? "Kontakte" : "Contacts",
@@ -183,21 +189,9 @@ export function legacyProjectOverviewSections(project: Project, createId: Create
       project.emergencyContacts.map((contact) => [contact.label, contact.name, contact.phone]),
     )],
   });
-  if (project.participants.length) sections.push({
-    id: createId("overview-section"),
-    name: german ? "Projektbeteiligte" : "Project participants",
-    placeholderKey: german ? "projektbeteiligte" : "project_participants",
-    entries: [repeatingEntry(
-      createId,
-      german ? "Beteiligte" : "Participants",
-      german ? ["Name", "Unternehmen", "Rolle", "E-Mail", "Telefon"] : ["Name", "Company", "Role", "Email", "Phone"],
-      project.participants.map((participant) => [participant.name, participant.company, participant.role, participant.email, participant.phone]),
-    )],
-  });
   sections.push(...project.customSections.map((section) => ({
     id: createId("overview-section"),
     name: section.title,
-    placeholderKey: section.placeholderKey,
     entries: section.fields.map((field) => textEntry(createId, field.key, field.value)),
   })));
   return sections;

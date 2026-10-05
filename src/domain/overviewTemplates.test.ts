@@ -9,7 +9,7 @@ import {
   overviewEntryClipboardValue,
   overviewEntryPath,
   overviewSectionTemplateData,
-  uniqueProjectOverviewSectionKey,
+  uniqueProjectOverviewSectionName,
   validateOverviewTemplate,
 } from "./overviewTemplates";
 
@@ -37,11 +37,12 @@ const template: OverviewTemplate = {
 describe("overview template hierarchy", () => {
   it("creates predictable localized placeholder keys and engine-ready clipboard values", () => {
     expect(normalizeOverviewKey("Größe & Straße")).toBe("groesse_strasse");
+    expect(normalizeOverviewKey("2026 Baustart")).toBe("_2026_baustart");
     expect(overviewEntryPath(template.name, "city", template.entries)).toBe("allgemein.adresse.stadt");
-    expect(overviewEntryClipboardValue(template, "city")).toBe("{{qs.overview.allgemein.adresse.stadt}}");
-    expect(overviewEntryClipboardValue(template, "participant-name")).toBe("{{qs.projektbeteiligte.name}}");
+    expect(overviewEntryClipboardValue(template, "city")).toBe("{{qs.project.allgemein.adresse.stadt}}");
+    expect(overviewEntryClipboardValue(template, "participant-name")).toBe("{{qs.project.allgemein.projektbeteiligte.name}}");
     expect(overviewEntryClipboardValue(template, "participants")).toBe(
-      "{{#qs.overview.allgemein.projektbeteiligte}}\n{{/qs.overview.allgemein.projektbeteiligte}}",
+      "{{#qs.project.allgemein.projektbeteiligte}}\n{{/qs.project.allgemein.projektbeteiligte}}",
     );
   });
 
@@ -72,7 +73,7 @@ describe("overview template hierarchy", () => {
     };
     let id = 0;
     const section = instantiateOverviewSection(dateTemplate, (prefix) => `${prefix}-${++id}`);
-    expect(section.placeholderKey).toBe("allgemein");
+    expect(section).not.toHaveProperty("placeholderKey");
     expect(overviewSectionTemplateData(section, "de")).toEqual({ uebergabe: "27.09.2026" });
   });
 
@@ -95,11 +96,11 @@ describe("overview template hierarchy", () => {
     expect(template.entries[0].label).toBe("Bauherr");
   });
 
-  it("creates stable unique keys for repeated custom and template sections", () => {
+  it("creates unique visible names for repeated sections", () => {
     const first = instantiateOverviewSection(template, (prefix) => `${prefix}-first`);
-    expect(uniqueProjectOverviewSectionKey("Allgemein", [])).toBe("allgemein");
-    expect(uniqueProjectOverviewSectionKey("Allgemein", [first])).toBe("allgemein_2");
-    expect(uniqueProjectOverviewSectionKey("Allgemein", [first, { ...first, id: "second", placeholderKey: "allgemein_2" }])).toBe("allgemein_3");
+    expect(uniqueProjectOverviewSectionName("Allgemein", [])).toBe("Allgemein");
+    expect(uniqueProjectOverviewSectionName("Allgemein", [first])).toBe("Allgemein 2");
+    expect(uniqueProjectOverviewSectionName("Allgemein", [first, { ...first, id: "second", name: "Allgemein 2" }])).toBe("Allgemein 3");
   });
 
   it("keeps structure shared while names, labels, and default values are language-specific", () => {

@@ -6,7 +6,6 @@ function entry(id: string, label: string, children: ProjectOverviewEntry[] = [])
   return {
     id,
     label,
-    placeholderKey: id,
     type: children.length > 0 ? "group" : "text",
     value: "",
     children,
@@ -38,7 +37,6 @@ describe("project overview hierarchy", () => {
     const repeating: ProjectOverviewEntry = {
       id: "contacts",
       label: "Contacts",
-      placeholderKey: "contacts",
       type: "repeating_group",
       value: "",
       children: [name, phone],
@@ -51,7 +49,7 @@ describe("project overview hierarchy", () => {
     const result = moveProjectOverviewEntry([repeating], "schema-phone", "schema-name", "before");
     const nextRepeating = result.entries[0];
 
-    expect(nextRepeating.children.map(({ placeholderKey }) => placeholderKey)).toEqual(["schema-phone", "schema-name"]);
+    expect(nextRepeating.children.map(({ id }) => id)).toEqual(["schema-phone", "schema-name"]);
     expect(nextRepeating.items[0].map(({ value }) => value)).toEqual(["112", "Fire service"]);
   });
 

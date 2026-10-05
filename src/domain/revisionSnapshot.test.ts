@@ -13,8 +13,13 @@ describe("revision snapshots", () => {
     const originalPlanStatus = snapshot.plan.status;
     const originalBlockTitle = snapshot.blocks[0].translations.de.title;
     const originalTemplateName = snapshot.documentTemplates[0].name;
+    const originalOrganizationName = snapshot.organization!.name;
+    database.organization.address.street = "Original street";
+    const snapshotWithAddress = buildRevisionSnapshot(database, project, plan!);
 
     project.name = "Changed after publication";
+    database.organization.name = "Renamed organization";
+    database.organization.address.street = "New street";
     plan!.status = "published";
     database.blocks.find((block) => block.id === snapshot.blocks[0].id)!.translations.de.title = "Changed catalog content";
     database.documentTemplates.find((template) => template.id === snapshot.documentTemplates[0].id)!.name = "Changed template";
@@ -23,6 +28,8 @@ describe("revision snapshots", () => {
     expect(snapshot.plan.status).toBe(originalPlanStatus);
     expect(snapshot.blocks[0].translations.de.title).toBe(originalBlockTitle);
     expect(snapshot.documentTemplates[0].name).toBe(originalTemplateName);
+    expect(snapshot.organization!.name).toBe(originalOrganizationName);
+    expect(snapshotWithAddress.organization!.address.street).toBe("Original street");
   });
 
   it("includes only blocks used by the published plan", () => {

@@ -8,6 +8,30 @@ import {
 
 describe("local database migration", () => {
   beforeEach(() => window.localStorage.clear());
+  it("migrates legacy organization records without inventing company contact details", () => {
+    const source = createSeedDatabase();
+    source.schemaVersion = 37;
+    const legacy = { ...source, organization: { id: source.organization.id, name: "Original company", accentColor: source.organization.accentColor } };
+    const migrated = migrateDatabase(legacy)!;
+    expect(migrated.organization).toMatchObject({ name: "Original company", email: "", phone: "", address: { postalCode: "", countryCode: "" } });
+    expect(migrated.user.email).toBe(source.user.email);
+    expect(migrated.revisions[0].snapshot.organization).toBeUndefined();
+  });
+
+  it("persists organization profiles and revision snapshots across reloads", () => {
+    const source = createSeedDatabase();
+    source.organization.address.postalCode = "01234";
+    source.organization.logo = { blobId: "original-logo", filename: "logo.png", mimeType: "image/png", width: 200, height: 80 };
+    source.revisions[0].snapshot.organization = structuredClone(source.organization);
+    const repository = new LocalStorageRepository();
+    repository.save(source);
+    const reloaded = repository.load();
+    expect(reloaded.organization).toEqual(source.organization);
+    expect(reloaded.revisions[0].snapshot.organization).toEqual(source.organization);
+    reloaded.organization.logo!.blobId = "new-logo";
+    expect(reloaded.revisions[0].snapshot.organization!.logo!.blobId).toBe("original-logo");
+  });
+
   it("preserves projects while adding flexible data, templates, and A0 layout", () => {
     const legacy = structuredClone(createSeedDatabase()) as unknown as Record<string, unknown>;
     legacy.schemaVersion = 2;
@@ -376,7 +400,7 @@ describe("local database migration", () => {
       name: "Legacy details",
       kind: "project_details",
       lifecycle: "active",
-      fields: [{ id: "legacy-field", key: "Bauherr", value: "Example GmbH", placeholderKey: "client" }],
+      fields: [{ id: "legacy-field", key: "Bauherr", value: "Example GmbH" }],
       emergencyContacts: [],
       participants: [],
       createdAt: "2026-09-01T00:00:00.000Z",

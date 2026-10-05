@@ -2,6 +2,7 @@ import { createPlanFromAssessment } from "../domain/recommendationEngine";
 import { migrateLegacyProjectContacts } from "../domain/contacts";
 import { defaultBlockImageSource } from "../domain/blockImages";
 import { categoryPlacementIds } from "../domain/categoryTree";
+import { emptyOrganizationProfile } from "../domain/organizationProfile";
 import { legacyProjectOverviewSections } from "../domain/projectOverview";
 import { normalizeProjectOverviewSectionOrder, PROJECT_PARTICIPANTS_SECTION_ID } from "../domain/projectOverviewOrder";
 import type {
@@ -518,15 +519,15 @@ const demoProject: Project = {
     { id: "emergency-hospital", label: "Nächstes Unfallkrankenhaus", name: "Klinikum Nord", phone: "+49 341 555 990" },
   ],
   customFields: [
-    { id: "field-client", key: "Bauherr", value: "Westpark Projekt GmbH", placeholderKey: "client" },
-    { id: "field-site-access", key: "Baustellenzufahrt", value: "Tor West, Industriestraße 18", placeholderKey: "site_access" },
-    { id: "field-permit", key: "Baugenehmigungsnummer", value: "", placeholderKey: "building_permit_number" },
+    { id: "field-client", key: "Bauherr", value: "Westpark Projekt GmbH" },
+    { id: "field-site-access", key: "Baustellenzufahrt", value: "Tor West, Industriestraße 18" },
+    { id: "field-permit", key: "Baugenehmigungsnummer", value: "" },
   ],
   customSections: [{
-    id: "section-site-logistics", title: "Baustellenlogistik", placeholderKey: "site_logistics",
+    id: "section-site-logistics", title: "Baustellenlogistik",
     fields: [
-      { id: "field-delivery-window", key: "Anlieferzeitfenster", value: "06:30–15:30 Uhr", placeholderKey: "delivery_window" },
-      { id: "field-waiting-area", key: "Wartebereich", value: "", placeholderKey: "waiting_area" },
+      { id: "field-delivery-window", key: "Anlieferzeitfenster", value: "06:30–15:30 Uhr" },
+      { id: "field-waiting-area", key: "Wartebereich", value: "" },
     ],
   }],
   participantsSectionName: "Projektbeteiligte",
@@ -636,8 +637,9 @@ export function createSeedDatabase(): AppDatabase {
     updatedAt: createdAt,
   }));
   return {
-    schemaVersion: 37,
+    schemaVersion: 38,
     organization: {
+      ...emptyOrganizationProfile(),
       id: "organization-demo",
       name: "Sicher Planen Ingenieure",
       accentColor: "#d5ff3f",

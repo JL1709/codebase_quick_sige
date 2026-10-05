@@ -5,6 +5,8 @@ import type {
   ProjectOverviewEntry,
   ProjectOverviewSection,
 } from "./types";
+import { invalidSiblingNameIds, normalizeOverviewKey } from "./placeholderNames";
+export { normalizeOverviewKey } from "./placeholderNames";
 
 export type OverviewDropPosition = "before" | "inside" | "after";
 
@@ -108,24 +110,6 @@ export function mergeOverviewTemplateLocale(
   };
 }
 
-export function normalizeOverviewKey(value: string, fallback = "field"): string {
-  const transliterated = value
-    .replaceAll("Ä", "Ae")
-    .replaceAll("Ö", "Oe")
-    .replaceAll("Ü", "Ue")
-    .replaceAll("ä", "ae")
-    .replaceAll("ö", "oe")
-    .replaceAll("ü", "ue")
-    .replaceAll("ß", "ss");
-  const normalized = transliterated
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  return normalized || fallback;
-}
-
 export function flattenOverviewEntries(entries: OverviewTemplateEntry[]): OverviewEntryLocation[] {
   const result: OverviewEntryLocation[] = [];
   const visit = (siblings: OverviewTemplateEntry[], parentId: string | undefined, ancestors: OverviewTemplateEntry[]) => {
@@ -151,12 +135,7 @@ export function overviewEntryPath(templateName: string, entryId: string, entries
 }
 
 function entryExpression(template: OverviewTemplate, location: OverviewEntryLocation): string {
-  const repeatingAncestorIndex = location.ancestors.map((entry) => entry.type).lastIndexOf("repeating_group");
-  if (repeatingAncestorIndex < 0) return `qs.overview.${overviewEntryPath(template.name, location.entry.id, template.entries)}`;
-  const repeatingAncestor = location.ancestors[repeatingAncestorIndex];
-  const relativeParts = [...location.ancestors.slice(repeatingAncestorIndex + 1).map((entry) => entry.label), location.entry.label]
-    .map((part) => normalizeOverviewKey(part));
-  return `qs.${normalizeOverviewKey(repeatingAncestor.label)}.${relativeParts.join(".")}`;
+  return `qs.project.${overviewEntryPath(template.name, location.entry.id, template.entries)}`;
 }
 
 export function overviewEntryClipboardValue(template: OverviewTemplate, entryId: string): string {
@@ -178,16 +157,13 @@ export function validateOverviewTemplate(
   const nameConflict = normalizedName.length === 0 || templates.some((candidate) => (
     candidate.id !== template.id && normalizeOverviewKey(candidate.name, "") === normalizedName
   ));
-  const locations = flattenOverviewEntries(template.entries);
-  const labelCounts = new Map<string, number>();
-  locations.forEach(({ entry }) => {
-    const key = normalizeOverviewKey(entry.label, "");
-    labelCounts.set(key, (labelCounts.get(key) ?? 0) + 1);
-  });
-  const invalidEntryIds = new Set(locations.filter(({ entry }) => {
-    const key = normalizeOverviewKey(entry.label, "");
-    return key.length === 0 || (labelCounts.get(key) ?? 0) > 1;
-  }).map(({ entry }) => entry.id));
+  const invalidEntryIds = new Set<string>();
+  const visit = (entries: OverviewTemplateEntry[]) => {
+    invalidSiblingNameIds(entries.map((entry) => ({ id: entry.id, name: entry.label })))
+      .forEach((id) => invalidEntryIds.add(id));
+    entries.forEach((entry) => visit(entry.children));
+  };
+  visit(template.entries);
   return { valid: !nameConflict && invalidEntryIds.size === 0, nameConflict, invalidEntryIds };
 }
 
@@ -253,7 +229,6 @@ function instantiateEntry(entry: OverviewTemplateEntry, createId: (prefix: strin
   return {
     id: createId("overview-entry"),
     label: entry.label,
-    placeholderKey: normalizeOverviewKey(entry.label),
     type: entry.type,
     value: entry.defaultValue,
     children: ["group", "repeating_group"].includes(entry.type) ? children : [],
@@ -283,21 +258,20 @@ export function instantiateOverviewSection(
   return {
     id: createId("overview-section"),
     name: localizedTemplate.name,
-    placeholderKey: normalizeOverviewKey(localizedTemplate.name, "template"),
     entries: localizedTemplate.entries.map((entry) => instantiateEntry(entry, createId)),
   };
 }
 
-export function uniqueProjectOverviewSectionKey(
+export function uniqueProjectOverviewSectionName(
   sectionName: string,
   sections: ProjectOverviewSection[],
 ): string {
-  const baseKey = normalizeOverviewKey(sectionName, "section");
-  const existingKeys = new Set(sections.map((section) => section.placeholderKey));
-  if (!existingKeys.has(baseKey)) return baseKey;
+  const baseKey = normalizeOverviewKey(sectionName);
+  const existingKeys = new Set(sections.map((section) => normalizeOverviewKey(section.name)));
+  if (!existingKeys.has(baseKey)) return sectionName;
   let suffix = 2;
   while (existingKeys.has(`${baseKey}_${suffix}`)) suffix += 1;
-  return `${baseKey}_${suffix}`;
+  return `${sectionName} ${suffix}`;
 }
 
 function formatEntryValue(entry: ProjectOverviewEntry, locale: Locale): unknown {
@@ -313,10 +287,10 @@ function formatEntryValue(entry: ProjectOverviewEntry, locale: Locale): unknown 
     }).format(new Date(Date.UTC(year, month - 1, day)));
   }
   if (entry.type === "text") return entry.value;
-  if (entry.type === "group") return Object.fromEntries(entry.children.map((child) => [child.placeholderKey, formatEntryValue(child, locale)]));
-  return entry.items.map((item) => Object.fromEntries(item.map((child) => [child.placeholderKey, formatEntryValue(child, locale)])));
+  if (entry.type === "group") return Object.fromEntries(entry.children.map((child) => [normalizeOverviewKey(child.label), formatEntryValue(child, locale)]));
+  return entry.items.map((item) => Object.fromEntries(item.map((child) => [normalizeOverviewKey(child.label), formatEntryValue(child, locale)])));
 }
 
 export function overviewSectionTemplateData(section: ProjectOverviewSection, locale: Locale): Record<string, unknown> {
-  return Object.fromEntries(section.entries.map((entry) => [entry.placeholderKey, formatEntryValue(entry, locale)]));
+  return Object.fromEntries(section.entries.map((entry) => [normalizeOverviewKey(entry.label), formatEntryValue(entry, locale)]));
 }

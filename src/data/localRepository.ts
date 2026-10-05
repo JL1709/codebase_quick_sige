@@ -26,12 +26,13 @@ import type {
   ProjectOverviewSection,
 } from "../domain/types";
 import { z } from "zod";
+import { emptyOrganizationProfile, storedOrganizationSchema } from "../domain/organizationProfile";
 
 export const STORAGE_KEY = "quicksige.database.v3";
 const LEGACY_STORAGE_KEYS = ["quicksige.prototype.database.v2"];
 export const BACKUP_KEY = "quicksige.database.migration-backup.v2";
 export const MIGRATION_ERROR_KEY = "quicksige.database.migration-error";
-export const CURRENT_SCHEMA_VERSION = 37;
+export const CURRENT_SCHEMA_VERSION = 38;
 const CATEGORY_HIERARCHY_SCHEMA_VERSION = 24;
 const CATEGORY_ASSIGNMENT_CORRECTION_SCHEMA_VERSION = 20;
 const AUTOMATIC_TITLE_BLOCK_REMOVAL_SCHEMA_VERSION = 30;
@@ -57,7 +58,7 @@ const CORRECTED_IMPORTED_UTILITIES_TITLES = {
 
 const persistedDatabaseSchema = z.object({
   schemaVersion: z.number().int().nonnegative(),
-  organization: z.object({ id: z.string(), name: z.string(), accentColor: z.string() }),
+  organization: storedOrganizationSchema,
   user: z.object({ id: z.string(), organizationId: z.string(), name: z.string(), email: z.string(), role: z.enum(["owner", "admin", "editor", "viewer"]), preferredLocale: z.enum(["de", "en"]) }),
   projects: z.array(z.object({ id: z.string() }).passthrough()),
   contacts: z.array(z.object({ id: z.string(), organizationId: z.string() }).passthrough()),
@@ -574,7 +575,10 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
   const source = value as PersistedDatabase;
   const defaults = createSeedDatabase();
   const locale = source.user?.preferredLocale ?? defaults.user.preferredLocale;
-  const organization = { ...defaults.organization, ...source.organization } as typeof source.organization & { defaultLocale?: Locale };
+  const organization = {
+    ...emptyOrganizationProfile(), ...defaults.organization, ...source.organization,
+    address: { ...emptyOrganizationProfile().address, ...source.organization?.address },
+  } as typeof source.organization & { defaultLocale?: Locale };
   Reflect.deleteProperty(organization, "defaultLocale");
   const defaultLogisticsProject = defaults.projects.find((project) => project.id === LOGISTICS_DEMO_PROJECT_ID)!;
   const defaultLogisticsPlan = defaults.plans.find((plan) => plan.projectId === LOGISTICS_DEMO_PROJECT_ID)!;

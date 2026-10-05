@@ -8,6 +8,7 @@ import type { ProjectOverviewSection } from "../domain/types";
 import { normalizeProjectOverviewSectionOrder, PROJECT_PARTICIPANTS_SECTION_ID } from "../domain/projectOverviewOrder";
 import { useI18n } from "../i18n/I18nProvider";
 import { useApp } from "../state/AppProvider";
+import { invalidProjectSectionIds } from "../domain/projectOverview";
 import { NotFoundPage } from "./NotFoundPage";
 
 export function ProjectPage() {
@@ -35,6 +36,7 @@ export function ProjectPage() {
       return <OverviewSectionCard
         key={section.id}
         section={section}
+        isNameValid={(name) => !invalidProjectSectionIds({ ...project, overviewSections: project.overviewSections.map((candidate) => candidate.id === section.id ? { ...candidate, name } : candidate) }).has(section.id)}
         onChange={(nextSection) => updateProject({ ...project, overviewSections: project.overviewSections.map((candidate) => candidate.id === nextSection.id ? nextSection : candidate) })}
         onDelete={() => { if (window.confirm(t("common.confirmDelete"))) updateProject({ ...project, overviewSections: project.overviewSections.filter((candidate) => candidate.id !== section.id), overviewSectionOrder: project.overviewSectionOrder.filter((id) => id !== section.id) }); }}
         t={t}
@@ -46,8 +48,9 @@ export function ProjectPage() {
   </div>;
 }
 
-function OverviewSectionCard({ section, onChange, onDelete, t, formatDate }: {
+function OverviewSectionCard({ section, isNameValid, onChange, onDelete, t, formatDate }: {
   section: ProjectOverviewSection;
+  isNameValid: (name: string) => boolean;
   onChange: (section: ProjectOverviewSection) => void;
   onDelete: () => void;
   t: (key: string, params?: Record<string, string | number>) => string;
@@ -56,10 +59,10 @@ function OverviewSectionCard({ section, onChange, onDelete, t, formatDate }: {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(() => structuredClone(section));
   const invalidEntryIds = invalidProjectOverviewEntryIds(draft.entries);
-  const draftValid = Boolean(draft.name.trim()) && invalidEntryIds.size === 0;
+  const draftValid = isNameValid(draft.name) && invalidEntryIds.size === 0;
   useEffect(() => { if (!editing) setDraft(structuredClone(section)); }, [editing, section]);
   return <section className="panel overview-template-section overview-span-two">
-    <div className="panel-header"><div>{editing ? <input className="project-section-title-input" aria-label={t("project.sectionTitle")} aria-invalid={!draft.name.trim()} value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} /> : <h2>{section.name}</h2>}<span className="panel-kicker">{countProjectOverviewValues(section.entries)} {t("overview.entries")}</span></div><div className="row-actions">{editing ? <><Button size="small" variant="ghost" onClick={() => { setDraft(structuredClone(section)); setEditing(false); }}><X size={14} />{t("common.cancel")}</Button><Button size="small" disabled={!draftValid} onClick={() => { onChange({ ...draft, name: draft.name.trim() }); setEditing(false); }}><Check size={14} />{t("common.save")}</Button></> : <Button size="small" variant="secondary" onClick={() => setEditing(true)}><Pencil size={14} />{t("common.edit")}</Button>}<button type="button" className="icon-button danger-icon" onClick={onDelete} aria-label={t("common.delete")}><Trash2 size={14} /></button></div></div>
+    <div className="panel-header"><div>{editing ? <input className="project-section-title-input" aria-label={t("project.sectionTitle")} aria-invalid={!isNameValid(draft.name)} value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} /> : <h2>{section.name}</h2>}{editing && !isNameValid(draft.name) && <small className="field-error" role="alert">{t("project.sectionNameUnique")}</small>}<span className="panel-kicker">{countProjectOverviewValues(section.entries)} {t("overview.entries")}</span></div><div className="row-actions">{editing ? <><Button size="small" variant="ghost" onClick={() => { setDraft(structuredClone(section)); setEditing(false); }}><X size={14} />{t("common.cancel")}</Button><Button size="small" disabled={!draftValid} onClick={() => { onChange({ ...draft, name: draft.name.trim() }); setEditing(false); }}><Check size={14} />{t("common.save")}</Button></> : <Button size="small" variant="secondary" onClick={() => setEditing(true)}><Pencil size={14} />{t("common.edit")}</Button>}<button type="button" className="icon-button danger-icon" onClick={onDelete} aria-label={t("common.delete")}><Trash2 size={14} /></button></div></div>
     <div className="panel-body"><ProjectOverviewFields entries={draft.entries} editing={editing} structureEditing={editing} invalidEntryIds={invalidEntryIds} onChange={(entries) => setDraft((current) => ({ ...current, entries }))} t={t} formatDate={formatDate} /></div>
   </section>;
 }

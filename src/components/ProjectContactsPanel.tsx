@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import { companyForContact, contactDisplayName, primaryEmail, primaryPhone, projectContactRoleFromKey, projectContactRoleKey } from "../domain/contacts";
 import { useI18n } from "../i18n/I18nProvider";
 import { newId, useApp } from "../state/AppProvider";
+import { invalidProjectSectionIds } from "../domain/projectOverview";
+import { PROJECT_PARTICIPANTS_SECTION_ID } from "../domain/projectOverviewOrder";
 import { ContactFormModal } from "./ContactFormModal";
 import { ProjectContactPicker } from "./ProjectContactPicker";
 import { ProjectRolePicker } from "./ProjectRolePicker";
@@ -29,6 +31,10 @@ export function ProjectContactsPanel({ projectId, title, titleEditing = false, o
   const newlyCreatedRoleLabels = useRef(new Map<string, string>());
   const canManageContacts = database.user.role !== "viewer";
   const sectionTitle = title ?? t("project.participants");
+  const project = database.projects.find((candidate) => candidate.id === projectId);
+  const titleValid = project
+    ? !invalidProjectSectionIds({ ...project, participantsSectionName: titleEditorOpen ? titleDraft : sectionTitle }).has(PROJECT_PARTICIPANTS_SECTION_ID)
+    : Boolean((titleEditorOpen ? titleDraft : sectionTitle).trim());
   const assignments = database.projectContactAssignments.filter((assignment) => assignment.projectId === projectId && assignment.lifecycle === "active");
   const selectedContact = database.contacts.find((contact) => contact.id === contactId);
   const assignmentToRemove = assignments.find((assignment) => assignment.id === assignmentToRemoveId);
@@ -85,7 +91,7 @@ export function ProjectContactsPanel({ projectId, title, titleEditing = false, o
   return <section className="panel project-contacts-panel overview-span-two">
     <div className="panel-header"><div>{titleEditing || titleEditorOpen
       ? <input className="project-section-title-input" aria-label={t("project.sectionTitle")} value={titleEditing ? sectionTitle : titleDraft} onChange={(event) => titleEditing ? onTitleChange?.(event.target.value) : setTitleDraft(event.target.value)} />
-      : <h2>{sectionTitle}</h2>}<p>{t("contacts.projectPanelHelp")}</p></div><div className="row-actions">{onTitleChange && !titleEditing && (titleEditorOpen ? <><Button type="button" size="small" variant="ghost" onClick={() => { setTitleDraft(sectionTitle); setTitleEditorOpen(false); }}>{t("common.cancel")}</Button><Button type="button" size="small" disabled={!titleDraft.trim()} onClick={() => { onTitleChange(titleDraft.trim()); setTitleEditorOpen(false); }}>{t("common.save")}</Button></> : <button type="button" className="icon-button" disabled={!canManageContacts} aria-label={`${t("project.editSectionTitle")}: ${sectionTitle}`} onClick={() => setTitleEditorOpen(true)}><Pencil size={14} /></button>)}<Button type="button" size="small" variant="secondary" disabled={!canManageContacts} onClick={() => setContactFormOpen(true)}><Plus size={14} />{t("contacts.newContact")}</Button><Button type="button" size="small" disabled={!canManageContacts} onClick={openAssignmentModal}><UserPlus size={14} />{t("contacts.addToProject")}</Button>{onRemoveSection && <Button type="button" size="small" variant="ghost" onClick={onRemoveSection}><Trash2 size={14} />{t("common.remove")}</Button>}</div></div>
+      : <h2>{sectionTitle}</h2>}<p>{t("contacts.projectPanelHelp")}</p>{(titleEditing || titleEditorOpen) && !titleValid && <small className="field-error" role="alert">{t("project.sectionNameUnique")}</small>}</div><div className="row-actions">{onTitleChange && !titleEditing && (titleEditorOpen ? <><Button type="button" size="small" variant="ghost" onClick={() => { setTitleDraft(sectionTitle); setTitleEditorOpen(false); }}>{t("common.cancel")}</Button><Button type="button" size="small" disabled={!titleValid} onClick={() => { onTitleChange(titleDraft.trim()); setTitleEditorOpen(false); }}>{t("common.save")}</Button></> : <button type="button" className="icon-button" disabled={!canManageContacts} aria-label={`${t("project.editSectionTitle")}: ${sectionTitle}`} onClick={() => setTitleEditorOpen(true)}><Pencil size={14} /></button>)}<Button type="button" size="small" variant="secondary" disabled={!canManageContacts} onClick={() => setContactFormOpen(true)}><Plus size={14} />{t("contacts.newContact")}</Button><Button type="button" size="small" disabled={!canManageContacts} onClick={openAssignmentModal}><UserPlus size={14} />{t("contacts.addToProject")}</Button>{onRemoveSection && <Button type="button" size="small" variant="ghost" onClick={onRemoveSection}><Trash2 size={14} />{t("common.remove")}</Button>}</div></div>
     <div className="panel-body">{assignments.length === 0 ? <EmptyState icon={<Users />} title={t("contacts.noProjectContacts")} text={t("contacts.noProjectContactsText")} /> : <div className="project-contact-list">{assignments.map((assignment) => {
       const contact = database.contacts.find((candidate) => candidate.id === assignment.contactId);
       const company = contact ? companyForContact(database, contact.id) : undefined;
