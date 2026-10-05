@@ -13,6 +13,7 @@ import type {
   Contact,
   ContactCompanyAffiliation,
   CustomField,
+  DocumentTemplate,
   EmergencyContact,
   Locale,
   OverviewTemplate,
@@ -27,12 +28,14 @@ import type {
 } from "../domain/types";
 import { z } from "zod";
 import { emptyOrganizationProfile, storedOrganizationSchema } from "../domain/organizationProfile";
+import { BUNDLED_WORD_TEMPLATES_SCHEMA_VERSION, createBundledWordTemplates } from "./bundledWordTemplates";
+import { ADVANCE_NOTICE_TEMPLATE_ID, createAdvanceNoticeOverviewTemplate, createExampleAdvanceNoticeSection } from "./advanceNoticeOverview";
 
 export const STORAGE_KEY = "quicksige.database.v3";
 const LEGACY_STORAGE_KEYS = ["quicksige.prototype.database.v2"];
 export const BACKUP_KEY = "quicksige.database.migration-backup.v2";
 export const MIGRATION_ERROR_KEY = "quicksige.database.migration-error";
-export const CURRENT_SCHEMA_VERSION = 38;
+export const CURRENT_SCHEMA_VERSION = BUNDLED_WORD_TEMPLATES_SCHEMA_VERSION;
 const CATEGORY_HIERARCHY_SCHEMA_VERSION = 24;
 const CATEGORY_ASSIGNMENT_CORRECTION_SCHEMA_VERSION = 20;
 const AUTOMATIC_TITLE_BLOCK_REMOVAL_SCHEMA_VERSION = 30;
@@ -576,7 +579,10 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
   const defaults = createSeedDatabase();
   const locale = source.user?.preferredLocale ?? defaults.user.preferredLocale;
   const organization = {
-    ...emptyOrganizationProfile(), ...defaults.organization, ...source.organization,
+    ...emptyOrganizationProfile(defaults.organization.name),
+    ...source.organization,
+    id: source.organization?.id ?? defaults.organization.id,
+    accentColor: source.organization?.accentColor ?? defaults.organization.accentColor,
     address: { ...emptyOrganizationProfile().address, ...source.organization?.address },
   } as typeof source.organization & { defaultLocale?: Locale };
   Reflect.deleteProperty(organization, "defaultLocale");
@@ -607,6 +613,14 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
       Reflect.deleteProperty(detachedSection, "templateId");
       return detachedSection;
     });
+    if ((source.schemaVersion ?? 0) < BUNDLED_WORD_TEMPLATES_SCHEMA_VERSION && project.id === LOGISTICS_DEMO_PROJECT_ID) {
+      if (!overviewSections.some((section) => section.name === "Vorankündigung")) overviewSections.push(createExampleAdvanceNoticeSection(organization.id));
+      const general = overviewSections.find((section) => section.name === "Allgemein");
+      const exampleNumber = defaultLogisticsProject?.overviewSections.find((section) => section.name === "Allgemein")?.entries.find((entry) => entry.label === "Nummer");
+      if (general && exampleNumber && !general.entries.some((entry) => entry.label === "Nummer")) {
+        general.entries = [structuredClone(exampleNumber), ...general.entries];
+      }
+    }
     const overviewSectionOrder = normalizeProjectOverviewSectionOrder(project.overviewSectionOrder, overviewSections);
     return {
       ...project,
@@ -671,7 +685,7 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
     }
     return { ...plan, supersededAt: plan.updatedAt };
   });
-  const documentTemplates = (source.documentTemplates ?? defaults.documentTemplates)
+  const documentTemplates: DocumentTemplate[] = (source.documentTemplates ?? defaults.documentTemplates)
     .filter((template) => template.origin === "custom" || template.documentType === "a4_plan")
     .map((template) => ({
       ...template,
@@ -679,6 +693,14 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
       lifecycle: template.lifecycle ?? "active" as const,
       revision: template.revision ?? 1,
     }));
+  if ((source.schemaVersion ?? 0) < BUNDLED_WORD_TEMPLATES_SCHEMA_VERSION) {
+    const existingIds = new Set(documentTemplates.map((template) => template.id));
+    documentTemplates.push(...createBundledWordTemplates(organization.id).filter((template) => !existingIds.has(template.id)));
+  }
+  const overviewTemplates = [...(source.overviewTemplates ?? defaults.overviewTemplates)];
+  if ((source.schemaVersion ?? 0) < BUNDLED_WORD_TEMPLATES_SCHEMA_VERSION && !overviewTemplates.some((template) => template.id === ADVANCE_NOTICE_TEMPLATE_ID)) {
+    overviewTemplates.push(createAdvanceNoticeOverviewTemplate(organization.id));
+  }
   const documentTemplateIds = new Set(documentTemplates.map((template) => template.id));
   const sourceWithoutLegacyAssessments = { ...source };
   Reflect.deleteProperty(sourceWithoutLegacyAssessments, "assessments");
@@ -740,7 +762,7 @@ export function migrateDatabase(value: unknown): AppDatabase | null {
         },
       };
     }),
-    overviewTemplates: ((source.overviewTemplates ?? defaults.overviewTemplates) as PersistedOverviewTemplate[])
+    overviewTemplates: (overviewTemplates as PersistedOverviewTemplate[])
       .map(migrateOverviewTemplate)
       .map((template) => backfillStarterTemplateTranslations(
         template,

@@ -2,9 +2,11 @@ import { createPlanFromAssessment } from "../domain/recommendationEngine";
 import { migrateLegacyProjectContacts } from "../domain/contacts";
 import { defaultBlockImageSource } from "../domain/blockImages";
 import { categoryPlacementIds } from "../domain/categoryTree";
-import { emptyOrganizationProfile } from "../domain/organizationProfile";
 import { legacyProjectOverviewSections } from "../domain/projectOverview";
 import { normalizeProjectOverviewSectionOrder, PROJECT_PARTICIPANTS_SECTION_ID } from "../domain/projectOverviewOrder";
+import { EXAMPLE_ORGANIZATION_LOGO } from "./exampleOrganizationLogo";
+import { BUNDLED_WORD_TEMPLATES_SCHEMA_VERSION, createBundledWordTemplates } from "./bundledWordTemplates";
+import { createAdvanceNoticeOverviewTemplate, createExampleAdvanceNoticeSection } from "./advanceNoticeOverview";
 import type {
   AppDatabase,
   AssessmentAnswers,
@@ -593,6 +595,15 @@ function seedOverviewSections(project: Project, locale: Locale) {
 }
 
 demoProject.overviewSections = seedOverviewSections(demoProject, "de");
+demoProject.overviewSections.push(createExampleAdvanceNoticeSection(demoProject.organizationId));
+demoProject.overviewSections.find((section) => section.name === "Allgemein")!.entries.unshift({
+  id: "example-project-number",
+  label: "Nummer",
+  type: "text",
+  value: "LW-2026-001",
+  children: [],
+  items: [],
+});
 demoProject.overviewSectionOrder = normalizeProjectOverviewSectionOrder(
   [PROJECT_PARTICIPANTS_SECTION_ID, ...demoProject.overviewSections.map((section) => section.id)],
   demoProject.overviewSections,
@@ -622,7 +633,7 @@ export function createSeedDatabase(): AppDatabase {
   const plan = placeExampleProjectDocuments(structuredClone(generatedPlan));
   plan.status = "draft";
   plan.updatedAt = "2026-09-26T18:00:00.000Z";
-  const documentTemplates = (["de", "en"] as const).map((locale) => ({
+  const documentTemplates = [...(["de", "en"] as const).map((locale) => ({
     id: `standard-a4_plan-${locale}`,
     organizationId: "organization-demo",
     name: "QuickSiGe Standard",
@@ -635,13 +646,29 @@ export function createSeedDatabase(): AppDatabase {
     revision: 1,
     createdAt,
     updatedAt: createdAt,
-  }));
+  })), ...createBundledWordTemplates(demoProject.organizationId)];
   return {
-    schemaVersion: 38,
+    schemaVersion: BUNDLED_WORD_TEMPLATES_SCHEMA_VERSION,
     organization: {
-      ...emptyOrganizationProfile(),
       id: "organization-demo",
       name: "Sicher Planen Ingenieure",
+      address: {
+        street: "Musterstraße",
+        houseNumber: "12a",
+        addressAddition: "Büro 2, 1. Obergeschoss",
+        postalCode: "04109",
+        city: "Leipzig",
+        region: "Sachsen",
+        countryCode: "DE",
+      },
+      phone: "+49341555220",
+      phoneExtension: "10",
+      mobilePhone: "+4915155512345",
+      fax: "+49341555229",
+      faxExtension: "20",
+      email: "kontakt@sicher-planen.example.test",
+      website: "https://sicher-planen.example.test/",
+      logo: { ...EXAMPLE_ORGANIZATION_LOGO },
       accentColor: "#d5ff3f",
     },
     user: {
@@ -758,6 +785,7 @@ export function createSeedDatabase(): AppDatabase {
         createdAt,
         updatedAt: createdAt,
       },
+      createAdvanceNoticeOverviewTemplate(demoProject.organizationId),
     ],
     documentTemplates,
     documentConfigurations: [],

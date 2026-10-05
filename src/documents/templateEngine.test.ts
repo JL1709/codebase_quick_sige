@@ -25,6 +25,13 @@ async function paragraphTemplate(paragraphs: string[]): Promise<ArrayBuffer> {
 }
 
 describe("Word template engine", () => {
+  it("fits project images onto a page while preserving their original aspect ratio", () => {
+    const database = createSeedDatabase();
+    const project = { ...database.projects[0], assets: [{ ...database.projects[0].assets[0], width: 400, height: 800, dataUrl: "data:image/png;base64,AQID" }] };
+    const data = buildTemplateData(project, undefined, "de", []) as { qs: { project: { files: Array<{ image: unknown }> } } };
+    const image = data.qs.project.files[0].image;
+    expect(image).toMatchObject({ width: 8.75, height: 17.5 });
+  });
   it("derives paths from current labels and leaves the uploaded template detached", async () => {
     const database = createSeedDatabase();
     const project = structuredClone(database.projects[0]);
@@ -50,13 +57,53 @@ describe("Word template engine", () => {
     database.projectContactAssignments[0].roles.push({ id: "second-role", role: "contractor" });
     const project = { ...projectWithResolvedParticipants(database, database.projects[0]), participantsSectionName: "Bauteam" };
     const data = buildTemplateData(project, undefined, "de", []);
-    const template = await paragraphTemplate(["{{#qs.project.bauteam}}", "{{qs.project.bauteam.name}} | {{qs.project.bauteam.rolle}}", "{{/qs.project.bauteam}}"]);
+    const template = await paragraphTemplate(["{{#qs.project.bauteam}}", "{{qs.project.bauteam.name}} | {{qs.project.bauteam.role}}", "{{/qs.project.bauteam}}"]);
     expect((await inspectTemplate(template, data)).missingPlaceholders).toEqual([]);
     const xml = await documentXml(await renderTemplate(template, data));
     expect(xml.match(/Dr\. Anna Richter/g)).toHaveLength(1);
     expect(xml).toContain("Bauherr, Auftragnehmer");
-    expect(templatePlaceholderReference(data)).toContain("{{qs.project.bauteam.e_mail}}");
+    expect(templatePlaceholderReference(data)).toContain("{{qs.project.bauteam.email}}");
     expect((await inspectTemplate(await commandTemplate("qs.participants"), data)).missingPlaceholders).toEqual(["qs.participants"]);
+  });
+
+  it("keeps participant paths stable across document languages while localizing values", async () => {
+    const database = createSeedDatabase();
+    const project = { ...projectWithResolvedParticipants(database, database.projects[0]), participantsSectionName: "Bauteam" };
+    const section = project.overviewSections.find((candidate) => candidate.name === "Allgemein")!;
+    section.entries.find((entry) => entry.label === "Geplanter Beginn")!.value = "2030-01-02";
+    const template = await paragraphTemplate([
+      "Statischer deutscher Text",
+      "{{qs.project.allgemein.geplanter_beginn}}",
+      "{{#qs.project.bauteam}}",
+      "{{qs.project.bauteam.name}} | {{qs.project.bauteam.company}} | {{qs.project.bauteam.role}} | {{qs.project.bauteam.email}} | {{qs.project.bauteam.phone}}",
+      "{{/qs.project.bauteam}}",
+    ]);
+    const german = buildTemplateData(project, undefined, "de", []);
+    const english = buildTemplateData(project, undefined, "en", []);
+    expect(templatePlaceholderReference(german)).toEqual(templatePlaceholderReference(english));
+    for (const data of [german, english]) expect((await inspectTemplate(template, data)).missingPlaceholders).toEqual([]);
+    const germanXml = await documentXml(await renderTemplate(template, german));
+    const englishXml = await documentXml(await renderTemplate(template, english));
+    expect(germanXml).toContain("02.01.2030");
+    expect(germanXml).toContain("Bauherr");
+    expect(englishXml).toContain("02/01/2030");
+    expect(englishXml).toContain("Owner");
+    for (const xml of [germanXml, englishXml]) {
+      expect(xml).toContain("Statischer deutscher Text");
+      expect(xml).toContain("Westpark Projekt GmbH");
+      expect(xml).not.toContain("{{");
+    }
+    expect((await inspectTemplate(await commandTemplate("qs.project.bauteam.unternehmen"), german)).missingPlaceholders).toEqual(["qs.project.bauteam.unternehmen"]);
+  });
+
+  it.each(["de", "en"] as const)("exposes stable participant fields for an empty collection in %s", async (locale) => {
+    const database = createSeedDatabase();
+    const data = buildTemplateData({ ...database.projects[0], participants: [] }, undefined, locale, []);
+    const fields = ["name", "company", "role", "email", "phone"].map((key) => `qs.project.projektbeteiligte.${key}`);
+    for (const path of fields) expect(templatePlaceholderReference(data)).toContain(`{{${path}}}`);
+    const template = await paragraphTemplate(["{{#qs.project.projektbeteiligte}}", ...fields.map((path) => `{{${path}}}`), "{{/qs.project.projektbeteiligte}}"]);
+    expect((await inspectTemplate(template, data)).missingPlaceholders).toEqual([]);
+    expect(await documentXml(await renderTemplate(template, data))).not.toContain("{{");
   });
 
   it("recognizes declared fields in empty collections and reports unknown full paths", async () => {
@@ -169,7 +216,7 @@ describe("Word template engine", () => {
     database.organization.email = "updated@example.test";
     expect(documentDependencyFingerprint(database.projects[0], "en", database.plans[0], database.organization)).not.toBe(original);
   });
-  it("uses the Settings locale as the only language source", () => {
+  it("uses the requested document language for safety-plan text and language values", () => {
     const database = createSeedDatabase();
     const data = buildTemplateData(database.projects[0], database.plans[0], "en", database.blocks, database.categories) as {
       qs: { project: { language: string; plan: { title: string; blocks: Array<{ title: string }> } } };

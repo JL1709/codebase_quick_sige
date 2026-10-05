@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { PlanAssetElement } from "../domain/types";
 import { createSeedDatabase } from "./seed";
+import { createBundledWordTemplates } from "./bundledWordTemplates";
 import {
   BACKUP_KEY, CURRENT_SCHEMA_VERSION, LocalStorageRepository, MIGRATION_ERROR_KEY,
   STORAGE_KEY, migrateDatabase,
@@ -8,6 +9,28 @@ import {
 
 describe("local database migration", () => {
   beforeEach(() => window.localStorage.clear());
+  it("adds the Word library once without replacing edited data or resurrecting deleted templates", () => {
+    const source = createSeedDatabase();
+    source.schemaVersion = 38;
+    const libraryIds = new Set(createBundledWordTemplates(source.organization.id).map((template) => template.id));
+    source.documentTemplates = source.documentTemplates.filter((template) => !libraryIds.has(template.id));
+    source.projects[0].overviewSections = source.projects[0].overviewSections.filter((section) => section.name !== "Vorankündigung");
+    const number = source.projects[0].overviewSections.find((section) => section.name === "Allgemein")!.entries.find((entry) => entry.label === "Nummer")!;
+    number.value = "User-edited number";
+    const migrated = migrateDatabase(source)!;
+    expect(migrated.documentTemplates.filter((template) => libraryIds.has(template.id))).toHaveLength(20);
+    expect(migrated.projects[0].overviewSections.find((section) => section.name === "Vorankündigung")).toBeDefined();
+    expect(migrated.projects[0].overviewSections.find((section) => section.name === "Allgemein")!.entries.find((entry) => entry.label === "Nummer")!.value).toBe("User-edited number");
+    expect(source.projects[0].overviewSections.some((section) => section.name === "Vorankündigung")).toBe(false);
+    const replacement = migrated.documentTemplates.find((template) => template.id === "word-template-alarmplan")!;
+    replacement.blobId = "uploaded-replacement";
+    replacement.name = "Edited alarm plan";
+    migrated.documentTemplates = migrated.documentTemplates.filter((template) => template.id !== "word-template-lageplan");
+    const reloaded = migrateDatabase(migrated)!;
+    expect(reloaded.documentTemplates.filter((template) => libraryIds.has(template.id))).toHaveLength(19);
+    expect(reloaded.documentTemplates.find((template) => template.id === replacement.id)).toMatchObject({ name: "Edited alarm plan", blobId: "uploaded-replacement" });
+    expect(reloaded.projects[0].overviewSections.filter((section) => section.name === "Vorankündigung")).toHaveLength(1);
+  });
   it("migrates legacy organization records without inventing company contact details", () => {
     const source = createSeedDatabase();
     source.schemaVersion = 37;

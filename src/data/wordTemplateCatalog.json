@@ -1,0 +1,142 @@
+[
+  {
+    "slug": "abbruchanweisung",
+    "name": "Abbruchanweisung",
+    "filename": "abbruchanweisung.docx",
+    "sourceFilename": "Abbruchanweisung_Muster.docx",
+    "sourceSha256": "96066d21d4a21929624040ac330030d475e9f099763184c39099b82405b814e1"
+  },
+  {
+    "slug": "alarmplan",
+    "name": "Alarmplan",
+    "filename": "alarmplan.docx",
+    "sourceFilename": "Alarmplan.docx",
+    "sourceSha256": "0bd205a0ee4e775ab8d1df9a0fba96d80ba6bc8cf2aed4e7cdb1381379772764"
+  },
+  {
+    "slug": "anschlussbewehrung",
+    "name": "Anschlussbewehrung",
+    "filename": "anschlussbewehrung.docx",
+    "sourceFilename": "Anschlussbewehrung.docx",
+    "sourceSha256": "89ae44de752d8d5c00a75429109ec5e3bd682237fbd64b8f3d770db7d2409068"
+  },
+  {
+    "slug": "baustellenordnung",
+    "name": "Baustellenordnung",
+    "filename": "baustellenordnung.docx",
+    "sourceFilename": "Baustellenordnung.docx",
+    "sourceSha256": "4e10fde3c930f2a0b3c083e2026f66b2f8116a1b48b02d2a3e86ce3d699d3696"
+  },
+  {
+    "slug": "benutzungshinweise-geruest",
+    "name": "Benutzungshinweise Gerüst",
+    "filename": "benutzungshinweise-geruest.docx",
+    "sourceFilename": "Benutzungshinweise_Geruest.docx",
+    "sourceSha256": "3e7fc6f73af51c4500fd3a9617182aa8cb0b461392604230f5d05628f2f745ff"
+  },
+  {
+    "slug": "brandschutzordnung-teil-a",
+    "name": "Brandschutzordnung Teil A",
+    "filename": "brandschutzordnung-teil-a.docx",
+    "sourceFilename": "Brandschutzordnung_Teil_A.docx",
+    "sourceSha256": "6e811f67dec27aa4a7e8fa8ef9b0e063c06b1c0826e9288cf43710b7d95df01c"
+  },
+  {
+    "slug": "brandschutzordnung-teil-b",
+    "name": "Brandschutzordnung Teil B",
+    "filename": "brandschutzordnung-teil-b.docx",
+    "sourceFilename": "Brandschutzordnung_Teil_B.docx",
+    "sourceSha256": "5bdf35f449109bf88e3f58f73c528df1b107f0fbf09832188a8a9d12ce8f266b"
+  },
+  {
+    "slug": "firmenangaben",
+    "name": "Firmenangaben",
+    "filename": "firmenangaben.docx",
+    "sourceFilename": "Firmenangaben.docx",
+    "sourceSha256": "979bf8f22b8929193910c3844756a8182a7b6eabc456cd44eba767b691d76584"
+  },
+  {
+    "slug": "flucht-rettungsplan",
+    "name": "Flucht- und Rettungsplan",
+    "filename": "flucht-rettungsplan.docx",
+    "sourceFilename": "Flucht-Rettungsplan.docx",
+    "sourceSha256": "129cd6ac405e9470f1dc9b3acfb4a75c20a170abc3115e4260442dd17808ef66"
+  },
+  {
+    "slug": "hubarbeitsbuehnen",
+    "name": "Hubarbeitsbühnen",
+    "filename": "hubarbeitsbuehnen.docx",
+    "sourceFilename": "Hubarbeitsbuehnen.docx",
+    "sourceSha256": "23544d38928286094c8bc855ca9056da43b2efbb22d27992d4bb68e0e871fcb3"
+  },
+  {
+    "slug": "lageplan",
+    "name": "Lageplan",
+    "filename": "lageplan.docx",
+    "sourceFilename": "Lageplan.docx",
+    "sourceSha256": "2c47d3a05c4d1e1bc25c29b6a893b42c27d29012149425e7bd17be58775996b0"
+  },
+  {
+    "slug": "notfallplanung",
+    "name": "Notfallplanung",
+    "filename": "notfallplanung.docx",
+    "sourceFilename": "Notfallplanung.docx",
+    "sourceSha256": "4853e364f9c432c7f17d706176c15ab805ed8a4581a86fa2a3fff303e0aa4c92"
+  },
+  {
+    "slug": "schutznetze",
+    "name": "Schutznetze",
+    "filename": "schutznetze.docx",
+    "sourceFilename": "Schutznetze.docx",
+    "sourceSha256": "3865168d168c38a650db0435cbb5e5357d7265eb031c498d6097c22683433993"
+  },
+  {
+    "slug": "sigeplan-allgemeine-massnahmen",
+    "name": "SiGe-Plan Allgemeine Maßnahmen",
+    "filename": "sigeplan-allgemeine-massnahmen.docx",
+    "sourceFilename": "Sigeplan_Allgemeine_Ma·nahmen.docx",
+    "sourceSha256": "2194ec345406cf393f5a862bee6c8ec9f2a70e2e22924f477c710691b32fb515"
+  },
+  {
+    "slug": "sigeplan-bedeutung",
+    "name": "SiGe-Plan Bedeutung",
+    "filename": "sigeplan-bedeutung.docx",
+    "sourceFilename": "Sigeplan_Bedeutung.docx",
+    "sourceSha256": "4d11b58067a0d3ba2c76aad78c08fc29f1deb292effd34e864aeee5ab84aa848"
+  },
+  {
+    "slug": "umgang-mit-geruesten",
+    "name": "Umgang mit Gerüsten",
+    "filename": "umgang-mit-geruesten.docx",
+    "sourceFilename": "Umgang_mit_Geruesten.docx",
+    "sourceSha256": "4bea5f688de250a5cbb7eae8a467621a96a479e0e8a9988a9c1f2ca2aede9e55"
+  },
+  {
+    "slug": "vermeidung-von-staub",
+    "name": "Vermeidung von Staub",
+    "filename": "vermeidung-von-staub.docx",
+    "sourceFilename": "Vermeidung_von_Staub.docx",
+    "sourceSha256": "fadf292ac6c0a965cf27b97905e3ec2350519d99309465534af2a81395397893"
+  },
+  {
+    "slug": "verwendung-von-leitern",
+    "name": "Verwendung von Leitern",
+    "filename": "verwendung-von-leitern.docx",
+    "sourceFilename": "Verwendung_von_Leitern.docx",
+    "sourceSha256": "760a90c3f00bcdea5e7b5842c7e9c54ce55e06ea4f663c3748e7b37a205a083f"
+  },
+  {
+    "slug": "verwendung-von-psaga",
+    "name": "Verwendung von PSAgA",
+    "filename": "verwendung-von-psaga.docx",
+    "sourceFilename": "Verwendung_von_PSAgA.docx",
+    "sourceSha256": "1294b40c8674edbcd38d16588caa0ca2f02c1eafa252f8ce38765bcbb0237383"
+  },
+  {
+    "slug": "vorankuendigung",
+    "name": "Vorankündigung",
+    "filename": "vorankuendigung.docx",
+    "sourceFilename": "VorankÅndigung.docx",
+    "sourceSha256": "580dc69f47f1ea35b392a7cd60989ecbcf2d5cbe57523b84ace044ec9fec1ae2"
+  }
+]

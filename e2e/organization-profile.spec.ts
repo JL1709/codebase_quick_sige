@@ -24,6 +24,34 @@ async function logoFixture(page: Page, width = 240, height = 80): Promise<Buffer
 }
 
 test("organization details persist, stay independent of the account, and fit desktop and mobile", async ({ page }, testInfo) => {
+  await expect(page.getByLabel("Organization name")).toHaveValue("Sicher Planen Ingenieure");
+  await expect(page.getByLabel("Street", { exact: true })).toHaveValue("Musterstraße");
+  await expect(page.getByLabel("City", { exact: true })).toHaveValue("Leipzig");
+  await expect(page.getByLabel("Organization email")).toHaveValue("kontakt@sicher-planen.example.test");
+  await expect(page.getByLabel("Phone", { exact: true })).toHaveValue("341 555220");
+  await expect(page.getByLabel("Mobile phone", { exact: true })).toHaveValue("1515 5512345");
+  await expect(page.getByLabel("Fax", { exact: true })).toHaveValue("341 555229");
+  const exampleLogo = page.getByRole("img", { name: "Sicher Planen Ingenieure logo" });
+  await expect(exampleLogo).toBeVisible();
+  expect(await exampleLogo.evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBe(1024);
+  await page.goto("/templates");
+  await page.locator(".template-row").filter({ hasText: "QuickSiGe Standard" }).getByRole("button", { name: "Create document" }).click();
+  await page.getByRole("dialog").getByLabel("Project", { exact: true }).selectOption("project-logistics-center");
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByRole("dialog").getByRole("button", { name: "Create document" }).click(),
+  ]);
+  const outputPath = testInfo.outputPath("example-organization.docx");
+  await download.saveAs(outputPath);
+  const archive = await JSZip.loadAsync(await readFile(outputPath));
+  const xml = await archive.file("word/document.xml")!.async("string");
+  expect(xml).toContain("Musterstraße 12a");
+  expect(xml).toContain("04109 Leipzig");
+  expect(xml).toContain("kontakt@sicher-planen.example.test");
+  const logoBytes = await readFile("src/assets/example-organization-logo.png");
+  const embeddedImages = await Promise.all(Object.values(archive.files).filter((file) => file.name.startsWith("word/media/") && !file.dir).map((file) => file.async("nodebuffer")));
+  expect(embeddedImages.some((image) => image.equals(logoBytes))).toBe(true);
+  await page.goto("/settings");
   await page.getByLabel("Organization name").fill("Example Engineering GmbH");
   await page.getByLabel("Street", { exact: true }).fill("Example Street");
   await page.getByLabel("House number").fill("12a");
@@ -102,6 +130,7 @@ test("calling codes are searchable, independent, keyboard accessible, and preser
 test("international display accepts national typing, pasted country codes, and caret editing", async ({ page }, testInfo) => {
   await page.getByLabel("Country", { exact: true }).selectOption("DE");
   const mobile = page.getByLabel("Mobile phone", { exact: true });
+  await mobile.fill("");
   await mobile.pressSequentially("015237894561");
   await expect(mobile).toHaveValue("1523 7894561");
   await expect(page.getByRole("button", { name: /^Mobile phone country calling code:/ })).toHaveText(/\+49/);
@@ -171,7 +200,7 @@ test("invalid logos and contact values are rejected without overwriting the save
   await expect(page.getByText("Enter a valid email address.")).toBeVisible();
   await expect(page.getByText("Enter a valid website using http or https.")).toBeVisible();
   await page.reload();
-  await expect(page.getByLabel("Organization email")).toHaveValue("");
+  await expect(page.getByLabel("Organization email")).toHaveValue("kontakt@sicher-planen.example.test");
 });
 
 test("editors and viewers can read the company profile but cannot edit it", async ({ page }) => {

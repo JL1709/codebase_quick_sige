@@ -16,6 +16,7 @@ import { emptyOrganizationProfile, organizationAddressLines } from "../domain/or
 import type { OrganizationDocumentProfile } from "./organizationData";
 
 const COMMAND_DELIMITER: [string, string] = ["{{", "}}"];
+const PARTICIPANT_FIELD_KEYS = ["name", "company", "role", "email", "phone"] as const;
 const SAFE_PATH = /^(qs(?:\.[A-Za-z_][A-Za-z0-9_]*)+|\$[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*|\$idx)$/;
 const SAFE_LOOP = /^([A-Za-z_][A-Za-z0-9_]*)\s+IN\s+(qs(?:\.[A-Za-z_][A-Za-z0-9_]*)+|\$[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)$/;
 const SAFE_LOOP_END = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -32,6 +33,8 @@ const XML_ENTITY_MAP: Record<string, string> = { "&amp;": "&", "&lt;": "<", "&gt
 const FRIENDLY_PLACEHOLDER = /\{\{\s*([#/])?\s*(qs(?:\.[A-Za-z_][A-Za-z0-9_]*)+)\s*\}\}/g;
 // User fields may also be named Image or Color, so formatting is restricted to built-in paths.
 const IMAGE_PLACEHOLDER_PATH = /^qs\.(?:organization\.(?:logo|logo_images)|project\.(?:files|plan\.(?:blocks|category_tree\.blocks)))\.image$/;
+const PROJECT_IMAGE_MAX_WIDTH_CM = 18.6;
+const PROJECT_IMAGE_MAX_HEIGHT_CM = 17.5;
 const PLAN_STYLE_PLACEHOLDER_PATH = /^qs\.project\.plan\.(?:blocks|category_tree(?:\.blocks)?)\.(color|cell_fill)$/;
 const LEGACY_AUTHOR_COMMAND = /\{\{\s*(?:FOR|END-FOR|INS|IMAGE)\b[^{}]*\}\}/gi;
 const DYNAMIC_CELL_FILL = /\[\[QS_CELL_FILL:([0-9A-F]{6})\]\]/gi;
@@ -500,10 +503,8 @@ export function buildTemplateData(
   };
   project?.overviewSections.forEach((section) => section.entries.forEach((entry) => entryExample(entry, `qs.project.${normalizeOverviewKey(section.name)}`)));
   if (project?.overviewSectionOrder.includes(PROJECT_PARTICIPANTS_SECTION_ID)) {
-    const fields = locale === "de" ? ["Name", "Unternehmen", "Rolle", "E-Mail", "Telefon"] : ["Name", "Company", "Role", "Email", "Phone"];
-    const keys = fields.map((label) => normalizeOverviewKey(label));
     const participantPath = `qs.project.${normalizeOverviewKey(project.participantsSectionName)}`;
-    collectionExamples[participantPath] = Object.fromEntries(keys.map((key) => [key, ""]));
+    collectionExamples[participantPath] = Object.fromEntries(PARTICIPANT_FIELD_KEYS.map((key) => [key, ""]));
     const participantsByAssignment = new Map<string, { participant: Project["participants"][number]; roles: string[] }>();
     project.participants.forEach((participant) => {
       const assignmentId = participant.id.split(":")[0];
@@ -513,7 +514,7 @@ export function buildTemplateData(
       participantsByAssignment.set(assignmentId, current);
     });
     projectFields[normalizeOverviewKey(project.participantsSectionName)] = [...participantsByAssignment.values()].map(({ participant, roles }) => (
-      Object.fromEntries([participant.name, participant.company, roles.join(", "), participant.email, participant.phone].map((value, index) => [keys[index], value]))
+      Object.fromEntries([participant.name, participant.company, roles.join(", "), participant.email, participant.phone].map((value, index) => [PARTICIPANT_FIELD_KEYS[index], value]))
     ));
   }
   const categoryTree = buildA4CategoryTree(plan, locale, blocks, categories);
@@ -553,7 +554,11 @@ export function buildTemplateData(
           category_tree: categoryTree,
           blocks: planBlocks,
         },
-        files: (project?.assets ?? []).map((asset) => ({ filename: asset.filename, image: asset.mimeType.startsWith("image/") ? dataUrlImage(asset.dataUrl) : undefined })),
+        files: (project?.assets ?? []).map((asset) => {
+          const scale = asset.width && asset.height ? Math.min(PROJECT_IMAGE_MAX_WIDTH_CM / asset.width, PROJECT_IMAGE_MAX_HEIGHT_CM / asset.height) : undefined;
+          const dimensions = scale && asset.width && asset.height ? { width: asset.width * scale, height: asset.height * scale } : undefined;
+          return { filename: asset.filename, image: asset.mimeType.startsWith("image/") ? dataUrlImage(asset.dataUrl, dimensions) : undefined };
+        }),
       },
     },
   };

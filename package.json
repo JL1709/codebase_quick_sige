@@ -14,6 +14,7 @@
     "test:contacts-db": "bash scripts/test_contacts_migration.sh",
     "qa:exports": "tsx scripts/generate_demo_exports.ts",
     "qa:a4-template": "tsx scripts/generate_a4_word_template.ts",
+    "qa:word-templates": "node --import tsx scripts/verify_word_template_library.ts",
     "check": "npm run lint && npm run test && npm run build && npm run test:e2e && npm audit --audit-level=high"
   },
   "dependencies": {

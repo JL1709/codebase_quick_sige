@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { categoryPlacementIds } from "../domain/categoryTree";
 import { flattenOverviewEntries, localizeOverviewTemplate } from "../domain/overviewTemplates";
 import { resolveProjectParticipants } from "../domain/contacts";
+import { organizationProfileSchema, validateOrganizationProfile } from "../domain/organizationProfile";
 import type { PlanAssetElement } from "../domain/types";
 import { createSeedDatabase } from "./seed";
 
@@ -34,7 +35,16 @@ describe("seed data", () => {
 
   it("contains a complete local test project and generated plan", () => {
     const database = createSeedDatabase();
+    const profile = organizationProfileSchema.parse(database.organization);
+    expect(validateOrganizationProfile(profile)).toEqual({ valid: true, profile });
+    expect(Object.values(profile.address).every(Boolean)).toBe(true);
+    expect([profile.phone, profile.mobilePhone, profile.fax].every((number) => number.startsWith("+49"))).toBe(true);
+    expect(new URL(profile.website).hostname.endsWith(".test")).toBe(true);
+    expect(profile.email.endsWith(".test")).toBe(true);
     const project = database.projects[0];
+    expect(project.overviewSections.find((section) => section.name === "Allgemein")?.entries.find((entry) => entry.label === "Nummer"))
+      .toMatchObject({ type: "text", value: "LW-2026-001" });
+    expect(project.projectNumber).toBeUndefined();
     expect(project.participants).toEqual([]);
     expect(resolveProjectParticipants(database, project.id).some((participant) => participant.role === "coordinator")).toBe(true);
     expect(project.emergencyContacts.length).toBeGreaterThanOrEqual(2);
@@ -134,7 +144,7 @@ describe("seed data", () => {
         "revisionIds": [
           "revision-demo-a",
         ],
-        "templateCount": 2,
+        "templateCount": 22,
       }
     `);
   });

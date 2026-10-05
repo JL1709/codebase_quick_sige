@@ -2,6 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { Document, Packer, Paragraph } from "docx";
 import { jsPDF } from "jspdf";
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import wordTemplateCatalog from "../src/data/wordTemplateCatalog.json" with { type: "json" };
 
 async function useEnglishInterface(page: Page) {
   await page.goto("/settings");
@@ -90,13 +91,19 @@ test("complete project workflow remains localized and revision-safe", async ({ p
 
   const generalInformation = page.locator(".overview-template-section").first();
   await expect(generalInformation.getByRole("heading", { name: "Allgemein" })).toBeVisible();
+  await expect(generalInformation.getByText("LW-2026-001", { exact: true })).toBeVisible();
   await expect(page.getByText(/^Record \d+$/)).toHaveCount(0);
   await generalInformation.getByRole("button", { name: "Edit", exact: true }).click();
+  await expect(generalInformation.getByRole("textbox", { name: "Nummer", exact: true })).toHaveValue("LW-2026-001");
+  await generalInformation.getByRole("textbox", { name: "Nummer", exact: true }).fill("LW-2026-002");
   await generalInformation.getByRole("textbox", { name: "Bauherr", exact: true }).fill("Westpark Projektgesellschaft mbH");
   await generalInformation.getByRole("button", { name: "Save", exact: true }).click();
   await expect(generalInformation.getByText("Westpark Projektgesellschaft mbH", { exact: true })).toBeVisible();
+  await expect(generalInformation.getByText("LW-2026-002", { exact: true })).toBeVisible();
 
-  const logisticsInformation = page.locator(".overview-template-section").last();
+  const logisticsInformation = page.locator(".overview-template-section").filter({
+    has: page.getByRole("heading", { name: "Baustellenlogistik", exact: true }).or(page.locator('input[value="Baustellenlogistik"]')),
+  });
   await expect(logisticsInformation.getByRole("heading", { name: "Baustellenlogistik" })).toBeVisible();
   await logisticsInformation.getByRole("button", { name: "Edit", exact: true }).click();
   const topLevelRows = logisticsInformation.locator(".project-overview-entry-tree > .project-overview-builder-node");
@@ -494,7 +501,7 @@ test("custom Word template reports missing data and generates with explicit cons
   await useEnglishInterface(page);
   await page.getByRole("link", { name: "Templates" }).click();
   const wordTemplates = page.locator("section.settings-section").filter({ has: page.getByRole("heading", { name: "Word templates" }) });
-  await expect(wordTemplates.getByRole("article")).toHaveCount(1);
+  await expect(wordTemplates.getByRole("article")).toHaveCount(wordTemplateCatalog.length + 1);
   await expect(wordTemplates.getByText("A4 safety plan", { exact: true })).toBeVisible();
   await expect(wordTemplates.getByText("Site principles", { exact: true })).toHaveCount(0);
   await expect(wordTemplates.getByText(/QuickSiGe Standard · English · Standard/).first()).toBeVisible();

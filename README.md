@@ -27,10 +27,14 @@ The browser starts with the supplied project **Logistikzentrum West**. Structure
 5. Add emergency contacts and open **Documents** to attach a validated PNG, JPG, or PDF project file to the plan.
 6. Search the categorized block library, drag blocks to exact A0 positions, resize them, and edit their visible title or description without changing the catalog default.
 7. Run validation and publish a named revision.
-8. Download the one-sheet vector A0 PDF or A4 Word plan from the plan toolbar. In **Templates**, choose **Create document**, select a project, and download a report from any uploaded Word template.
+8. Download the one-sheet vector A0 PDF or A4 Word plan from the plan toolbar. In **Templates**, choose **Create document**, select a project, and download a report from one of the 20 supplied Word templates or your own uploaded template.
 9. Switch the interface and template library between German and English in **Settings**. Word reports use their template language.
 
 You can also create a completely new project from the dashboard. The seeded data uses `.test` email addresses and contains no real personal data.
+
+The example organisation **Sicher Planen Ingenieure** includes a fictional Leipzig address, phone, mobile, fax, extensions, email, website and the supplied QuickReports logo in **Settings → Organisation**. New and reset workspaces include these details, ready to use in Word placeholders.
+
+The supplied Word library uses the approved design, project placeholders and full company footers. Reload an existing workspace to receive the templates without resetting your data. The example project's editable **Vorankündigung** section supplies the additional form fields. See [Word templates](docs/WORD_TEMPLATES.md) for the creation workflow and authoring details.
 
 ## Implemented product scope
 
@@ -66,6 +70,7 @@ npm run check        # lint, tests, build, Chromium/WebKit journeys, dependency 
 npm run test         # Vitest suite
 npm run test:contacts-db # disposable PostgreSQL migration and Contacts RLS checks
 npm run qa:exports   # write representative exports to /private/tmp/quicksige-export-qa
+npm run qa:word-templates # validate and generate all 20 example-project Word documents
 npm run build        # production bundle in dist/
 npm run preview      # serve the production bundle locally
 ```
@@ -101,4 +106,4 @@ File imports need no external configuration. Microsoft contact import uses Micro
 
 ## Quality status
 
-The automated gate includes 282 Vitest tests across 34 files and 120 Playwright checks split across Chromium and WebKit. Contacts coverage includes create/import/export/project assignment, multi-role import, JSON portability export, persisted workspace preferences, bulk tagging, reviewed merge choices, company lifecycle impact review, a 10,000-contact bounded-rendering fixture, and five responsive viewport classes. A disposable PostgreSQL 17 gate verifies the Contacts migration against empty and Iteration 2-compatible databases plus owner/admin/editor/viewer/non-member and cross-tenant RLS behavior. The export QA fixture covers an exact one-page A0 landscape PDF and a template-generated four-page A4 DOCX; both are rendered and inspected during release QA.
+The automated gate includes 327 Vitest tests across 37 files and 128 Playwright checks split across Chromium and WebKit. Word-template coverage validates every supplied DOCX against changed project and organisation values, generates and downloads all 20 documents in both browsers, and verifies stable placeholder paths across languages, grouped reference search, complete repeat-block copying, responsive layout, replacement/deletion persistence and download-only behavior. Contacts coverage includes create/import/export/project assignment, multi-role import, JSON portability export, persisted workspace preferences, bulk tagging, reviewed merge choices, company lifecycle impact review, a 10,000-contact bounded-rendering fixture, and five responsive viewport classes. A disposable PostgreSQL 17 gate verifies the Contacts migration against empty and Iteration 2-compatible databases plus owner/admin/editor/viewer/non-member and cross-tenant RLS behavior. The export QA fixture covers an exact one-page A0 landscape PDF and a template-generated four-page A4 DOCX; both are rendered and inspected during release QA.

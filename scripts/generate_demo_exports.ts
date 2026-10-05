@@ -37,7 +37,11 @@ await mkdir(outputDirectory, { recursive: true });
 const planPdf = buildPlanPdf(project, plan, database.blocks, database.categories, database.user.preferredLocale);
 await writeFile(path.join(outputDirectory, "demo-sige-plan-a0.pdf"), Buffer.from(planPdf.output("arraybuffer")));
 
-const templateData = buildTemplateData(project, plan, database.user.preferredLocale, blocksWithImages, database.categories);
+const logoBytes = await readFile(path.resolve("src/assets/example-organization-logo.png"));
+const templateData = buildTemplateData(project, plan, database.user.preferredLocale, blocksWithImages, database.categories, {
+  ...database.organization,
+  logoDataUrl: `data:image/png;base64,${logoBytes.toString("base64")}`,
+});
 const template = await createStandardTemplate("a4_plan", database.user.preferredLocale);
 const document = await renderTemplate(await blobToArrayBuffer(template), templateData);
 await writeFile(path.join(outputDirectory, "demo-a4-plan.docx"), Buffer.from(await blobToArrayBuffer(document)));

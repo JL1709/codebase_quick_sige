@@ -1,4 +1,6 @@
 import { openDB, type DBSchema } from "idb";
+import { EXAMPLE_ORGANIZATION_LOGO, EXAMPLE_ORGANIZATION_LOGO_URL } from "./exampleOrganizationLogo";
+import { bundledWordTemplateUrl } from "./bundledWordTemplates";
 
 interface StoredBlob { bytes: ArrayBuffer; type: string }
 
@@ -37,6 +39,16 @@ export async function saveBlob(id: string, blob: Blob): Promise<void> {
 }
 
 export async function getBlob(id: string): Promise<Blob | undefined> {
+  const templateUrl = bundledWordTemplateUrl(id);
+  if (templateUrl) {
+    const response = await fetch(templateUrl);
+    return response.ok ? response.blob() : undefined;
+  }
+  // The bundled example stays available after a reset and in published snapshots.
+  if (id === EXAMPLE_ORGANIZATION_LOGO.blobId) {
+    const response = await fetch(EXAMPLE_ORGANIZATION_LOGO_URL);
+    return response.ok ? response.blob() : undefined;
+  }
   const store = await database();
   const storedBlob = await store.get(STORE_NAME, id);
   if (!storedBlob) return undefined;
@@ -50,14 +62,19 @@ export async function deleteBlob(id: string): Promise<void> {
 }
 
 export async function blobObjectUrl(blobId?: string, legacyDataUrl?: string): Promise<string | undefined> {
+  if (blobId === EXAMPLE_ORGANIZATION_LOGO.blobId) return EXAMPLE_ORGANIZATION_LOGO_URL;
   if (!blobId) return legacyDataUrl;
   const blob = await getBlob(blobId);
   return blob ? URL.createObjectURL(blob) : legacyDataUrl;
 }
 
 export async function blobDataUrl(blobId?: string, legacyDataUrl?: string): Promise<string | undefined> {
-  if (!blobId) return legacyDataUrl;
-  const blob = await getBlob(blobId);
+  let blob = blobId ? await getBlob(blobId) : undefined;
+  // Bundled project images use local URLs; image placeholders need their bytes.
+  if (!blob && legacyDataUrl?.startsWith("/") && new URL(legacyDataUrl, window.location.origin).origin === window.location.origin) {
+    const response = await fetch(legacyDataUrl);
+    if (response.ok) blob = await response.blob();
+  }
   if (!blob) return legacyDataUrl;
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();

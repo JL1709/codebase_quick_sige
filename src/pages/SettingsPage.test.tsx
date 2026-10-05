@@ -113,30 +113,41 @@ describe("Overview template localization", () => {
 });
 
 describe("Word template settings", () => {
-  it("shows only templates for the interface language and uses the report name as the title", () => {
+  it("shows project templates in their document language alongside the localized standard report", () => {
     renderTemplatesPage(createSeedDatabase());
 
     const section = wordTemplatesSection();
-    expect(within(section).getAllByRole("article")).toHaveLength(1);
+    expect(within(section).getAllByRole("article")).toHaveLength(21);
     const a4SafetyPlan = within(section).getByText("A4 safety plan", { selector: "strong" });
     expect(a4SafetyPlan.closest("article")).toHaveTextContent("QuickSiGe Standard · English · Standard · v1");
     expect(within(section).queryByText("Site principles", { selector: "strong" })).not.toBeInTheDocument();
-    expect(within(section).queryByText("German", { exact: false })).not.toBeInTheDocument();
+    expect(within(section).getByText("Brandschutzordnung Teil A", { selector: "strong" }).closest("article")).toHaveTextContent("German");
     expect(within(section).queryByRole("button", { name: "Duplicate" })).not.toBeInTheDocument();
     expect(within(section).queryByRole("button", { name: "Show archived" })).not.toBeInTheDocument();
 
     fireEvent.click(within(section).getByRole("button", { name: "Add Word template" }));
     expect(screen.queryByLabelText("Document type")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Template language")).toHaveValue("en");
+    expect(screen.getByLabelText("Template language")).toHaveAccessibleDescription("Controls date formats and the language of inserted text. Does not translate the Word file. Placeholder names stay the same.");
+  });
+
+  it.each(["de", "en"] as const)("shows stable participant placeholders in the %s interface", async (locale) => {
+    renderTemplatesPage(createSeedDatabase(), locale);
+    const selectorLabel = locale === "de" ? "Projekt für Platzhalter" : "Project for placeholders";
+    fireEvent.change(screen.getByLabelText(selectorLabel), { target: { value: "project-logistics-center" } });
+    expect(await screen.findByText("{{qs.project.projektbeteiligte.company}}")).toBeInTheDocument();
+    for (const key of ["name", "role", "email", "phone"]) expect(screen.getByText(`{{qs.project.projektbeteiligte.${key}}}`)).toBeInTheDocument();
+    expect(screen.queryByText("{{qs.project.projektbeteiligte.unternehmen}}")).not.toBeInTheDocument();
   });
 
   it("lists project and organization placeholders from the shared data builder", async () => {
     renderTemplatesPage(createSeedDatabase());
 
-    expect(await screen.findByText("{{#qs.project.plan.category_tree}}")).toBeInTheDocument();
+    expect(await screen.findByText("{{qs.project.plan.category_tree.title}}")).toBeInTheDocument();
+    expect(document.querySelector('[data-placeholder-group="qs.project.plan.category_tree"] pre code')).toHaveTextContent("{{#qs.project.plan.category_tree}}");
     expect(screen.getByText("{{qs.project.plan.category_tree.title}}")).toBeInTheDocument();
     expect(screen.getByText("{{qs.project.plan.category_tree.path}}")).toBeInTheDocument();
-    expect(screen.getByText("{{#qs.project.plan.category_tree.blocks}}")).toBeInTheDocument();
+    expect(document.querySelector('[data-placeholder-group="qs.project.plan.category_tree.blocks"] pre code')).toHaveTextContent("{{#qs.project.plan.category_tree.blocks}}");
     expect(screen.getByText("{{qs.project.plan.category_tree.blocks.image}}")).toBeInTheDocument();
     expect(screen.getByText("{{qs.project.plan.category_tree.blocks.a4_description}}")).toBeInTheDocument();
     expect(screen.getByText("{{qs.project.plan.category_tree.blocks.regulations}}")).toBeInTheDocument();
@@ -162,6 +173,44 @@ describe("Word template settings", () => {
 
       await waitFor(() => expect(copyButton).toHaveTextContent("Copied"));
       expect(execCommand).toHaveBeenCalledWith("copy");
+    } finally {
+      if (originalExecCommand) Object.defineProperty(document, "execCommand", originalExecCommand);
+      else Reflect.deleteProperty(document, "execCommand");
+    }
+  });
+
+  it("shows saved field labels and current values, and searches across collapsed sections", async () => {
+    renderTemplatesPage(createSeedDatabase());
+    fireEvent.change(screen.getByLabelText("Project for placeholders"), { target: { value: "project-logistics-center" } });
+    const numberToken = await screen.findByText("{{qs.project.allgemein.nummer}}");
+    expect(numberToken.closest(".reference-group")).toHaveAttribute("open");
+    expect(document.querySelector('[data-placeholder-group="qs.project.projektbeteiligte"]')).not.toHaveAttribute("open");
+    const numberRow = numberToken.closest(".reference-field-row") as HTMLElement;
+    expect(within(numberRow).getByText("Nummer")).toBeInTheDocument();
+    expect(within(numberRow).getByText("LW-2026-001")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Search placeholders"), { target: { value: "Westpark Projekt GmbH" } });
+    const companyToken = screen.getByText("{{qs.project.projektbeteiligte.company}}");
+    expect(companyToken.closest(".reference-group")).toHaveAttribute("open");
+    expect(screen.queryByText("{{qs.organization.email}}")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Search placeholders"), { target: { value: "no-matching-field" } });
+    expect(screen.getByText("No matching placeholders. Try a different search.")).toBeInTheDocument();
+  });
+
+  it("copies a complete repeat block even when search shows only one matching field", async () => {
+    let copiedText = "";
+    const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execCommand");
+    Object.defineProperty(document, "execCommand", { configurable: true, value: () => { copiedText = (document.querySelector("textarea") as HTMLTextAreaElement).value; return true; } });
+    try {
+      renderTemplatesPage(createSeedDatabase());
+      fireEvent.change(screen.getByLabelText("Project for placeholders"), { target: { value: "project-logistics-center" } });
+      await screen.findByText("{{qs.project.projektbeteiligte.company}}");
+      fireEvent.change(screen.getByLabelText("Search placeholders"), { target: { value: "qs.project.projektbeteiligte.company" } });
+      fireEvent.click(screen.getByText("Show repeat block example"));
+      fireEvent.click(screen.getByRole("button", { name: "Copy repeat block" }));
+      await waitFor(() => expect(copiedText).toContain("{{qs.project.projektbeteiligte.email}}"));
+      expect(copiedText.split("\n")[0]).toBe("{{#qs.project.projektbeteiligte}}");
+      expect(copiedText.split("\n").at(-1)).toBe("{{/qs.project.projektbeteiligte}}");
+      expect(screen.queryByText("{{qs.project.projektbeteiligte.email}}", { selector: ".placeholder-copy code" })).not.toBeInTheDocument();
     } finally {
       if (originalExecCommand) Object.defineProperty(document, "execCommand", originalExecCommand);
       else Reflect.deleteProperty(document, "execCommand");
@@ -234,6 +283,7 @@ describe("Organization profile settings", () => {
   ])("formats %s numbers beside the country code using country-specific prefixes", (country, entered, stored, displayed, callingCode) => {
     const database = createSeedDatabase();
     database.organization.address.countryCode = country;
+    database.organization.mobilePhone = "";
     const memory = renderSettingsPage(database);
     fireEvent.change(screen.getByLabelText("Mobile phone"), { target: { value: entered } });
     expect(screen.getByLabelText("Mobile phone")).toHaveValue(displayed);
@@ -260,6 +310,7 @@ describe("Organization profile settings", () => {
   it("keeps a shared calling code selected while the number is incomplete", () => {
     const database = createSeedDatabase();
     database.organization.address.countryCode = "US";
+    database.organization.mobilePhone = "";
     renderSettingsPage(database);
     fireEvent.change(screen.getByLabelText("Mobile phone"), { target: { value: "2" } });
     expect(screen.getByLabelText("Mobile phone")).toHaveValue("2");
@@ -267,7 +318,9 @@ describe("Organization profile settings", () => {
   });
 
   it("updates untouched calling codes when the organization country changes without overriding a manual choice", () => {
-    renderSettingsPage(createSeedDatabase());
+    const database = createSeedDatabase();
+    database.organization = { ...database.organization, ...emptyOrganizationProfile(database.organization.name) };
+    renderSettingsPage(database);
     fireEvent.change(screen.getByLabelText("Country"), { target: { value: "DE" } });
     fireEvent.click(screen.getByRole("button", { name: /^Mobile phone country calling code:/ }));
     const search = screen.getByRole("combobox", { name: "Search country or calling code" });
@@ -297,6 +350,8 @@ describe("Organization profile settings", () => {
 
   it("cancels number edits and restores empty phone-country selections", () => {
     const database = createSeedDatabase(); database.organization.address.countryCode = "DE";
+    database.organization.fax = "";
+    database.organization.faxExtension = "";
     const memory = renderSettingsPage(database);
     fireEvent.click(screen.getByRole("button", { name: /^Fax country calling code:/ }));
     const search = screen.getByRole("combobox", { name: "Search country or calling code" });
